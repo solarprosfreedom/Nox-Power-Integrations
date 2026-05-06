@@ -220,25 +220,21 @@ function buildEnerfloPayloadFromTerros(
   terrosAccountId: string
 ): Record<string, unknown> {
   const r = account.resident ?? {};
-
-  // Use ONLY resident fields for the customer name — never the owner (who is the rep/setter).
-  const residentName = (r.name ?? "").trim();
+  const nameFromResident = (r.name ?? "").trim();
+  const nameFromOwner = [account.owner?.firstName, account.owner?.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   const { address, city, state, zip } = mapAddress(account.address);
   const shortAddr = address ? address.split(",")[0]!.trim().slice(0, 80) : "";
+  let fullName = nameFromResident || nameFromOwner;
+  if (!fullName && shortAddr) fullName = `Resident ${shortAddr}`;
+  if (!fullName && !shortAddr) fullName = `Terros ${terrosAccountId.replace(/^Account\./, "").slice(0, 12)}`;
 
-  // Build a meaningful placeholder when homeowner name is unknown
-  let fullName = residentName;
-  if (!fullName && shortAddr) fullName = `Resident at ${shortAddr}`;
-  if (!fullName) fullName = `Terros ${terrosAccountId.replace(/^Account\./, "").slice(0, 12)}`;
+  const email = (r.email ?? account.owner?.email ?? "").trim();
+  const phone = (r.phone ?? account.owner?.phone ?? "").trim();
 
-  // Resident contact info only — owner email/phone is the rep's, not the homeowner's
-  const email = (r.email ?? "").trim();
-  const phone = (r.phone ?? "").trim();
-
-  // Assign the Terros owner (rep) as the Enerflo lead owner via assign_to_email
-  const repEmail = (account.owner?.email ?? "").trim();
-
-  const { first_name, last_name } = splitName(fullName);
+  const { first_name, last_name } = splitName(fullName || "Terros Account");
 
   // Enerflo lead/add wraps fields under a "lead" key
   const lead: Record<string, unknown> = {
@@ -252,7 +248,6 @@ function buildEnerfloPayloadFromTerros(
   };
   if (email) lead.email = email;
   if (phone) lead.mobile = phone;
-  if (repEmail) lead.assign_to_email = repEmail;
   return { lead };
 }
 
@@ -378,20 +373,6 @@ async function handleAdd(
   terrosAccountId: string,
   data: TerrosAccountWebhookData
 ): Promise<NextResponse> {
-  // Loop guard: if externalLeadId is already set, this account was created FROM Enerflo
-  // (handleCustomerCreated sets externalLeadId = Enerflo customer UUID at creation time).
-  // Re-creating it in Enerflo would cause a sync loop. Skip.
-  const existingLink = (data.externalLeadId ?? "").trim();
-  if (existingLink) {
-    return NextResponse.json({
-      received: true,
-      action: "add",
-      terrosAccountId,
-      skipped: true,
-      reason: `Account already linked to Enerflo (externalLeadId: ${existingLink}) — was created from Enerflo side. Skipping create.`,
-    });
-  }
-
   const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId);
 
   const log = await enerfloRequest({
@@ -454,22 +435,12 @@ async function handleUpdate(
       : {}),
   };
 
-  // Loop guard: if the update was triggered by our own link-external-lead-id call
-  // (which sets externalLeadId on Terros after creating an Enerflo customer), the resident
-  // and address in the webhook will be empty/minimal — nothing meaningful to push.
-  // buildEnerfloUpdatePayload will return {} and we'll skip below anyway, but log it clearly.
-
   let customerUuid =
     (merged.externalLeadId && UUID_RE.test(merged.externalLeadId) ? merged.externalLeadId : null) ??
     (webhookData.externalLeadId && UUID_RE.test(webhookData.externalLeadId)
       ? webhookData.externalLeadId
       : null) ??
     (full ? pickExternalLeadId(full) : null);
-  // Also accept numeric Enerflo ids stored by lead/add
-  if (!customerUuid) {
-    const rawId = merged.externalLeadId ?? webhookData.externalLeadId ?? "";
-    if (rawId && /^\d+$/.test(rawId)) customerUuid = rawId;
-  }
 
   if (!customerUuid) {
     customerUuid = await findEnerfloCustomerUuidByIntegrationSearch(terrosAccountId);
