@@ -8,6 +8,8 @@ export const env = {
   enerfloV1BaseUrl: opt("ENERFLO_V1_BASE_URL", "https://enerflo.io"),
   terrosApiBaseUrl: opt("TERROS_API_BASE_URL", "https://api.terros.com"),
   terrosApiKey: opt("TERROS_API_KEY"),
+  /** If set, Terros webhooks must send the same value in `X-Terros-Webhook-Secret` or `X-Webhook-Secret`. */
+  terrosWebhookSecret: opt("TERROS_WEBHOOK_SECRET"),
   terrosWorkflowId: opt("TERROS_WORKFLOW_ID"),
   terrosWorkflowStartStageId: opt("TERROS_WORKFLOW_START_STAGE_ID"),
   /** Terros Account custom field definition IDs (keys in `account.customFields`). From Settings → Custom Fields. */

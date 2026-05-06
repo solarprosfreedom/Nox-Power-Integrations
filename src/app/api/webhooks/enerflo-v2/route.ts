@@ -500,7 +500,7 @@ async function handleProjectSubmitted(
       resident: {
         ...(customerName ? { name: customerName } : {}),
         ...(customerEmail ? { email: customerEmail } : {}),
-        ...(customerPhone ? { phone: customerPhone } : {}),
+        ...(sanitizePhone(customerPhone) ? { phone: sanitizePhone(customerPhone) } : {}),
       },
       customFields: terrosCustomFields,
     };
@@ -674,7 +674,7 @@ async function handleCustomerCreated(
     resident: {
       ...(customerName  ? { name: customerName }   : {}),
       ...(customerEmail ? { email: customerEmail } : {}),
-      ...(customerPhone ? { phone: customerPhone } : {}),
+      ...(sanitizePhone(customerPhone) ? { phone: sanitizePhone(customerPhone) } : {}),
     },
   };
 
@@ -750,7 +750,8 @@ async function handleCustomerUpdatedV2(
   const residentUpdate: Record<string, string> = {};
   if (customerName)  residentUpdate.name  = customerName;
   if (customerEmail) residentUpdate.email = customerEmail;
-  if (customerPhone) residentUpdate.phone = customerPhone;
+  const cleanPhone = sanitizePhone(customerPhone);
+  if (cleanPhone) residentUpdate.phone = cleanPhone;
 
   const accountFields: Record<string, unknown> = {
     // externalLeadId = customer UUID — used by account/upsert to find the existing account
@@ -819,6 +820,18 @@ async function handleCustomerUpdatedV2(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Sanitize a phone number for Terros resident.phone.
+ * Terros rejects formatted strings like "(754) 715-1147". Strip everything
+ * except digits and leading +. Return undefined if fewer than 7 digits remain.
+ */
+function sanitizePhone(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/[^\d+]/g, "");
+  if (digits.replace(/\D/g, "").length < 7) return undefined;
+  return digits || undefined;
+}
 
 /**
  * Maps Enerflo webhook values into Terros `account.customFields`.

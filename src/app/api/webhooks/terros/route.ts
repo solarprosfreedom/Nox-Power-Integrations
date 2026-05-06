@@ -1,0 +1,519 @@
+import { NextRequest, NextResponse } from "next/server";
+import { env } from "@/lib/env";
+import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
+import { writeApiLog } from "@/lib/logger";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Terros often uses HTTP 200 even when the JSON body is `{ "type": "error", ... }`. */
+function terrosJsonBodyIndicatesSuccess(responseText: string): boolean {
+  try {
+    const j = JSON.parse(responseText) as Record<string, unknown>;
+    if (j.type === "error") return false;
+  } catch {
+    /* non-JSON — leave to HTTP status */
+  }
+  return true;
+}
+
+interface TerrosLatLng {
+  latitude?: number;
+  longitude?: number;
+}
+
+interface TerrosAddress {
+  line1?: string;
+  line2?: string;
+  locality?: string;
+  countrySubd?: string;
+  postal1?: string;
+  latlng?: TerrosLatLng;
+}
+
+interface TerrosResident {
+  name?: string;
+  email?: string;
+  phone?: string;
+}
+
+interface TerrosOwner {
+  email?: string;
+  phone?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+interface TerrosAccountWebhookData {
+  id?: string;
+  address?: TerrosAddress;
+  resident?: TerrosResident;
+  owner?: TerrosOwner;
+  externalLeadId?: string;
+}
+
+interface TerrosWebhookBody {
+  action?: string;
+  entity?: string;
+  data?: TerrosAccountWebhookData;
+}
+
+function logPreview(body: string, max = 2000): string {
+  if (body.length <= max) return body;
+  return `${body.slice(0, max)}…`;
+}
+
+function splitName(full: string): { first_name: string; last_name: string } {
+  const t = full.trim();
+  if (!t) return { first_name: "Terros", last_name: "Account" };
+  const parts = t.split(/\s+/);
+  if (parts.length === 1) return { first_name: parts[0]!, last_name: "." };
+  return { first_name: parts[0]!, last_name: parts.slice(1).join(" ") };
+}
+
+function mapAddress(a?: TerrosAddress): {
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+} {
+  if (!a) return { address: "", city: "", state: "", zip: "" };
+  const line1 = (a.line1 ?? "").trim();
+  const city = (a.locality ?? "").trim();
+  const state = (a.countrySubd ?? "").trim();
+  const zip = a.postal1 != null ? String(a.postal1).trim() : "";
+  return { address: line1, city, state, zip };
+}
+
+/** POST /account/get — request shape varies; try common variants. */
+async function fetchTerrosAccountById(
+  terrosBase: string,
+  terrosKey: string,
+  accountId: string
+): Promise<Record<string, unknown> | null> {
+  const url = `${terrosBase}/account/get`;
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `ApiKey ${terrosKey}`,
+  };
+  const bodies: Record<string, unknown>[] = [
+    { accountId },
+    { id: accountId },
+    { account: { accountId, id: accountId } },
+  ];
+
+  for (const body of bodies) {
+    let responseText = "";
+    try {
+      const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+      responseText = await res.text();
+      if (!res.ok || !terrosJsonBodyIndicatesSuccess(responseText)) continue;
+      const parsed = JSON.parse(responseText) as Record<string, unknown>;
+      const acc = (parsed.account ?? parsed.data) as Record<string, unknown> | undefined;
+      if (acc && typeof acc === "object") return acc;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function terrosAccountUpdateExternalLeadId(
+  terrosBase: string,
+  terrosKey: string,
+  accountId: string,
+  externalLeadId: string
+): Promise<{ ok: boolean; status: number | null; preview: string }> {
+  const url = `${terrosBase}/account/update`;
+  let status: number | null = null;
+  let preview = "";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `ApiKey ${terrosKey}`,
+      },
+      body: JSON.stringify({
+        account: { accountId, id: accountId, externalLeadId },
+      }),
+    });
+    status = res.status;
+    preview = await res.text();
+    const ok = res.ok && terrosJsonBodyIndicatesSuccess(preview);
+    await writeApiLog({
+      operation: "webhook:terros:link-external-lead-id",
+      vendor: "terros",
+      method: "POST",
+      url,
+      hadApiKey: Boolean(terrosKey),
+      status,
+      ok,
+      responsePreview: logPreview(preview),
+    });
+    return { ok, status, preview };
+  } catch (e) {
+    preview = e instanceof Error ? e.message : String(e);
+    return { ok: false, status, preview };
+  }
+}
+
+function pickExternalLeadId(account: Record<string, unknown>): string | null {
+  const raw = account.externalLeadId;
+  if (typeof raw === "string" && UUID_RE.test(raw.trim())) return raw.trim();
+  return null;
+}
+
+/**
+ * After POST /api/v1/partner/action/lead/add, Enerflo returns:
+ *   { status: "success", customer_id: 12345 }
+ * The ID is a numeric Enerflo v1 customer id (not a UUID). We store it as a string.
+ */
+function parseEnerfloCreateCustomerId(responseText: string): string | null {
+  try {
+    const j = JSON.parse(responseText) as Record<string, unknown>;
+    // lead/add: customer_id is a number
+    const numericId = j.customer_id ?? j.customerId;
+    if (numericId != null) return String(numericId);
+    // fallback: UUID from customer create endpoints
+    const c = (j.customer ?? j.data ?? j) as Record<string, unknown>;
+    const id = j.id ?? c.id ?? c.uuid;
+    if (typeof id === "string" && UUID_RE.test(id)) return id;
+    if (typeof id === "number") return String(id);
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+async function findEnerfloCustomerUuidByIntegrationSearch(
+  terrosAccountId: string
+): Promise<string | null> {
+  const { ok, data } = await enerfloRequestParsed<unknown>({
+    operation: "webhook:terros:search-customer-by-integration",
+    method: "GET",
+    path: "/api/v1/customers",
+    query: { search: terrosAccountId, page: "1", pageSize: "50" },
+  });
+  if (!ok || !data || typeof data !== "object") return null;
+  const o = data as Record<string, unknown>;
+  const rows = (["results", "items", "customers", "data"] as const)
+    .map((k) => o[k])
+    .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
+  if (!Array.isArray(rows)) return null;
+  for (const row of rows) {
+    const ext =
+      row.integration_record_id ??
+      row.integrationRecordId ??
+      row.external_id ??
+      row.externalId;
+    if (typeof ext === "string" && ext === terrosAccountId) {
+      const id = row.id ?? row.uuid ?? row.customer_id;
+      if (typeof id === "string" && UUID_RE.test(id)) return id;
+    }
+  }
+  return null;
+}
+
+function buildEnerfloPayloadFromTerros(
+  account: TerrosAccountWebhookData,
+  terrosAccountId: string
+): Record<string, unknown> {
+  const r = account.resident ?? {};
+  const nameFromResident = (r.name ?? "").trim();
+  const nameFromOwner = [account.owner?.firstName, account.owner?.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const { address, city, state, zip } = mapAddress(account.address);
+  const shortAddr = address ? address.split(",")[0]!.trim().slice(0, 80) : "";
+  let fullName = nameFromResident || nameFromOwner;
+  if (!fullName && shortAddr) fullName = `Resident ${shortAddr}`;
+  if (!fullName && !shortAddr) fullName = `Terros ${terrosAccountId.replace(/^Account\./, "").slice(0, 12)}`;
+
+  const email = (r.email ?? account.owner?.email ?? "").trim();
+  const phone = (r.phone ?? account.owner?.phone ?? "").trim();
+
+  const { first_name, last_name } = splitName(fullName || "Terros Account");
+
+  // Enerflo lead/add wraps fields under a "lead" key
+  const lead: Record<string, unknown> = {
+    first_name,
+    last_name,
+    address: address || "Unknown",
+    city: city || "Unknown",
+    state: state || "XX",
+    zip: zip || "00000",
+    integration_record_id: terrosAccountId,
+  };
+  if (email) lead.email = email;
+  if (phone) lead.mobile = phone;
+  return { lead };
+}
+
+function buildEnerfloUpdatePayload(account: TerrosAccountWebhookData): Record<string, unknown> {
+  const r = account.resident ?? {};
+  const fullName = (r.name ?? "").trim();
+  const email = (r.email ?? "").trim();
+  const phone = (r.phone ?? "").trim();
+  const { address, city, state, zip } = mapAddress(account.address);
+
+  const body: Record<string, unknown> = {};
+  if (fullName) {
+    const { first_name, last_name } = splitName(fullName);
+    body.first_name = first_name;
+    body.last_name = last_name;
+  }
+  if (email) body.email = email;
+  if (phone) body.phone = phone;
+  if (address) body.address = address;
+  if (city) body.city = city;
+  if (state) body.state = state;
+  if (zip) body.zip = zip;
+  return body;
+}
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    description:
+      "Inbound Terros webhooks (Settings → Webhooks → Entity Account). POST JSON from Terros here.",
+    path: "/api/webhooks/terros",
+    handles: { entity: "Account", actions: ["add", "update"] },
+    outbound: "Creates or updates an Enerflo customer via REST, then links Terros externalLeadId after create.",
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const secret = env.terrosWebhookSecret?.trim();
+  if (secret) {
+    const got =
+      req.headers.get("x-terros-webhook-secret") ??
+      req.headers.get("x-webhook-secret") ??
+      "";
+    if (got !== secret) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  let body: TerrosWebhookBody;
+  try {
+    body = (await req.json()) as TerrosWebhookBody;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const entity = (body.entity ?? "").trim();
+  const action = (body.action ?? "").trim().toLowerCase();
+  const data = body.data;
+
+  if (entity !== "Account") {
+    return NextResponse.json({
+      received: true,
+      skipped: true,
+      reason: `Unsupported entity: ${entity || "(missing)"}`,
+    });
+  }
+
+  if (action !== "add" && action !== "update") {
+    return NextResponse.json({
+      received: true,
+      skipped: true,
+      reason: `Unsupported action: ${action || "(missing)"}`,
+    });
+  }
+
+  const terrosAccountId = (data?.id ?? "").trim();
+  if (!terrosAccountId) {
+    return NextResponse.json(
+      { received: true, skipped: true, reason: "Missing data.id (Terros account id)" },
+      { status: 200 }
+    );
+  }
+
+  if (!data || typeof data !== "object") {
+    return NextResponse.json({ received: true, skipped: true, reason: "Missing data object" });
+  }
+
+  const terrosKey = env.terrosApiKey ?? "";
+  const terrosBase = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
+
+  if (!(env.enerfloV1ApiKey ?? "").trim()) {
+    return NextResponse.json({
+      received: true,
+      skipped: true,
+      reason: "ENERFLO_V1_API_KEY is not configured",
+    });
+  }
+
+  try {
+    if (action === "add") {
+      return await handleAdd(terrosBase, terrosKey, terrosAccountId, data);
+    }
+    return await handleUpdate(terrosBase, terrosKey, terrosAccountId, data);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await writeApiLog({
+      operation: "webhook:terros:unhandled-error",
+      vendor: "terros",
+      method: "POST",
+      url: `${req.nextUrl.pathname}`,
+      hadApiKey: false,
+      status: 500,
+      ok: false,
+      responsePreview: logPreview(msg),
+    });
+    return NextResponse.json({ received: true, success: false, error: msg }, { status: 200 });
+  }
+}
+
+async function handleAdd(
+  terrosBase: string,
+  terrosKey: string,
+  terrosAccountId: string,
+  data: TerrosAccountWebhookData
+): Promise<NextResponse> {
+  const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId);
+
+  const log = await enerfloRequest({
+    operation: "webhook:terros:create-enerflo-customer",
+    method: "POST",
+    path: "/api/v1/partner/action/lead/add",
+    body: createBody,
+  });
+
+  const newId = log.responsePreview ? parseEnerfloCreateCustomerId(log.responsePreview) : null;
+
+  let linked: { ok: boolean; status: number | null; preview: string } | null = null;
+  if (log.ok && newId && terrosKey) {
+    linked = await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, newId);
+  }
+
+  return NextResponse.json({
+    received: true,
+    action: "add",
+    terrosAccountId,
+    success: log.ok,
+    enerfloCustomerId: newId,
+    enerfloStatus: log.status,
+    terrosLink: linked,
+    skipped: false,
+  });
+}
+
+async function handleUpdate(
+  terrosBase: string,
+  terrosKey: string,
+  terrosAccountId: string,
+  webhookData: TerrosAccountWebhookData
+): Promise<NextResponse> {
+  let full: Record<string, unknown> | null = null;
+  if (terrosKey) {
+    full = await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId);
+  }
+
+  const merged: TerrosAccountWebhookData = {
+    ...webhookData,
+    ...(full
+      ? {
+          address: {
+            ...(typeof full.location === "object" && full.location
+              ? terrosLocationToAddress(full.location as Record<string, unknown>)
+              : typeof full.address === "object" && full.address
+                ? (full.address as TerrosAddress)
+                : {}),
+            ...webhookData.address,
+          },
+          resident: {
+            ...terrosResidentFromAccount(full),
+            ...webhookData.resident,
+          },
+          externalLeadId:
+            (typeof full.externalLeadId === "string" ? full.externalLeadId : undefined) ??
+            webhookData.externalLeadId,
+        }
+      : {}),
+  };
+
+  let customerUuid =
+    (merged.externalLeadId && UUID_RE.test(merged.externalLeadId) ? merged.externalLeadId : null) ??
+    (webhookData.externalLeadId && UUID_RE.test(webhookData.externalLeadId)
+      ? webhookData.externalLeadId
+      : null) ??
+    (full ? pickExternalLeadId(full) : null);
+
+  if (!customerUuid) {
+    customerUuid = await findEnerfloCustomerUuidByIntegrationSearch(terrosAccountId);
+  }
+
+  if (!customerUuid) {
+    return NextResponse.json({
+      received: true,
+      action: "update",
+      terrosAccountId,
+      skipped: true,
+      reason:
+        "No Enerflo customer id found (externalLeadId on Terros, or v1 customer with matching integration_record_id). Create from Enerflo first, or let an Account add webhook create the customer and link.",
+    });
+  }
+
+  const updateBody = buildEnerfloUpdatePayload(merged);
+  if (Object.keys(updateBody).length === 0) {
+    return NextResponse.json({
+      received: true,
+      action: "update",
+      terrosAccountId,
+      enerfloCustomerId: customerUuid,
+      skipped: true,
+      reason: "No address or resident fields to push after merge",
+    });
+  }
+
+  // Use v3 UUID path when id looks like a UUID, otherwise fall back to v1 customer PATCH.
+  const isUuid = UUID_RE.test(customerUuid);
+  const path = isUuid
+    ? `/api/v3/customers/${encodeURIComponent(customerUuid)}`
+    : `/api/v1/customers/${encodeURIComponent(customerUuid)}`;
+  const method = isUuid ? "PUT" : "PATCH" as const;
+  const log = await enerfloRequest({
+    operation: "webhook:terros:update-enerflo-customer",
+    method,
+    path,
+    body: updateBody,
+  });
+
+  return NextResponse.json({
+    received: true,
+    action: "update",
+    terrosAccountId,
+    enerfloCustomerId: customerUuid,
+    success: log.ok,
+    enerfloStatus: log.status,
+    fieldsSent: Object.keys(updateBody),
+  });
+}
+
+function terrosLocationToAddress(loc: Record<string, unknown>): TerrosAddress {
+  const latlng = loc.latlng as Record<string, unknown> | undefined;
+  return {
+    line1: typeof loc.line1 === "string" ? loc.line1 : undefined,
+    line2: typeof loc.line2 === "string" ? loc.line2 : undefined,
+    locality: typeof loc.locality === "string" ? loc.locality : undefined,
+    countrySubd: typeof loc.countrySubd === "string" ? loc.countrySubd : undefined,
+    postal1: loc.postal1 != null ? String(loc.postal1) : undefined,
+    latlng:
+      latlng && typeof latlng.latitude === "number" && typeof latlng.longitude === "number"
+        ? { latitude: latlng.latitude, longitude: latlng.longitude }
+        : undefined,
+  };
+}
+
+function terrosResidentFromAccount(full: Record<string, unknown>): TerrosResident {
+  const res = full.resident as Record<string, unknown> | undefined;
+  if (!res) return {};
+  return {
+    name: typeof res.name === "string" ? res.name : undefined,
+    email: typeof res.email === "string" ? res.email : undefined,
+    phone: typeof res.phone === "string" ? res.phone : undefined,
+  };
+}

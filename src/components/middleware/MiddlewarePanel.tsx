@@ -35,6 +35,15 @@ const WEBHOOK_URLS: WebhookUrlDef[] = [
     description: "POST { event, data } to trigger any matching automation.",
     defaultEnabled: false,
   },
+  {
+    label: "Terros → Enerflo",
+    path: "/api/webhooks/terros",
+    badge: "Set in Terros → Settings → Webhooks",
+    badgeColor: "text-sky-400",
+    description:
+      "Account add/update: creates or updates an Enerflo customer (v1 create, v3 update) and links Terros externalLeadId after create.",
+    defaultEnabled: true,
+  },
 ];
 
 function WebhookUrlCard({ def }: { def: WebhookUrlDef }) {
