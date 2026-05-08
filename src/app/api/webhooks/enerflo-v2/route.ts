@@ -943,17 +943,18 @@ function sanitizePhone(raw: string | null | undefined): string | undefined {
 
   const junk10 = (s: string) => s.length === 10 && /^(\d)\1{9}$/.test(s);
 
+  // US 11-digit (1XXXXXXXXXX) or 10-digit → Terros expects bare 10 digits (no +1 prefix)
   if (digits.length === 11 && digits.startsWith("1")) {
     const national = digits.slice(1);
     if (junk10(national)) return undefined;
-    return `+${digits}`;
+    return national;
   }
   if (digits.length === 10) {
     if (junk10(digits)) return undefined;
-    return `+1${digits}`;
+    return digits;
   }
-  if (digits.length >= 11 && digits.length <= 15) return `+${digits}`;
-  if (digits.length >= 7 && digits.length <= 15) return `+${digits}`;
+  // International (non-US): send as-is (digits only)
+  if (digits.length >= 7 && digits.length <= 15) return digits;
   return undefined;
 }
 
