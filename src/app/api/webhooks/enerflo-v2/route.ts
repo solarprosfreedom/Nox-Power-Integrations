@@ -91,9 +91,23 @@ interface CustomerAddress {
   lng?: number;
 }
 
+/** Nested user refs sometimes appear on v2 payloads (camelCase/snake_case). */
+interface EnerfloWebhookUserRef {
+  id?: string;
+  uuid?: string;
+  userId?: string;
+  email?: string;
+  Email?: string;
+}
+
 interface CustomerCreatedPayload {
   targetOrg: string;
   initiatedBy: string;
+  /** Some tenants send lead owner at root as well as under `customer`. */
+  leadOwner?: EnerfloWebhookUserRef;
+  lead_owner?: EnerfloWebhookUserRef;
+  leadOwnerUser?: EnerfloWebhookUserRef;
+  lead_owner_user?: EnerfloWebhookUserRef;
   customer: {
     id: string;
     firstName?: string;
@@ -102,6 +116,13 @@ interface CustomerCreatedPayload {
     phone?: string;
     mobile?: string;
     address?: CustomerAddress;
+    leadOwner?: EnerfloWebhookUserRef;
+    lead_owner?: EnerfloWebhookUserRef;
+    leadOwnerUser?: EnerfloWebhookUserRef;
+    lead_owner_user?: EnerfloWebhookUserRef;
+    /** Ignored for Terros owner — use lead-owner keys above. Enerflo may still send `salesRep` / `owner`. */
+    salesRep?: EnerfloWebhookUserRef;
+    sales_rep?: EnerfloWebhookUserRef;
   };
 }
 
@@ -406,39 +427,14 @@ async function handleProjectSubmitted(
   // ── Step 2 [best-effort]: Resolve Terros userId by rep email ─────────────
   let terrosUserId: string | null = null;
   if (repEmail) {
-    const url = `${terrosBase}/user/get`;
-    let status: number | null = null;
-    let ok = false;
-    let responseText = "";
-
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ email: repEmail }),
-      });
-      status = res.status;
-      const rawBody = await res.text();
-      responseText = rawBody;
-      ok = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
-      if (ok) {
-        const parsed = JSON.parse(rawBody) as Record<string, unknown>;
-        terrosUserId =
-          (parsed.userId as string) ??
-          (parsed.id as string) ??
-          ((parsed.user as Record<string, unknown>)?.id as string) ??
-          null;
-      }
-    } catch (e) {
-      responseText = e instanceof Error ? e.message : String(e);
-    }
-
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, repEmail);
+    terrosUserId = u.userId;
     steps.push({
       step: "2 [best-effort] — Resolve Terros userId by rep email",
-      ok,
-      status,
+      ok: u.ok && Boolean(terrosUserId),
+      status: u.status,
       data: terrosUserId ? { terrosUserId } : undefined,
-      error: ok ? undefined : logPreview(responseText),
+      error: u.ok && terrosUserId ? undefined : logPreview(u.preview),
     });
   }
 
@@ -585,6 +581,86 @@ async function handleProjectSubmitted(
         });
       }
     }
+
+    // ── Step 3c [best-effort]: Set Closed stage + increment Net Deals counter ──
+    // deal.projectSubmitted is the definitive "net deal" signal — project is committed to installer.
+    if (ok) {
+      const upsertedAccount = parsedBody?.account as Record<string, unknown> | undefined;
+      const upsertedId = upsertedAccount?.accountId as string | undefined;
+      const closedStage = env.terrosWorkflowClosedStageId;
+      const netDealsCfId = env.terrosCfNetDeals;
+
+      if (upsertedId && (closedStage || netDealsCfId)) {
+        // Fetch current account to read existing Net Deals value before incrementing.
+        let currentNetDeals = 0;
+        if (netDealsCfId) {
+          try {
+            const getRes = await fetch(`${terrosBase}/account/get`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+              body: JSON.stringify({ accountId: upsertedId }),
+            });
+            if (getRes.ok) {
+              const getRaw = await getRes.text();
+              if (terrosJsonBodyIndicatesSuccess(getRaw)) {
+                const getParsed = JSON.parse(getRaw) as Record<string, unknown>;
+                const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
+                const cfs = acc.customFields as Record<string, unknown> | undefined;
+                const existing = cfs?.[netDealsCfId];
+                if (typeof existing === "number") currentNetDeals = existing;
+                else if (typeof existing === "string") currentNetDeals = parseInt(existing, 10) || 0;
+              }
+            }
+          } catch { /* best-effort — proceed with 0 if fetch fails */ }
+        }
+
+        const updateFields: Record<string, unknown> = {
+          accountId: upsertedId,
+          id: upsertedId,
+          ...(closedStage ? { workflowStageId: closedStage } : {}),
+          ...(netDealsCfId ? { customFields: { [netDealsCfId]: currentNetDeals + 1 } } : {}),
+        };
+
+        let closedOk = false;
+        let closedStatus: number | null = null;
+        let closedError: string | undefined;
+
+        try {
+          const closedRes = await fetch(`${terrosBase}/account/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+            body: JSON.stringify({ account: updateFields }),
+          });
+          closedStatus = closedRes.status;
+          const closedBody = await closedRes.text();
+          closedOk = closedRes.ok && terrosJsonBodyIndicatesSuccess(closedBody);
+          if (!closedOk) closedError = logPreview(closedBody);
+        } catch (e) {
+          closedError = e instanceof Error ? e.message : String(e);
+        }
+
+        await writeApiLog({
+          operation: "webhook:enerflo-v2:set-closed-stage-and-net-deals",
+          vendor: "terros",
+          method: "POST",
+          url: `${terrosBase}/account/update`,
+          hadApiKey: Boolean(terrosKey),
+          status: closedStatus,
+          ok: closedOk,
+          responsePreview: closedError ?? "ok",
+        });
+
+        steps.push({
+          step: "3c [best-effort] — Set Closed stage + Net Deals +1",
+          ok: closedOk,
+          status: closedStatus,
+          data: closedOk
+            ? { accountId: upsertedId, workflowStageId: closedStage ?? null, netDeals: currentNetDeals + 1 }
+            : undefined,
+          error: closedError,
+        });
+      }
+    }
   }
 
   const terrosCfEnvConfigured = terrosCustomFieldEnvHasAnyMapping();
@@ -633,6 +709,8 @@ async function handleProjectSubmitted(
 async function handleCustomerCreated(
   payload: CustomerCreatedPayload
 ): Promise<NextResponse> {
+  const enerfloBase = (env.enerfloV1BaseUrl ?? "https://enerflo.io").replace(/\/$/, "");
+  const enerfloKey  = env.enerfloV1ApiKey ?? "";
   const terrosBase = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
   const terrosKey       = env.terrosApiKey               ?? "";
   const terrosWorkflowId = env.terrosWorkflowId          ?? "";
@@ -662,12 +740,38 @@ async function handleCustomerCreated(
     location.latlng = { latitude: addr.lat, longitude: addr.lng };
   }
 
+  // Lead owner only — omit `ownerId` / `assignedUserId` when absent (no `initiatedBy` fallback).
+  // If omitted, Terros often still sets `ownerId` to the API key user (see response `ownerId` / `workflowHistory.userId`).
+  // Board/list views filtered to “mine” hide those accounts for everyone else until the real owner is sent.
+  const payloadRoot = payload as unknown as Record<string, unknown>;
+  const leadRefs = extractCustomerCreatedLeadOwnerRefs(c, payloadRoot);
+  let ownerResolvedFrom = "";
+  let ownerEmail: string | null = null;
+
+  if (leadRefs.email) {
+    ownerEmail = leadRefs.email;
+    ownerResolvedFrom = leadRefs.source ?? "leadOwner.email";
+  } else if (leadRefs.id && enerfloKey) {
+    const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, leadRefs.id);
+    if (r.email) {
+      ownerEmail = r.email;
+      ownerResolvedFrom = `${leadRefs.source ?? "leadOwner"}.id→Enerflo`;
+    }
+  }
+
+  let terrosOwnerId: string | null = null;
+  if (ownerEmail) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmail);
+    terrosOwnerId = u.userId;
+  }
+
   const accountFields: Record<string, unknown> = {
     name: customerName,
     // externalLeadId = Enerflo customer UUID — used by upsert to match on resubmit / deal.projectSubmitted
     externalLeadId: customerId,
     externalId: customerId,
     sourceStatus: "New Lead",
+    ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
     ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
     ...(terrosStartStage ? { workflowStageId: terrosStartStage } : {}),
     location,
@@ -719,6 +823,11 @@ async function handleCustomerCreated(
     customerId,
     success: ok,
     status,
+    owner: {
+      ownerEmail: ownerEmail ?? null,
+      ownerResolvedFrom: ownerResolvedFrom || null,
+      terrosOwnerId: terrosOwnerId ?? null,
+    },
     data: ok ? parsedBody : undefined,
     error: ok ? undefined : logPreview(responseText),
   });
@@ -822,15 +931,30 @@ async function handleCustomerUpdatedV2(
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 /**
- * Sanitize a phone number for Terros resident.phone.
- * Terros rejects formatted strings like "(754) 715-1147". Strip everything
- * except digits and leading +. Return undefined if fewer than 7 digits remain.
+ * Normalize for Terros `account.resident.phone`.
+ * Enerflo v2 uses E.164 (e.g. `+19497352136`). The UI often shows `(949) 735-2136`.
+ * Terros rejects some formatted strings — send **E.164 with a leading `+`** like Enerflo.
  */
 function sanitizePhone(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined;
-  const digits = raw.replace(/[^\d+]/g, "");
-  if (digits.replace(/\D/g, "").length < 7) return undefined;
-  return digits || undefined;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 0) return undefined;
+  if (/^0+$/.test(digits)) return undefined;
+
+  const junk10 = (s: string) => s.length === 10 && /^(\d)\1{9}$/.test(s);
+
+  if (digits.length === 11 && digits.startsWith("1")) {
+    const national = digits.slice(1);
+    if (junk10(national)) return undefined;
+    return `+${digits}`;
+  }
+  if (digits.length === 10) {
+    if (junk10(digits)) return undefined;
+    return `+1${digits}`;
+  }
+  if (digits.length >= 11 && digits.length <= 15) return `+${digits}`;
+  if (digits.length >= 7 && digits.length <= 15) return `+${digits}`;
+  return undefined;
 }
 
 /**
@@ -942,6 +1066,72 @@ function terrosJsonBodyIndicatesSuccess(responseText: string): boolean {
     /* non-JSON body — treat as success if caller already got 2xx */
   }
   return true;
+}
+
+function isWebhookRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Terros `/user/get` by email → API user id for `ownerId` / `assignedUserId`. */
+async function resolveTerrosUserIdByEmail(
+  terrosBase: string,
+  terrosKey: string,
+  email: string
+): Promise<{ userId: string | null; status: number | null; ok: boolean; preview: string }> {
+  const url = `${terrosBase}/user/get`;
+  let status: number | null = null;
+  let ok = false;
+  let preview = "";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+    status = res.status;
+    const rawBody = await res.text();
+    preview = rawBody;
+    ok = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
+    if (!ok) return { userId: null, status, ok, preview };
+    const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+    const userId =
+      (parsed.userId as string | undefined)?.toString() ??
+      (parsed.id as string | undefined)?.toString() ??
+      ((parsed.user as Record<string, unknown>)?.id as string | undefined)?.toString() ??
+      null;
+    return { userId, status, ok, preview };
+  } catch (e) {
+    preview = e instanceof Error ? e.message : String(e);
+    return { userId: null, status, ok: false, preview };
+  }
+}
+
+/** Prefer nested lead owner keys; fallback object may hold `leadOwner` only on some tenants. */
+function extractCustomerCreatedLeadOwnerRefs(
+  customer: CustomerCreatedPayload["customer"],
+  payloadRoot: Record<string, unknown>
+): { email?: string; id?: string; source?: string } {
+  // Only explicit lead-owner shapes — not `salesRep` / `owner` (Terros visibility still depends on
+  // whether Terros assigns the API key user when we omit `ownerId`; see handler comment).
+  const keys = ["leadOwner", "lead_owner", "leadOwnerUser", "lead_owner_user"] as const;
+  const buckets: Record<string, unknown>[] = [payloadRoot];
+  if (isWebhookRecord(customer)) buckets.push(customer as Record<string, unknown>);
+
+  for (const b of buckets) {
+    for (const k of keys) {
+      const v = b[k];
+      if (!isWebhookRecord(v)) continue;
+      const em = v.email ?? v.Email;
+      if (typeof em === "string" && em.includes("@")) {
+        return { email: em.trim(), source: k };
+      }
+      const id = v.id ?? v.uuid ?? v.userId ?? v.user_id;
+      if (typeof id === "string" && id.trim()) {
+        return { id: id.trim(), source: k };
+      }
+    }
+  }
+  return {};
 }
 
 interface EnerfloUser {

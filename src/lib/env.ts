@@ -12,6 +12,10 @@ export const env = {
   terrosWebhookSecret: opt("TERROS_WEBHOOK_SECRET"),
   terrosWorkflowId: opt("TERROS_WORKFLOW_ID"),
   terrosWorkflowStartStageId: opt("TERROS_WORKFLOW_START_STAGE_ID"),
+  /** Stage to set when deal.projectSubmitted fires (net deal / closed). */
+  terrosWorkflowClosedStageId: opt("TERROS_WORKFLOW_CLOSED_STAGE_ID"),
+  /** Stage to set when an appointment is created. */
+  terrosWorkflowAppointmentStageId: opt("TERROS_WORKFLOW_APPOINTMENT_STAGE_ID"),
   /** Terros Account custom field definition IDs (keys in `account.customFields`). From Settings → Custom Fields. */
   terrosCfEnerfloDealId: opt("TERROS_CF_ENERFLO_DEAL_ID"),
   terrosCfEnerfloShortCode: opt("TERROS_CF_ENERFLO_SHORT_CODE"),
@@ -41,6 +45,9 @@ export const env = {
   terrosCfBatteryCount: opt("TERROS_CF_BATTERY_COUNT"),
   // Deal state
   terrosCfFinancingStatus: opt("TERROS_CF_FINANCING_STATUS"),
+  // Counter fields (incremented by events)
+  terrosCfNetDeals: opt("TERROS_CF_NET_DEALS"),
+  terrosCfAppointments: opt("TERROS_CF_APPOINTMENTS"),
   sequifiApiBaseUrl: opt("SEQUIFI_API_BASE_URL"),
   sequifiApiKey: opt("SEQUIFI_API_KEY"),
   supabaseUrl: opt("SUPABASE_URL"),

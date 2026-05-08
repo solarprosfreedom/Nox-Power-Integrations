@@ -28,6 +28,15 @@ const WEBHOOK_URLS: WebhookUrlDef[] = [
     defaultEnabled: true,
   },
   {
+    label: "Enerflo v1 (e.g. update_customer)",
+    path: "/api/webhooks/enerflo-v1",
+    badge: "Company Settings → Webhooks (v1 list)",
+    badgeColor: "text-amber-400",
+    description:
+      "Separate URL for Enerflo 1.0 hooks (update_customer, new_customer). Logs payload — use Activity Logs / Supabase to inspect.",
+    defaultEnabled: true,
+  },
+  {
     label: "Generic event bus",
     path: "/api/webhooks/enerflo",
     badge: "Internal / testing",

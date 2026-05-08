@@ -42,6 +42,9 @@ interface TerrosOwner {
   phone?: string;
   firstName?: string;
   lastName?: string;
+  /** Terros user ID — present when the webhook sends only an ID rather than a full user object. */
+  id?: string;
+  userId?: string;
 }
 
 interface TerrosAccountWebhookData {
@@ -69,6 +72,65 @@ function splitName(full: string): { first_name: string; last_name: string } {
   const parts = t.split(/\s+/);
   if (parts.length === 1) return { first_name: parts[0]!, last_name: "." };
   return { first_name: parts[0]!, last_name: parts.slice(1).join(" ") };
+}
+
+/**
+ * Resolve the canonical login email for a Terros account owner so it can be
+ * passed as `assign_to_email` to Enerflo.
+ *
+ * Strategy:
+ *  1. If `owner.email` is present → call Terros `/user/get` with that email.
+ *     The response email is the canonical registered email (strips +alias
+ *     suffixes that Terros may have stored but Enerflo won't recognise).
+ *  2. If only `owner.id` / `owner.userId` is present → call `/user/get` by ID.
+ *  3. Falls back to the raw email string if the API call fails or returns no
+ *     usable email (so we still try to assign rather than silently skip).
+ */
+async function resolveTerrosOwnerEmail(
+  terrosBase: string,
+  terrosKey: string,
+  owner: TerrosOwner | undefined
+): Promise<string | undefined> {
+  if (!owner) return undefined;
+
+  const rawEmail = owner.email?.trim();
+  const ownerId = (owner.id ?? owner.userId)?.trim();
+
+  if (!rawEmail && !ownerId) return undefined;
+
+  const url = `${terrosBase}/user/get`;
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `ApiKey ${terrosKey}`,
+  };
+
+  // Try email lookup first, then ID-based lookups
+  const bodies: Record<string, unknown>[] = [];
+  if (rawEmail && rawEmail.includes("@")) bodies.push({ email: rawEmail });
+  if (ownerId) {
+    bodies.push({ userId: ownerId });
+    bodies.push({ id: ownerId });
+  }
+
+  for (const reqBody of bodies) {
+    try {
+      const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(reqBody) });
+      const text = await res.text();
+      if (!res.ok || !terrosJsonBodyIndicatesSuccess(text)) continue;
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const user = (parsed.user as Record<string, unknown> | undefined) ?? parsed;
+      const email =
+        (user.email as string | undefined) ??
+        (user.loginEmail as string | undefined) ??
+        (parsed.email as string | undefined);
+      if (typeof email === "string" && email.trim().includes("@")) return email.trim();
+    } catch {
+      continue;
+    }
+  }
+
+  // Fall back to raw email so assignment is still attempted
+  return rawEmail && rawEmail.includes("@") ? rawEmail : undefined;
 }
 
 function mapAddress(a?: TerrosAddress): {
@@ -217,7 +279,8 @@ async function findEnerfloCustomerUuidByIntegrationSearch(
 
 function buildEnerfloPayloadFromTerros(
   account: TerrosAccountWebhookData,
-  terrosAccountId: string
+  terrosAccountId: string,
+  resolvedOwnerEmail?: string
 ): Record<string, unknown> {
   const r = account.resident ?? {};
   const nameFromResident = (r.name ?? "").trim();
@@ -248,10 +311,14 @@ function buildEnerfloPayloadFromTerros(
   };
   if (email) lead.email = email;
   if (phone) lead.mobile = phone;
+  if (resolvedOwnerEmail) lead.assign_to_email = resolvedOwnerEmail;
   return { lead };
 }
 
-function buildEnerfloUpdatePayload(account: TerrosAccountWebhookData): Record<string, unknown> {
+function buildEnerfloUpdatePayload(
+  account: TerrosAccountWebhookData,
+  resolvedOwnerEmail?: string
+): Record<string, unknown> {
   const r = account.resident ?? {};
   const fullName = (r.name ?? "").trim();
   const email = (r.email ?? "").trim();
@@ -270,6 +337,7 @@ function buildEnerfloUpdatePayload(account: TerrosAccountWebhookData): Record<st
   if (city) body.city = city;
   if (state) body.state = state;
   if (zip) body.zip = zip;
+  if (resolvedOwnerEmail) body.assign_to_email = resolvedOwnerEmail;
   return body;
 }
 
@@ -280,7 +348,8 @@ export async function GET() {
       "Inbound Terros webhooks (Settings → Webhooks → Entity Account). POST JSON from Terros here.",
     path: "/api/webhooks/terros",
     handles: { entity: "Account", actions: ["add", "update"] },
-    outbound: "Creates or updates an Enerflo customer via REST, then links Terros externalLeadId after create.",
+    outbound:
+      "Creates or updates an Enerflo customer via REST; resolves the Terros account owner's canonical email via /user/get (supports email or id-only owner payloads) and sets `assign_to_email`. Links Terros externalLeadId after create.",
   });
 }
 
@@ -373,7 +442,10 @@ async function handleAdd(
   terrosAccountId: string,
   data: TerrosAccountWebhookData
 ): Promise<NextResponse> {
-  const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId);
+  const resolvedOwnerEmail = terrosKey
+    ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, data.owner)
+    : undefined;
+  const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId, resolvedOwnerEmail);
 
   const log = await enerfloRequest({
     operation: "webhook:terros:create-enerflo-customer",
@@ -457,7 +529,12 @@ async function handleUpdate(
     });
   }
 
-  const updateBody = buildEnerfloUpdatePayload(merged);
+  // Resolve canonical owner email (handles +alias mismatches and ID-only owner payloads)
+  const ownerData = merged.owner ?? webhookData.owner;
+  const resolvedOwnerEmail = terrosKey
+    ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, ownerData)
+    : undefined;
+  const updateBody = buildEnerfloUpdatePayload(merged, resolvedOwnerEmail);
   if (Object.keys(updateBody).length === 0) {
     return NextResponse.json({
       received: true,
