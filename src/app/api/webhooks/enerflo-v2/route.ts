@@ -285,6 +285,8 @@ async function handleProjectSubmitted(
   // email/phone are NOT in the payload — try the customer API (best-effort)
   let customerEmail = "";
   let customerPhone = "";
+  // Lead owner's numeric/UUID Enerflo ID extracted from the full customer record
+  let customerAgentId = "";
 
   // ── Step 1a [best-effort]: Fetch customer email/phone from Enerflo ────────
   const customerId = payload.customer?.id ?? "";
@@ -319,6 +321,17 @@ async function handleProjectSubmitted(
           if (!customerCity)    customerCity    = String(c.city    ?? "");
           if (!customerState)   customerState   = String(c.state   ?? "");
           if (!customerZip)     customerZip     = String(c.zip ?? c.postal_code ?? c.postalCode ?? "");
+          // Extract lead owner / agent ID — may be numeric or UUID
+          const agentObj = (c.agent ?? c.owner ?? c.leadOwner) as Record<string, unknown> | undefined;
+          const rawAgentId =
+            c.agent_id ??
+            c.agentId ??
+            c.agent_user_id ??
+            c.agentUserId ??
+            (agentObj && typeof agentObj === "object" ? (agentObj.id ?? agentObj.uuid ?? agentObj.userId) : null);
+          if (rawAgentId != null && String(rawAgentId).trim()) {
+            customerAgentId = String(rawAgentId).trim();
+          }
           if (customerEmail || customerPhone) break;
         }
       } catch (e) {
@@ -331,7 +344,7 @@ async function handleProjectSubmitted(
       step: "1a [best-effort] — Fetch customer email/phone",
       ok,
       status,
-      data: ok ? { customerEmail, customerPhone } : undefined,
+      data: ok ? { customerEmail, customerPhone, customerAgentId: customerAgentId || null } : undefined,
       error: ok ? undefined : logPreview(responseText),
     });
   }
@@ -390,7 +403,11 @@ async function handleProjectSubmitted(
 
     }
 
-    const uuidCandidates = [salesRepUuid, initiatedBy].filter(
+    // customerAgentId (from the full customer record) is the most reliable source —
+    // it's the Enerflo lead owner, not the API key user. Try it first.
+    // salesRepUuid and initiatedBy are secondary fallbacks (initiatedBy is the API
+    // key user for API-created leads, so it will often resolve to the wrong rep).
+    const uuidCandidates = [customerAgentId, salesRepUuid, initiatedBy].filter(
       (id, i, arr) => id && arr.indexOf(id) === i
     );
     for (const lookupId of uuidCandidates) {
