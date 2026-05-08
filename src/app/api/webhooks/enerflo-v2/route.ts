@@ -321,16 +321,33 @@ async function handleProjectSubmitted(
           if (!customerCity)    customerCity    = String(c.city    ?? "");
           if (!customerState)   customerState   = String(c.state   ?? "");
           if (!customerZip)     customerZip     = String(c.zip ?? c.postal_code ?? c.postalCode ?? "");
-          // Extract lead owner / agent ID — may be numeric or UUID
+          // Extract lead owner email + ID from the customer record.
+          // c.agent_id is the company-user junction ID (e.g. 102466), NOT the
+          // actual user ID (e.g. 147158). Prefer the email directly from
+          // owner.user.email, then fall back to the actual user ID
+          // (owner.user_id / owner.user.id) which works with /api/v3/users/{id}.
           const agentObj = (c.agent ?? c.owner ?? c.leadOwner) as Record<string, unknown> | undefined;
-          const rawAgentId =
-            c.agent_id ??
-            c.agentId ??
-            c.agent_user_id ??
-            c.agentUserId ??
-            (agentObj && typeof agentObj === "object" ? (agentObj.id ?? agentObj.uuid ?? agentObj.userId) : null);
-          if (rawAgentId != null && String(rawAgentId).trim()) {
-            customerAgentId = String(rawAgentId).trim();
+          const agentUser = agentObj && typeof agentObj === "object"
+            ? (agentObj.user as Record<string, unknown> | undefined)
+            : undefined;
+          // Direct email — no extra API call needed
+          const agentEmailDirect =
+            (agentUser?.email as string | undefined) ??
+            (agentObj?.email as string | undefined);
+          if (agentEmailDirect && agentEmailDirect.includes("@")) {
+            customerAgentId = agentEmailDirect.trim();
+          } else {
+            // Fall back to the actual Enerflo user ID for /api/v3/users/{id} lookup
+            const rawAgentId =
+              agentUser?.id ??
+              agentObj?.user_id ??
+              agentObj?.userId ??
+              c.agent_user_id ??
+              c.agentUserId ??
+              c.agentId;
+            if (rawAgentId != null && String(rawAgentId).trim()) {
+              customerAgentId = String(rawAgentId).trim();
+            }
           }
           if (customerEmail || customerPhone) break;
         }
@@ -1174,8 +1191,12 @@ async function resolveEnerfloUserEmailByLookupId(
   enerfloKey: string,
   lookupId: string
 ): Promise<{ email: string | null; lastStatus: number | null; lastPreview: string }> {
-  if (!lookupId || lookupId.includes("@")) {
+  if (!lookupId) {
     return { email: null, lastStatus: null, lastPreview: "" };
+  }
+  // If lookupId is already an email (extracted directly from owner.user.email), return it
+  if (lookupId.includes("@")) {
+    return { email: lookupId.trim(), lastStatus: null, lastPreview: "email-passthrough" };
   }
   const headers = { "api-key": enerfloKey, "Content-Type": "application/json" };
   let lastStatus: number | null = null;
