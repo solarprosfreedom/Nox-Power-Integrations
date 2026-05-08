@@ -303,17 +303,16 @@ function buildEnerfloPayloadFromTerros(
       ? [residentFirst, residentLast].filter(Boolean).join(" ")
       : (r.name ?? "").trim();
   const { address, city, state, zip } = mapAddress(account.address);
-  const shortAddr = address ? address.split(",")[0]!.trim().slice(0, 80) : "";
   // Customer name comes only from resident — owner is the sales rep, not the homeowner
-  let fullName = nameFromResident;
-  if (!fullName && shortAddr) fullName = `Resident ${shortAddr}`;
-  if (!fullName && !shortAddr) fullName = `Terros ${terrosAccountId.replace(/^Account\./, "").slice(0, 12)}`;
+  // If no resident name is available, use N/A as required by Enerflo's required fields
+  const fullName = nameFromResident;
 
   // Email/phone from resident only — owner fields belong to the sales rep
   const email = (r.email ?? "").trim();
   const phone = (r.phone ?? "").trim();
 
-  const { first_name, last_name } = splitName(fullName || "Terros Account");
+  const first_name = fullName ? splitName(fullName).first_name : "N/A";
+  const last_name  = fullName ? splitName(fullName).last_name  : "N/A";
 
   // Enerflo lead/add wraps fields under a "lead" key
   const lead: Record<string, unknown> = {
