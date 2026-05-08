@@ -323,6 +323,9 @@ function buildEnerfloPayloadFromTerros(
     state: state || "XX",
     zip: zip || "00000",
     integration_record_id: terrosAccountId,
+    // Prevent Enerflo from auto-routing to office default rep (Jonas Lim) via zip match.
+    // Only override with "zip" when a specific rep is being assigned.
+    office_match: resolvedOwnerEmail ? "zip" : "manual",
   };
   if (email) lead.email = email;
   if (phone) lead.mobile = phone;
