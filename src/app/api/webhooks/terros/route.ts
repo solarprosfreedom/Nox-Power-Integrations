@@ -33,6 +33,8 @@ interface TerrosAddress {
 
 interface TerrosResident {
   name?: string;
+  firstName?: string;
+  lastName?: string;
   email?: string;
   phone?: string;
 }
@@ -75,16 +77,24 @@ function splitName(full: string): { first_name: string; last_name: string } {
 }
 
 /**
- * Resolve the canonical login email for a Terros account owner so it can be
- * passed as `assign_to_email` to Enerflo.
+ * Strip a +alias suffix from an email address so it matches the canonical
+ * Enerflo login email.
+ * e.g. "charlielespier+axia@solarpros.io" → "charlielespier@solarpros.io"
+ * Safe to call on any email; returns the input unchanged when no alias is present.
+ */
+function stripEmailAlias(email: string): string {
+  return email.replace(/\+[^@]*(@)/, "$1");
+}
+
+/**
+ * Resolve the canonical Enerflo-compatible email for a Terros account owner.
  *
  * Strategy:
- *  1. If `owner.email` is present → call Terros `/user/get` with that email.
- *     The response email is the canonical registered email (strips +alias
- *     suffixes that Terros may have stored but Enerflo won't recognise).
+ *  1. If `owner.email` is present → call Terros `/user/get` with that email to
+ *     get the canonical registered email, then strip any +alias suffix so it
+ *     matches the rep's Enerflo login email.
  *  2. If only `owner.id` / `owner.userId` is present → call `/user/get` by ID.
- *  3. Falls back to the raw email string if the API call fails or returns no
- *     usable email (so we still try to assign rather than silently skip).
+ *  3. Falls back to the raw email (alias-stripped) if the API call fails.
  */
 async function resolveTerrosOwnerEmail(
   terrosBase: string,
@@ -123,14 +133,16 @@ async function resolveTerrosOwnerEmail(
         (user.email as string | undefined) ??
         (user.loginEmail as string | undefined) ??
         (parsed.email as string | undefined);
-      if (typeof email === "string" && email.trim().includes("@")) return email.trim();
+      if (typeof email === "string" && email.trim().includes("@")) {
+        return stripEmailAlias(email.trim());
+      }
     } catch {
       continue;
     }
   }
 
-  // Fall back to raw email so assignment is still attempted
-  return rawEmail && rawEmail.includes("@") ? rawEmail : undefined;
+  // Fall back to alias-stripped raw email so assignment is still attempted
+  return rawEmail && rawEmail.includes("@") ? stripEmailAlias(rawEmail) : undefined;
 }
 
 function mapAddress(a?: TerrosAddress): {
@@ -283,19 +295,23 @@ function buildEnerfloPayloadFromTerros(
   resolvedOwnerEmail?: string
 ): Record<string, unknown> {
   const r = account.resident ?? {};
-  const nameFromResident = (r.name ?? "").trim();
-  const nameFromOwner = [account.owner?.firstName, account.owner?.lastName]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+  // Resident name: prefer combined first+last, fall back to full name string
+  const residentFirst = (r.firstName ?? "").trim();
+  const residentLast = (r.lastName ?? "").trim();
+  const nameFromResident =
+    (residentFirst || residentLast)
+      ? [residentFirst, residentLast].filter(Boolean).join(" ")
+      : (r.name ?? "").trim();
   const { address, city, state, zip } = mapAddress(account.address);
   const shortAddr = address ? address.split(",")[0]!.trim().slice(0, 80) : "";
-  let fullName = nameFromResident || nameFromOwner;
+  // Customer name comes only from resident — owner is the sales rep, not the homeowner
+  let fullName = nameFromResident;
   if (!fullName && shortAddr) fullName = `Resident ${shortAddr}`;
   if (!fullName && !shortAddr) fullName = `Terros ${terrosAccountId.replace(/^Account\./, "").slice(0, 12)}`;
 
-  const email = (r.email ?? account.owner?.email ?? "").trim();
-  const phone = (r.phone ?? account.owner?.phone ?? "").trim();
+  // Email/phone from resident only — owner fields belong to the sales rep
+  const email = (r.email ?? "").trim();
+  const phone = (r.phone ?? "").trim();
 
   const { first_name, last_name } = splitName(fullName || "Terros Account");
 
