@@ -260,6 +260,53 @@ function parseEnerfloCreateCustomerId(responseText: string): string | null {
   return null;
 }
 
+/**
+ * Verify that `email` belongs to an active Enerflo user by searching
+ * GET /api/v3/users (paginates up to 3 pages of 100 users).
+ *
+ * Tries both the raw email (e.g. "user+axia@domain.com") AND the alias-stripped
+ * version (e.g. "user@domain.com") because Enerflo has a mix — some reps are
+ * registered with +axia in their email, others without.
+ *
+ * Returns the exact Enerflo-registered email on match, or undefined.
+ */
+async function findEnerfloUserByEmail(rawEmail: string): Promise<string | undefined> {
+  const stripped = stripEmailAlias(rawEmail.trim());
+  const candidates = [rawEmail.trim().toLowerCase(), stripped.toLowerCase()].filter(
+    (e, i, arr) => e && arr.indexOf(e) === i
+  );
+
+  // Collect all users up to 3 pages then search
+  const allUsers: Record<string, unknown>[] = [];
+  for (let page = 1; page <= 3; page++) {
+    const { ok, data } = await enerfloRequestParsed<unknown>({
+      operation: "webhook:terros:lookup-enerflo-user-by-email",
+      method: "GET",
+      path: "/api/v3/users",
+      query: { page: String(page), pageSize: "100" },
+    });
+    if (!ok || !data || typeof data !== "object") break;
+    const o = data as Record<string, unknown>;
+    const rows = (["results", "items", "users", "data"] as const)
+      .map((k) => o[k])
+      .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    allUsers.push(...rows);
+    if (rows.length < 100) break;
+  }
+
+  for (const candidate of candidates) {
+    for (const row of allUsers) {
+      const rowEmail =
+        typeof row.email === "string" ? row.email.trim().toLowerCase() : null;
+      if (rowEmail && rowEmail === candidate) {
+        return typeof row.email === "string" ? row.email.trim() : rawEmail;
+      }
+    }
+  }
+  return undefined;
+}
+
 async function findEnerfloCustomerUuidByIntegrationSearch(
   terrosAccountId: string
 ): Promise<string | null> {
@@ -464,7 +511,15 @@ async function handleAdd(
   const resolvedOwnerEmail = terrosKey
     ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, data.owner)
     : undefined;
-  const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId, resolvedOwnerEmail);
+
+  // Verify resolvedOwnerEmail exists as an active Enerflo user; only include
+  // assign_to_email when confirmed, otherwise skip it entirely.
+  let verifiedOwnerEmail: string | undefined;
+  if (resolvedOwnerEmail) {
+    verifiedOwnerEmail = await findEnerfloUserByEmail(resolvedOwnerEmail);
+  }
+
+  const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId, verifiedOwnerEmail);
 
   const log = await enerfloRequest({
     operation: "webhook:terros:create-enerflo-customer",
@@ -489,6 +544,11 @@ async function handleAdd(
     enerfloStatus: log.status,
     terrosLink: linked,
     skipped: false,
+    debug: {
+      rawOwnerEmail: data.owner?.email ?? null,
+      resolvedOwnerEmail: resolvedOwnerEmail ?? null,
+      verifiedOwnerEmail: verifiedOwnerEmail ?? null,
+    },
   });
 }
 
