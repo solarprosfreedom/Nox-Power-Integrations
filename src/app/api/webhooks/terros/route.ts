@@ -512,11 +512,14 @@ async function handleAdd(
     ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, data.owner)
     : undefined;
 
-  // Verify resolvedOwnerEmail exists as an active Enerflo user; only include
-  // assign_to_email when confirmed, otherwise skip it entirely.
+  // Use the raw Terros owner email for the Enerflo user lookup so
+  // findEnerfloUserByEmail can try BOTH the +alias form and the stripped form.
+  // (Some reps are registered in Enerflo with +axia, others without.)
+  const rawOwnerEmail = data.owner?.email?.trim();
+  const emailForLookup = rawOwnerEmail ?? resolvedOwnerEmail;
   let verifiedOwnerEmail: string | undefined;
-  if (resolvedOwnerEmail) {
-    verifiedOwnerEmail = await findEnerfloUserByEmail(resolvedOwnerEmail);
+  if (emailForLookup) {
+    verifiedOwnerEmail = await findEnerfloUserByEmail(emailForLookup);
   }
 
   const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId, verifiedOwnerEmail);
@@ -545,7 +548,8 @@ async function handleAdd(
     terrosLink: linked,
     skipped: false,
     debug: {
-      rawOwnerEmail: data.owner?.email ?? null,
+      rawOwnerEmail: rawOwnerEmail ?? null,
+      emailForLookup: emailForLookup ?? null,
       resolvedOwnerEmail: resolvedOwnerEmail ?? null,
       verifiedOwnerEmail: verifiedOwnerEmail ?? null,
     },
