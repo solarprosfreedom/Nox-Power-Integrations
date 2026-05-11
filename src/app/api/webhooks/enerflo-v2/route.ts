@@ -799,50 +799,44 @@ async function handleCustomerCreated(
   let ownerEmail: string | null = null;
   let _ownerDebug: Record<string, unknown> = {};
 
-  // Fetch full customer record to read owner.user.email — the webhook payload
-  // does not include lead owner info, so we have to ask the Enerflo API directly.
-  if (customerId && enerfloKey) {
+  // GET /api/v3/customers/{uuid} returns 403 for this API key.
+  // Instead, use GET /api/v1/customers?search={email} which returns owner.email directly.
+  // The customer.created payload always includes customer.email.
+  if (customerEmail && enerfloKey) {
     try {
-      const res = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerId)}`, {
+      const searchUrl = `${enerfloBase}/api/v1/customers?search=${encodeURIComponent(customerEmail)}&pageSize=20`;
+      const res = await fetch(searchUrl, {
         method: "GET",
         headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
       });
-      _ownerDebug.fetchStatus = res.status;
+      _ownerDebug.searchStatus = res.status;
       if (res.ok) {
         const raw = JSON.parse(await res.text()) as Record<string, unknown>;
-        const cr = (raw.customer ?? raw.data ?? raw) as Record<string, unknown>;
-        const agentObj = (cr.agent ?? cr.owner ?? cr.leadOwner) as Record<string, unknown> | undefined;
-        const agentUser = agentObj && typeof agentObj === "object"
-          ? (agentObj.user as Record<string, unknown> | undefined)
-          : undefined;
-        _ownerDebug = {
-          ..._ownerDebug,
-          agentKeys: cr.agent != null ? "present" : "absent",
-          ownerKeys: cr.owner != null ? "present" : "absent",
-          leadOwnerKeys: cr.leadOwner != null ? "present" : "absent",
-          agentObj: agentObj ?? null,
-          agentUser: agentUser ?? null,
-        };
-        const directEmail =
-          (agentUser?.email as string | undefined) ??
-          (agentObj?.email as string | undefined);
-        if (directEmail && directEmail.includes("@")) {
-          ownerEmail = directEmail.trim();
-          ownerResolvedFrom = "customer-record:owner.user.email";
-        } else {
-          const userId = agentUser?.id ?? agentObj?.user_id ?? agentObj?.userId;
-          _ownerDebug.userIdAttempted = userId ?? null;
-          if (userId != null) {
-            const ur = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, String(userId));
-            if (ur.email) {
-              ownerEmail = ur.email;
-              ownerResolvedFrom = `customer-record:user/${userId}`;
-            }
+        const rows = raw.data as Record<string, unknown>[] | undefined;
+        _ownerDebug.searchCount = raw.dataCount ?? 0;
+        if (Array.isArray(rows)) {
+          // Find the record whose integration UUID matches our customerId
+          let matchedRow = rows.find((r) => {
+            const integId = (
+              (r.integrations as Record<string, unknown> | undefined)
+                ?.["Enerflo V2"] as Record<string, unknown> | undefined
+            )?.EnerfloV2Customer as Record<string, unknown> | undefined;
+            return integId?.integration_record_id === customerId;
+          });
+          // Fall back to first result if UUID match not found (e.g. newly created, not yet indexed)
+          if (!matchedRow && rows.length === 1) matchedRow = rows[0];
+          const ownerObj = matchedRow?.owner as Record<string, unknown> | undefined;
+          const foundEmail = ownerObj?.email as string | undefined;
+          _ownerDebug.matchedRowId = matchedRow?.id ?? null;
+          _ownerDebug.foundOwnerEmail = foundEmail ?? null;
+          if (foundEmail && foundEmail.includes("@")) {
+            ownerEmail = foundEmail.trim();
+            ownerResolvedFrom = "v1-search:owner.email";
           }
         }
       }
     } catch (e) {
-      _ownerDebug.fetchError = e instanceof Error ? e.message : String(e);
+      _ownerDebug.searchError = e instanceof Error ? e.message : String(e);
     }
   }
 
