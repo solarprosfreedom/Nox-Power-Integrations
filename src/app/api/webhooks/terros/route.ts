@@ -747,11 +747,9 @@ async function handleUpdate(
   }
 
   // Use v3 UUID path when id looks like a UUID, otherwise fall back to v1 customer PATCH.
-  const isUuid = UUID_RE.test(customerUuid);
-  const path = isUuid
-    ? `/api/v3/customers/${encodeURIComponent(customerUuid)}`
-    : `/api/v1/customers/${encodeURIComponent(customerUuid)}`;
-  const method = isUuid ? "PUT" : "PATCH" as const;
+  // v3 PUT accepts both UUID and numeric ID — v1 PATCH returns 405
+  const path = `/api/v3/customers/${encodeURIComponent(customerUuid)}`;
+  const method = "PUT" as const;
   const log = await enerfloRequest({
     operation: "webhook:terros:update-enerflo-customer",
     method,
