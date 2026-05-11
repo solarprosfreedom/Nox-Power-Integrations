@@ -746,9 +746,15 @@ async function handleUpdate(
     });
   }
 
-  // Use v3 UUID path when id looks like a UUID, otherwise fall back to v1 customer PATCH.
-  // v3 PUT accepts both UUID and numeric ID — v1 PATCH returns 405
-  const path = `/api/v3/customers/${encodeURIComponent(customerUuid)}`;
+  // v3 PUT only accepts numeric IDs — UUIDs return 403. If customerUuid is a UUID,
+  // resolve the numeric ID via email search before calling the update endpoint.
+  let enerfloNumericId: string = customerUuid;
+  if (UUID_RE.test(customerUuid) && residentEmail) {
+    const numericId = await findEnerfloCustomerIdByEmail(residentEmail, terrosAccountId);
+    if (numericId) enerfloNumericId = numericId;
+  }
+
+  const path = `/api/v3/customers/${encodeURIComponent(enerfloNumericId)}`;
   const method = "PUT" as const;
   const log = await enerfloRequest({
     operation: "webhook:terros:update-enerflo-customer",
@@ -762,6 +768,7 @@ async function handleUpdate(
     action: "update",
     terrosAccountId,
     enerfloCustomerId: customerUuid,
+    enerfloNumericId,
     success: log.ok,
     enerfloStatus: log.status,
     fieldsSent: Object.keys(updateBody),
