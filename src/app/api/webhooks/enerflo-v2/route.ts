@@ -156,6 +156,7 @@ interface StepResult {
   status: number | null;
   data?: unknown;
   error?: string;
+  [key: string]: unknown;
 }
 
 /** True if any `TERROS_CF_*` env var is set (Terros custom field definition IDs). */
@@ -337,14 +338,17 @@ async function handleProjectSubmitted(
           if (agentEmailDirect && agentEmailDirect.includes("@")) {
             customerAgentId = agentEmailDirect.trim();
           } else {
-            // Fall back to the actual Enerflo user ID for /api/v3/users/{id} lookup
+            // Fall back to the actual Enerflo user ID for /api/v3/users/{id} lookup.
+            // Prefer owner.user.id / owner.user_id (real user ID like 147158) over
+            // c.agent_id / owner.id (junction table ID like 102466) which won't match.
             const rawAgentId =
               agentUser?.id ??
               agentObj?.user_id ??
               agentObj?.userId ??
               c.agent_user_id ??
               c.agentUserId ??
-              c.agentId;
+              c.agentId ??
+              c.agent_id; // snake_case fallback — junction ID, last resort
             if (rawAgentId != null && String(rawAgentId).trim()) {
               customerAgentId = String(rawAgentId).trim();
             }
@@ -362,6 +366,23 @@ async function handleProjectSubmitted(
       ok,
       status,
       data: ok ? { customerEmail, customerPhone, customerAgentId: customerAgentId || null } : undefined,
+      _ownerShape: ok ? (() => {
+        try {
+          const raw = JSON.parse(responseText) as Record<string, unknown>;
+          const c2 = (raw.customer ?? raw.data ?? raw) as Record<string, unknown>;
+          const o = c2.owner ?? c2.agent ?? c2.leadOwner;
+          return {
+            agent_id: c2.agent_id,
+            owner_keys: o && typeof o === "object" ? Object.keys(o as object) : null,
+            owner_user_keys: (o as Record<string, unknown>)?.user && typeof (o as Record<string, unknown>).user === "object"
+              ? Object.keys((o as Record<string, unknown>).user as object)
+              : null,
+            owner_email: (o as Record<string, unknown>)?.email,
+            owner_user_id: (o as Record<string, unknown>)?.user_id,
+            owner_user_email: ((o as Record<string, unknown>)?.user as Record<string, unknown>)?.email,
+          };
+        } catch { return null; }
+      })() : undefined,
       error: ok ? undefined : logPreview(responseText),
     });
   }
