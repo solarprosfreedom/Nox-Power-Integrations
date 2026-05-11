@@ -126,6 +126,22 @@ interface CustomerCreatedPayload {
   };
 }
 
+interface DealCreatedPayload {
+  targetOrg: string;
+  initiatedBy: string;
+  deal: {
+    id: string;
+    shortCode?: string;
+    customer: {
+      id: string;
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+    };
+    salesRep?: { id?: string };
+  };
+}
+
 interface CustomerUpdatedV2Payload {
   targetOrg: string;
   initiatedBy: string;
@@ -222,6 +238,9 @@ export async function POST(req: NextRequest) {
   switch (eventName) {
     case "deal.projectSubmitted":
       return handleProjectSubmitted(payload as unknown as ProjectSubmittedPayload);
+
+    case "deal.created":
+      return handleDealCreated(payload as unknown as DealCreatedPayload);
 
     case "customer.created":
       return handleCustomerCreated(payload as unknown as CustomerCreatedPayload);
@@ -757,6 +776,113 @@ async function handleProjectSubmitted(
       zip:     customerZip     || null,
     },
     steps,
+  });
+}
+
+// ── customer.created ─────────────────────────────────────────────────────
+// ── deal.created ─────────────────────────────────────────────────────────
+async function handleDealCreated(
+  payload: DealCreatedPayload
+): Promise<NextResponse> {
+  const terrosBase = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
+  const terrosKey       = env.terrosApiKey ?? "";
+  const knockStageId    = env.terrosWorkflowKnockStageId ?? "";
+  const terrosWorkflowId = env.terrosWorkflowId ?? "";
+  const terrosStartStage = env.terrosWorkflowStartStageId ?? "";
+
+  const customerId = payload.deal?.customer?.id ?? "";
+
+  if (!customerId) {
+    return NextResponse.json({ received: true, event: "deal.created", skipped: true, reason: "no customer id" });
+  }
+  if (!knockStageId) {
+    return NextResponse.json({ received: true, event: "deal.created", skipped: true, reason: "TERROS_WORKFLOW_KNOCK_STAGE_ID not configured" });
+  }
+
+  // Step 1: Upsert the account (finds existing by externalLeadId) to get the accountId
+  let accountId: string | null = null;
+  let upsertOk = false;
+  let upsertStatus: number | null = null;
+  let upsertPreview = "";
+
+  try {
+    const res = await fetch(`${terrosBase}/account/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({
+        account: {
+          externalLeadId: customerId,
+          ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
+          ...(terrosStartStage ? { workflowStageId: terrosStartStage } : {}),
+        },
+      }),
+    });
+    upsertStatus = res.status;
+    const rawBody = await res.text();
+    upsertPreview = rawBody.slice(0, 300);
+    upsertOk = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
+    if (upsertOk) {
+      const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+      const acc = (parsed.account ?? parsed) as Record<string, unknown>;
+      accountId = (acc.accountId as string | undefined) ?? null;
+    }
+  } catch (e) {
+    upsertPreview = e instanceof Error ? e.message : String(e);
+  }
+
+  await writeApiLog({
+    operation: "webhook:enerflo-v2:upsert-terros-account-deal-created",
+    vendor: "terros",
+    method: "POST",
+    url: `${terrosBase}/account/upsert`,
+    hadApiKey: Boolean(terrosKey),
+    status: upsertStatus,
+    ok: upsertOk,
+    responsePreview: upsertPreview,
+  });
+
+  // Step 2: Update stage to Knock
+  let stageOk = false;
+  let stageStatus: number | null = null;
+  let stagePreview = "";
+
+  if (accountId) {
+    try {
+      const res = await fetch(`${terrosBase}/account/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ account: { accountId, workflowStageId: knockStageId } }),
+      });
+      stageStatus = res.status;
+      const rawBody = await res.text();
+      stagePreview = rawBody.slice(0, 300);
+      stageOk = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
+    } catch (e) {
+      stagePreview = e instanceof Error ? e.message : String(e);
+    }
+
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:set-knock-stage-deal-created",
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/account/update`,
+      hadApiKey: Boolean(terrosKey),
+      status: stageStatus,
+      ok: stageOk,
+      responsePreview: stagePreview,
+    });
+  }
+
+  return NextResponse.json({
+    received: true,
+    event: "deal.created",
+    customerId,
+    accountId,
+    knockStageId,
+    upsert: { ok: upsertOk, status: upsertStatus },
+    stageUpdate: accountId
+      ? { ok: stageOk, status: stageStatus, preview: stagePreview }
+      : { skipped: true, reason: "no accountId from upsert" },
   });
 }
 
