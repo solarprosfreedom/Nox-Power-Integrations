@@ -49,6 +49,7 @@ export const env = {
   terrosCfFinancingStatus: opt("TERROS_CF_FINANCING_STATUS"),
   // Counter fields (incremented by events)
   terrosCfNetDeals: opt("TERROS_CF_NET_DEALS"),
+  terrosCfInstalls: opt("TERROS_CF_INSTALLS"),
   terrosCfAppointments: opt("TERROS_CF_APPOINTMENTS"),
   sequifiApiBaseUrl: opt("SEQUIFI_API_BASE_URL"),
   sequifiApiKey: opt("SEQUIFI_API_KEY"),

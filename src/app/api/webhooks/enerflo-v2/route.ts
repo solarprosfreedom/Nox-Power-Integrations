@@ -667,12 +667,12 @@ async function handleProjectSubmitted(
       const upsertedAccount = parsedBody?.account as Record<string, unknown> | undefined;
       const upsertedId = upsertedAccount?.accountId as string | undefined;
       const closedStage = env.terrosWorkflowClosedStageId;
-      const netDealsCfId = env.terrosCfNetDeals;
+      const installsCfId = env.terrosCfInstalls;
 
-      if (upsertedId && (closedStage || netDealsCfId)) {
-        // Fetch current account to read existing Net Deals value before incrementing.
-        let currentNetDeals = 0;
-        if (netDealsCfId) {
+      if (upsertedId && (closedStage || installsCfId)) {
+        // Fetch current account to read existing Installs value before incrementing.
+        let currentInstalls = 0;
+        if (installsCfId) {
           try {
             const getRes = await fetch(`${terrosBase}/account/get`, {
               method: "POST",
@@ -685,19 +685,28 @@ async function handleProjectSubmitted(
                 const getParsed = JSON.parse(getRaw) as Record<string, unknown>;
                 const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
                 const cfs = acc.customFields as Record<string, unknown> | undefined;
-                const existing = cfs?.[netDealsCfId];
-                if (typeof existing === "number") currentNetDeals = existing;
-                else if (typeof existing === "string") currentNetDeals = parseInt(existing, 10) || 0;
+                const existing = cfs?.[installsCfId];
+                if (typeof existing === "number") currentInstalls = existing;
+                else if (typeof existing === "string") currentInstalls = parseInt(existing, 10) || 0;
               }
             }
           } catch { /* best-effort — proceed with 0 if fetch fails */ }
         }
 
+        const cleanPhoneForClosed = sanitizePhone(customerPhone);
+        // Merge Installs into the full custom fields map so the update doesn't
+        // overwrite the deal fields (gross PPW, inverter model, etc.) set by the upsert.
+        const mergedCustomFields: Record<string, unknown> = {
+          ...terrosCustomFieldsForApi,
+          ...(installsCfId ? { [installsCfId]: currentInstalls + 1 } : {}),
+        };
         const updateFields: Record<string, unknown> = {
           accountId: upsertedId,
           id: upsertedId,
           ...(closedStage ? { workflowStageId: closedStage } : {}),
-          ...(netDealsCfId ? { customFields: { [netDealsCfId]: currentNetDeals + 1 } } : {}),
+          ...(Object.keys(mergedCustomFields).length > 0 ? { customFields: mergedCustomFields } : {}),
+          // Terros requires a phone number before allowing stage transition to Closed
+          ...(cleanPhoneForClosed ? { resident: { phone: cleanPhoneForClosed } } : {}),
         };
 
         let closedOk = false;
@@ -730,11 +739,11 @@ async function handleProjectSubmitted(
         });
 
         steps.push({
-          step: "3c [best-effort] — Set Closed stage + Net Deals +1",
+          step: "3c [best-effort] — Set Closed stage + Installs +1",
           ok: closedOk,
           status: closedStatus,
           data: closedOk
-            ? { accountId: upsertedId, workflowStageId: closedStage ?? null, netDeals: currentNetDeals + 1 }
+            ? { accountId: upsertedId, workflowStageId: closedStage ?? null, installs: currentInstalls + 1 }
             : undefined,
           error: closedError,
         });
@@ -848,10 +857,11 @@ async function handleDealCreated(
     responsePreview: upsertPreview,
   });
 
-  // Step 2: Update stage to Knock — block only if already at Appointment or Closed.
-  // Non-pipeline stages (e.g. Moving, Not Home) and Start/unset all allow moving to Knock.
+  // Step 2: Update stage to Knock + Net Deals +1.
+  // Block only if already at Appointment or Closed.
   const appointmentStageId = env.terrosWorkflowAppointmentStageId ?? "";
   const closedStageId      = env.terrosWorkflowClosedStageId      ?? "";
+  const netDealsCfId       = env.terrosCfNetDeals                 ?? "";
   const blockKnockStages   = [appointmentStageId, closedStageId].filter(Boolean);
   const shouldSetKnock = !currentStage || !blockKnockStages.includes(currentStage);
   let stageOk = false;
@@ -859,11 +869,40 @@ async function handleDealCreated(
   let stagePreview = "";
 
   if (accountId && shouldSetKnock) {
+    // Read current Net Deals before incrementing
+    let currentNetDeals = 0;
+    if (netDealsCfId) {
+      try {
+        const getRes = await fetch(`${terrosBase}/account/get`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ accountId }),
+        });
+        if (getRes.ok) {
+          const getRaw = await getRes.text();
+          if (terrosJsonBodyIndicatesSuccess(getRaw)) {
+            const getParsed = JSON.parse(getRaw) as Record<string, unknown>;
+            const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
+            const cfs = acc.customFields as Record<string, unknown> | undefined;
+            const existing = cfs?.[netDealsCfId];
+            if (typeof existing === "number") currentNetDeals = existing;
+            else if (typeof existing === "string") currentNetDeals = parseInt(existing, 10) || 0;
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
+    const knockUpdateFields: Record<string, unknown> = {
+      accountId,
+      ...(knockStageId ? { workflowStageId: knockStageId } : {}),
+      ...(netDealsCfId ? { customFields: { [netDealsCfId]: currentNetDeals + 1 } } : {}),
+    };
+
     try {
       const res = await fetch(`${terrosBase}/account/update`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ account: { accountId, workflowStageId: knockStageId } }),
+        body: JSON.stringify({ account: knockUpdateFields }),
       });
       stageStatus = res.status;
       const rawBody = await res.text();
