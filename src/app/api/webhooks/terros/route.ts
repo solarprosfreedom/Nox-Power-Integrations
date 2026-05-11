@@ -642,6 +642,20 @@ async function handleUpdate(
     });
   }
 
+  // Opportunistic UUID backfill: if the stored externalLeadId is a numeric v1 ID
+  // (not a UUID), upgrade it now so future deal.created upserts can find the account.
+  const storedExternalLeadId =
+    (typeof full?.externalLeadId === "string" ? full.externalLeadId : null) ??
+    webhookData.externalLeadId ??
+    null;
+  const needsUuidBackfill =
+    terrosKey &&
+    customerUuid &&
+    (!storedExternalLeadId || !UUID_RE.test(storedExternalLeadId));
+  if (needsUuidBackfill) {
+    await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, customerUuid);
+  }
+
   // Resolve canonical owner email (handles +alias mismatches and ID-only owner payloads)
   const ownerData = merged.owner ?? webhookData.owner;
   const resolvedOwnerEmail = terrosKey
@@ -680,6 +694,7 @@ async function handleUpdate(
     success: log.ok,
     enerfloStatus: log.status,
     fieldsSent: Object.keys(updateBody),
+    uuidBackfill: needsUuidBackfill ? "attempted" : "not-needed",
   });
 }
 

@@ -801,6 +801,7 @@ async function handleDealCreated(
 
   // Step 1: Upsert the account (finds existing by externalLeadId) to get the accountId
   let accountId: string | null = null;
+  let currentStage: string | null = null;
   let upsertOk = false;
   let upsertStatus: number | null = null;
   let upsertPreview = "";
@@ -825,6 +826,7 @@ async function handleDealCreated(
       const parsed = JSON.parse(rawBody) as Record<string, unknown>;
       const acc = (parsed.account ?? parsed) as Record<string, unknown>;
       accountId = (acc.accountId as string | undefined) ?? null;
+      currentStage = (acc.workflowStageId as string | undefined) ?? null;
     }
   } catch (e) {
     upsertPreview = e instanceof Error ? e.message : String(e);
@@ -841,12 +843,14 @@ async function handleDealCreated(
     responsePreview: upsertPreview,
   });
 
-  // Step 2: Update stage to Knock
+  // Step 2: Update stage to Knock — only if account is at Prospect (or has no stage yet).
+  // Prevents downgrading accounts already at Appointment or Closed.
+  const shouldSetKnock = !currentStage || currentStage === terrosStartStage;
   let stageOk = false;
   let stageStatus: number | null = null;
   let stagePreview = "";
 
-  if (accountId) {
+  if (accountId && shouldSetKnock) {
     try {
       const res = await fetch(`${terrosBase}/account/update`, {
         method: "POST",
@@ -871,6 +875,8 @@ async function handleDealCreated(
       ok: stageOk,
       responsePreview: stagePreview,
     });
+  } else if (accountId && !shouldSetKnock) {
+    stagePreview = `Skipped: account already past Prospect stage (currentStage=${currentStage ?? "none"})`;
   }
 
   return NextResponse.json({
@@ -879,10 +885,13 @@ async function handleDealCreated(
     customerId,
     accountId,
     knockStageId,
+    currentStage,
     upsert: { ok: upsertOk, status: upsertStatus },
-    stageUpdate: accountId
-      ? { ok: stageOk, status: stageStatus, preview: stagePreview }
-      : { skipped: true, reason: "no accountId from upsert" },
+    stageUpdate: !accountId
+      ? { skipped: true, reason: "no accountId from upsert" }
+      : !shouldSetKnock
+        ? { skipped: true, reason: stagePreview }
+        : { ok: stageOk, status: stageStatus, preview: stagePreview },
   });
 }
 
