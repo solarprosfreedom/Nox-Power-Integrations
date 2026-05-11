@@ -569,6 +569,8 @@ async function handleProjectSubmitted(
       location,
       resident: {
         ...(customerName ? { name: customerName } : {}),
+        ...(payload.customer?.firstName ? { firstName: payload.customer.firstName } : {}),
+        ...(payload.customer?.lastName  ? { lastName:  payload.customer.lastName  } : {}),
         ...(customerEmail ? { email: customerEmail } : {}),
         ...(sanitizePhone(customerPhone) ? { phone: sanitizePhone(customerPhone) } : {}),
       },
@@ -1012,6 +1014,8 @@ async function handleCustomerCreated(
     location,
     resident: {
       ...(customerName  ? { name: customerName }   : {}),
+      ...(c.firstName   ? { firstName: c.firstName } : {}),
+      ...(c.lastName    ? { lastName:  c.lastName  } : {}),
       ...(customerEmail ? { email: customerEmail } : {}),
       ...(sanitizePhone(customerPhone) ? { phone: sanitizePhone(customerPhone) } : {}),
     },
@@ -1093,8 +1097,10 @@ async function handleCustomerUpdatedV2(
   // Build only the fields that actually changed — avoids overwriting with empty values
   const changes = payload.changes;
   const residentUpdate: Record<string, string> = {};
-  if (customerName)  residentUpdate.name  = customerName;
-  if (customerEmail) residentUpdate.email = customerEmail;
+  if (customerName)       residentUpdate.name      = customerName;
+  if (c.firstName?.trim()) residentUpdate.firstName = c.firstName.trim();
+  if (c.lastName?.trim())  residentUpdate.lastName  = c.lastName.trim();
+  if (customerEmail)      residentUpdate.email     = customerEmail;
   const cleanPhone = sanitizePhone(customerPhone);
   if (cleanPhone) residentUpdate.phone = cleanPhone;
 
