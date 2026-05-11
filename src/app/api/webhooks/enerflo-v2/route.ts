@@ -274,8 +274,10 @@ async function handleProjectSubmitted(
   const terrosBase  = (env.terrosApiBaseUrl  ?? "https://api.terros.com").replace(/\/$/, "");
   const enerfloKey  = env.enerfloV1ApiKey ?? "";
   const terrosKey        = env.terrosApiKey              ?? "";
-  const terrosWorkflowId = env.terrosWorkflowId          ?? "";
-  const terrosStartStage = env.terrosWorkflowStartStageId ?? "";
+  const terrosWorkflowId   = env.terrosWorkflowId              ?? "";
+  const terrosStartStage   = env.terrosWorkflowStartStageId    ?? "";
+  const knockStageId       = env.terrosWorkflowKnockStageId    ?? "";
+  const terrosClosedStageId = env.terrosWorkflowClosedStageId  ?? "";
 
   const initiatedBy = payload.initiatedBy ?? "";
   const salesRepUuid = payload.deal?.salesRep?.id ? String(payload.deal.salesRep.id) : "";
@@ -564,8 +566,8 @@ async function handleProjectSubmitted(
       ...(customerId ? { externalLeadId: customerId } : { ...(dealId ? { externalLeadId: dealId } : {}) }),
       // Workflow fields — required for the account to appear in the Terros UI
       ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
-      // workflowStageId is only set on first insert; upsert keeps existing stage on update
-      ...(terrosStartStage ? { workflowStageId: terrosStartStage } : {}),
+      // New accounts from project submit start at Closed; upsert keeps existing stage on update
+      ...(terrosClosedStageId ? { workflowStageId: terrosClosedStageId } : (knockStageId ? { workflowStageId: knockStageId } : {})),
       location,
       resident: {
         ...(customerName ? { name: customerName } : {}),
@@ -624,7 +626,8 @@ async function handleProjectSubmitted(
     // Terros upsert preserves the existing stage on updates and ignores workflowStageId in the
     // request body. Accounts created before stage support was added have no stage and are
     // invisible in the UI. If the upsert response has no stage, force-assign it via account/update.
-    if (ok && terrosStartStage) {
+    const fallbackStageId = terrosClosedStageId || knockStageId;
+    if (ok && fallbackStageId) {
       const upsertedAccount = parsedBody?.account as Record<string, unknown> | undefined;
       const upsertedId = upsertedAccount?.accountId as string | undefined;
       const hasStage = Boolean(upsertedAccount?.workflowStageId);
@@ -638,7 +641,7 @@ async function handleProjectSubmitted(
           const stageRes = await fetch(`${terrosBase}/account/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-            body: JSON.stringify({ account: { accountId: upsertedId, id: upsertedId, workflowStageId: terrosStartStage } }),
+            body: JSON.stringify({ account: { accountId: upsertedId, id: upsertedId, workflowStageId: fallbackStageId } }),
           });
           stageStatus = stageRes.status;
           const stageBody = await stageRes.text();
@@ -649,10 +652,10 @@ async function handleProjectSubmitted(
         }
 
         steps.push({
-          step: "3b [best-effort] — Assign start stage to unstageed account",
+          step: "3b [best-effort] — Assign Closed stage to unstageed account",
           ok: stageOk,
           status: stageStatus,
-          data: stageOk ? { accountId: upsertedId, workflowStageId: terrosStartStage } : undefined,
+          data: stageOk ? { accountId: upsertedId, workflowStageId: fallbackStageId } : undefined,
           error: stageError,
         });
       }
@@ -816,7 +819,7 @@ async function handleDealCreated(
         account: {
           externalLeadId: customerId,
           ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
-          ...(terrosStartStage ? { workflowStageId: terrosStartStage } : {}),
+          ...(knockStageId ? { workflowStageId: knockStageId } : {}),
         },
       }),
     });
@@ -845,9 +848,12 @@ async function handleDealCreated(
     responsePreview: upsertPreview,
   });
 
-  // Step 2: Update stage to Knock — only if account is at Prospect (or has no stage yet).
-  // Prevents downgrading accounts already at Appointment or Closed.
-  const shouldSetKnock = !currentStage || currentStage === terrosStartStage;
+  // Step 2: Update stage to Knock — block only if already at Appointment or Closed.
+  // Non-pipeline stages (e.g. Moving, Not Home) and Start/unset all allow moving to Knock.
+  const appointmentStageId = env.terrosWorkflowAppointmentStageId ?? "";
+  const closedStageId      = env.terrosWorkflowClosedStageId      ?? "";
+  const blockKnockStages   = [appointmentStageId, closedStageId].filter(Boolean);
+  const shouldSetKnock = !currentStage || !blockKnockStages.includes(currentStage);
   let stageOk = false;
   let stageStatus: number | null = null;
   let stagePreview = "";
@@ -907,6 +913,7 @@ async function handleCustomerCreated(
   const terrosKey       = env.terrosApiKey               ?? "";
   const terrosWorkflowId = env.terrosWorkflowId          ?? "";
   const terrosStartStage = env.terrosWorkflowStartStageId ?? "";
+  const knockStageId     = env.terrosWorkflowKnockStageId ?? "";
 
   const c = payload.customer;
   const customerId  = c.id ?? "";
@@ -1010,7 +1017,7 @@ async function handleCustomerCreated(
     sourceStatus: "New Lead",
     ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
     ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
-    ...(terrosStartStage ? { workflowStageId: terrosStartStage } : {}),
+    ...(knockStageId ? { workflowStageId: knockStageId } : {}),
     location,
     resident: {
       ...(customerName  ? { name: customerName }   : {}),
