@@ -386,7 +386,13 @@ function buildEnerfloUpdatePayload(
   resolvedOwnerEmail?: string
 ): Record<string, unknown> {
   const r = account.resident ?? {};
-  const fullName = (r.name ?? "").trim();
+  // Prefer combined firstName+lastName (sent by Terros update payloads);
+  // fall back to the flat name string for older/add payloads.
+  const residentFirst = (r.firstName ?? "").trim();
+  const residentLast = (r.lastName ?? "").trim();
+  const fullName = (residentFirst || residentLast)
+    ? [residentFirst, residentLast].filter(Boolean).join(" ")
+    : (r.name ?? "").trim();
   const email = (r.email ?? "").trim();
   const phone = (r.phone ?? "").trim();
   const { address, city, state, zip } = mapAddress(account.address);
@@ -592,6 +598,17 @@ async function handleUpdate(
   terrosAccountId: string,
   webhookData: TerrosAccountWebhookData
 ): Promise<NextResponse> {
+  await writeApiLog({
+    operation: "webhook:terros:received-update",
+    vendor: "terros",
+    method: "POST",
+    url: `/api/webhooks/terros`,
+    hadApiKey: Boolean(terrosKey),
+    status: 200,
+    ok: true,
+    responsePreview: JSON.stringify({ terrosAccountId, resident: webhookData.resident, externalLeadId: webhookData.externalLeadId }).slice(0, 300),
+  });
+
   let full: Record<string, unknown> | null = null;
   if (terrosKey) {
     full = await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId);
@@ -718,6 +735,8 @@ function terrosResidentFromAccount(full: Record<string, unknown>): TerrosResiden
   if (!res) return {};
   return {
     name: typeof res.name === "string" ? res.name : undefined,
+    firstName: typeof res.firstName === "string" ? res.firstName : undefined,
+    lastName: typeof res.lastName === "string" ? res.lastName : undefined,
     email: typeof res.email === "string" ? res.email : undefined,
     phone: typeof res.phone === "string" ? res.phone : undefined,
   };
