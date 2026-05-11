@@ -795,22 +795,70 @@ async function handleCustomerCreated(
     location.latlng = { latitude: addr.lat, longitude: addr.lng };
   }
 
-  // Lead owner only — omit `ownerId` / `assignedUserId` when absent (no `initiatedBy` fallback).
-  // If omitted, Terros often still sets `ownerId` to the API key user (see response `ownerId` / `workflowHistory.userId`).
-  // Board/list views filtered to “mine” hide those accounts for everyone else until the real owner is sent.
-  const payloadRoot = payload as unknown as Record<string, unknown>;
-  const leadRefs = extractCustomerCreatedLeadOwnerRefs(c, payloadRoot);
   let ownerResolvedFrom = "";
   let ownerEmail: string | null = null;
+  let _ownerDebug: Record<string, unknown> = {};
 
-  if (leadRefs.email) {
-    ownerEmail = leadRefs.email;
-    ownerResolvedFrom = leadRefs.source ?? "leadOwner.email";
-  } else if (leadRefs.id && enerfloKey) {
-    const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, leadRefs.id);
-    if (r.email) {
-      ownerEmail = r.email;
-      ownerResolvedFrom = `${leadRefs.source ?? "leadOwner"}.id→Enerflo`;
+  // Fetch full customer record to read owner.user.email — the webhook payload
+  // does not include lead owner info, so we have to ask the Enerflo API directly.
+  if (customerId && enerfloKey) {
+    try {
+      const res = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerId)}`, {
+        method: "GET",
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      _ownerDebug.fetchStatus = res.status;
+      if (res.ok) {
+        const raw = JSON.parse(await res.text()) as Record<string, unknown>;
+        const cr = (raw.customer ?? raw.data ?? raw) as Record<string, unknown>;
+        const agentObj = (cr.agent ?? cr.owner ?? cr.leadOwner) as Record<string, unknown> | undefined;
+        const agentUser = agentObj && typeof agentObj === "object"
+          ? (agentObj.user as Record<string, unknown> | undefined)
+          : undefined;
+        _ownerDebug = {
+          ..._ownerDebug,
+          agentKeys: cr.agent != null ? "present" : "absent",
+          ownerKeys: cr.owner != null ? "present" : "absent",
+          leadOwnerKeys: cr.leadOwner != null ? "present" : "absent",
+          agentObj: agentObj ?? null,
+          agentUser: agentUser ?? null,
+        };
+        const directEmail =
+          (agentUser?.email as string | undefined) ??
+          (agentObj?.email as string | undefined);
+        if (directEmail && directEmail.includes("@")) {
+          ownerEmail = directEmail.trim();
+          ownerResolvedFrom = "customer-record:owner.user.email";
+        } else {
+          const userId = agentUser?.id ?? agentObj?.user_id ?? agentObj?.userId;
+          _ownerDebug.userIdAttempted = userId ?? null;
+          if (userId != null) {
+            const ur = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, String(userId));
+            if (ur.email) {
+              ownerEmail = ur.email;
+              ownerResolvedFrom = `customer-record:user/${userId}`;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      _ownerDebug.fetchError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Fallback: check payload-level leadOwner fields
+  if (!ownerEmail) {
+    const payloadRoot = payload as unknown as Record<string, unknown>;
+    const leadRefs = extractCustomerCreatedLeadOwnerRefs(c, payloadRoot);
+    if (leadRefs.email) {
+      ownerEmail = leadRefs.email;
+      ownerResolvedFrom = leadRefs.source ?? "leadOwner.email";
+    } else if (leadRefs.id && enerfloKey) {
+      const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, leadRefs.id);
+      if (r.email) {
+        ownerEmail = r.email;
+        ownerResolvedFrom = `${leadRefs.source ?? "leadOwner"}.id→Enerflo`;
+      }
     }
   }
 
@@ -883,6 +931,7 @@ async function handleCustomerCreated(
       ownerResolvedFrom: ownerResolvedFrom || null,
       terrosOwnerId: terrosOwnerId ?? null,
     },
+    _ownerDebug,
     data: ok ? parsedBody : undefined,
     error: ok ? undefined : logPreview(responseText),
   });
