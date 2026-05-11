@@ -323,17 +323,66 @@ async function findEnerfloCustomerUuidByIntegrationSearch(
     .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
   if (!Array.isArray(rows)) return null;
   for (const row of rows) {
-    const ext =
+    // Enerflo stores the Terros account ID at integrations.Partner.Lead.integration_record_id
+    const partnerLead = ((row.integrations as Record<string, unknown> | undefined)
+      ?.Partner as Record<string, unknown> | undefined)
+      ?.Lead as Record<string, unknown> | undefined;
+    const ext = partnerLead?.integration_record_id ??
       row.integration_record_id ??
       row.integrationRecordId ??
       row.external_id ??
       row.externalId;
     if (typeof ext === "string" && ext === terrosAccountId) {
       const id = row.id ?? row.uuid ?? row.customer_id;
-      if (typeof id === "string" && UUID_RE.test(id)) return id;
+      if (id != null) return String(id);
     }
   }
   return null;
+}
+
+/**
+ * Search Enerflo v1 customers by email and return the customer ID (numeric string).
+ * Disambiguates by Terros account ID when multiple customers share the same email.
+ * Falls back to the sole match when there's only one result and no integration_record_id set.
+ *
+ * The v1 API returns numeric IDs only — handleUpdate uses v1 PATCH for non-UUID IDs.
+ */
+async function findEnerfloCustomerIdByEmail(
+  email: string,
+  terrosAccountId: string
+): Promise<string | null> {
+  if (!email || !email.includes("@")) return null;
+  const { ok, data } = await enerfloRequestParsed<unknown>({
+    operation: "webhook:terros:search-customer-by-email",
+    method: "GET",
+    path: "/api/v1/customers",
+    query: { search: email, page: "1", pageSize: "50" },
+  });
+  if (!ok || !data || typeof data !== "object") return null;
+  const o = data as Record<string, unknown>;
+  const rows = (["results", "items", "customers", "data"] as const)
+    .map((k) => o[k])
+    .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
+  if (!Array.isArray(rows)) return null;
+
+  const emailLower = email.trim().toLowerCase();
+  const matched = rows.filter(
+    (r) => typeof r.email === "string" && r.email.trim().toLowerCase() === emailLower
+  );
+  if (matched.length === 0) return null;
+
+  // Prefer the row whose integration_record_id matches the Terros account ID
+  const exact = matched.find((r) => {
+    const partnerIntegId = ((r.integrations as Record<string, unknown> | undefined)
+      ?.Partner as Record<string, unknown> | undefined)
+      ?.Lead as Record<string, unknown> | undefined;
+    return partnerIntegId?.integration_record_id === terrosAccountId;
+  });
+
+  const best = exact ?? (matched.length === 1 ? matched[0] : null);
+  if (!best) return null; // multiple matches, none linked — ambiguous
+  const id = best.id ?? best.customer_id;
+  return id != null ? String(id) : null;
 }
 
 function buildEnerfloPayloadFromTerros(
@@ -648,6 +697,12 @@ async function handleUpdate(
     customerUuid = await findEnerfloCustomerUuidByIntegrationSearch(terrosAccountId);
   }
 
+  // Last-resort: match by resident email so manually-created records can be linked
+  const residentEmail = (merged.resident?.email ?? webhookData.resident?.email ?? "").trim();
+  if (!customerUuid && residentEmail) {
+    customerUuid = await findEnerfloCustomerIdByEmail(residentEmail, terrosAccountId);
+  }
+
   if (!customerUuid) {
     return NextResponse.json({
       received: true,
@@ -655,19 +710,20 @@ async function handleUpdate(
       terrosAccountId,
       skipped: true,
       reason:
-        "No Enerflo customer id found (externalLeadId on Terros, or v1 customer with matching integration_record_id). Create from Enerflo first, or let an Account add webhook create the customer and link.",
+        "No Enerflo customer id found (externalLeadId on Terros, integration_record_id search, or email match). Ensure the customer exists in both systems with the same email.",
     });
   }
 
-  // Opportunistic UUID backfill: if the stored externalLeadId is a numeric v1 ID
-  // (not a UUID), upgrade it now so future deal.created upserts can find the account.
+  // Opportunistic UUID backfill: if the stored externalLeadId is not a UUID,
+  // upgrade it when customerUuid is a real UUID (not a numeric v1 ID).
   const storedExternalLeadId =
     (typeof full?.externalLeadId === "string" ? full.externalLeadId : null) ??
     webhookData.externalLeadId ??
     null;
+  const customerIdIsUuid = UUID_RE.test(customerUuid);
   const needsUuidBackfill =
     terrosKey &&
-    customerUuid &&
+    customerIdIsUuid &&
     (!storedExternalLeadId || !UUID_RE.test(storedExternalLeadId));
   if (needsUuidBackfill) {
     await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, customerUuid);
