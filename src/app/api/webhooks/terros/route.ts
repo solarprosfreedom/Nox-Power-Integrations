@@ -533,9 +533,37 @@ async function handleAdd(
 
   const newId = log.responsePreview ? parseEnerfloCreateCustomerId(log.responsePreview) : null;
 
+  // Resolve the Enerflo UUID from the numeric customer_id so externalLeadId on Terros
+  // stores the UUID, not the numeric id. This lets deal.created / customer.created
+  // find the account by UUID via account/upsert later.
+  let enerfloUuid: string | null = null;
+  if (log.ok && newId) {
+    const residentEmail = typeof data.resident === "object" && data.resident !== null
+      ? (data.resident as Record<string, unknown>).email as string | undefined
+      : undefined;
+    if (residentEmail) {
+      const { ok: searchOk, data: searchData } = await enerfloRequestParsed<unknown>({
+        operation: "webhook:terros:resolve-enerflo-uuid-after-create",
+        method: "GET",
+        path: "/api/v1/customers",
+        query: { search: residentEmail, pageSize: "20" },
+      });
+      if (searchOk && searchData && typeof searchData === "object") {
+        const rows = (searchData as Record<string, unknown>).data as Record<string, unknown>[] | undefined;
+        if (Array.isArray(rows)) {
+          const match = rows.find((r) => String(r.id) === String(newId));
+          const integV2 = ((match?.integrations as Record<string, unknown> | undefined)?.["Enerflo V2"] as Record<string, unknown> | undefined)?.EnerfloV2Customer as Record<string, unknown> | undefined;
+          enerfloUuid = (integV2?.integration_record_id as string | undefined) ?? null;
+        }
+      }
+    }
+  }
+
+  const idToStore = enerfloUuid ?? newId;
+
   let linked: { ok: boolean; status: number | null; preview: string } | null = null;
-  if (log.ok && newId && terrosKey) {
-    linked = await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, newId);
+  if (log.ok && idToStore && terrosKey) {
+    linked = await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, idToStore);
   }
 
   return NextResponse.json({
@@ -544,6 +572,8 @@ async function handleAdd(
     terrosAccountId,
     success: log.ok,
     enerfloCustomerId: newId,
+    enerfloCustomerUuid: enerfloUuid,
+    externalLeadIdStored: idToStore,
     enerfloStatus: log.status,
     terrosLink: linked,
     skipped: false,
