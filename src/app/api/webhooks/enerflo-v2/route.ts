@@ -1174,51 +1174,40 @@ function isWebhookRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Terros `/user/get` by email → API user id for `ownerId` / `assignedUserId`.
- *  Terros users often have a `+axia` alias (e.g. user+axia@domain.com) while
- *  Enerflo stores the plain address. We try both variants. */
+/** Terros `/user/list` → find user ID by email match.
+ *  `/user/get` always returns the API key user and ignores the email param. */
 async function resolveTerrosUserIdByEmail(
   terrosBase: string,
   terrosKey: string,
   email: string
 ): Promise<{ userId: string | null; status: number | null; ok: boolean; preview: string }> {
-  const url = `${terrosBase}/user/get`;
-
-  // Build candidate list: plain email first, then +axia variant
-  const plain = email.trim();
-  const atIdx = plain.indexOf("@");
-  const withAxia = atIdx > 0 ? `${plain.slice(0, atIdx)}+axia${plain.slice(atIdx)}` : null;
-  const candidates = withAxia ? [plain, withAxia] : [plain];
-
+  const needle = email.trim().toLowerCase();
   let status: number | null = null;
   let ok = false;
   let preview = "";
-
-  for (const candidate of candidates) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ email: candidate }),
-      });
-      status = res.status;
-      const rawBody = await res.text();
-      preview = rawBody;
-      ok = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
-      if (!ok) continue;
-      const parsed = JSON.parse(rawBody) as Record<string, unknown>;
-      const userId =
-        (parsed.userId as string | undefined)?.toString() ??
-        (parsed.id as string | undefined)?.toString() ??
-        ((parsed.user as Record<string, unknown>)?.id as string | undefined)?.toString() ??
-        null;
-      if (userId) return { userId, status, ok, preview };
-    } catch (e) {
-      preview = e instanceof Error ? e.message : String(e);
-    }
+  try {
+    const res = await fetch(`${terrosBase}/user/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({}),
+    });
+    status = res.status;
+    const rawBody = await res.text();
+    preview = rawBody.slice(0, 300);
+    ok = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
+    if (!ok) return { userId: null, status, ok, preview };
+    const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+    const users = parsed.users as Record<string, unknown>[] | undefined;
+    if (!Array.isArray(users)) return { userId: null, status, ok, preview };
+    const match = users.find((u) =>
+      typeof u.email === "string" && u.email.trim().toLowerCase() === needle
+    );
+    const userId = (match?.userId as string | undefined) ?? null;
+    return { userId, status, ok, preview };
+  } catch (e) {
+    preview = e instanceof Error ? e.message : String(e);
+    return { userId: null, status, ok: false, preview };
   }
-
-  return { userId: null, status, ok, preview };
 }
 
 /** Prefer nested lead owner keys; fallback object may hold `leadOwner` only on some tenants. */
