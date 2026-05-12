@@ -1410,7 +1410,9 @@ async function resolveTerrosUserIdByEmail(
   terrosKey: string,
   email: string
 ): Promise<{ userId: string | null; status: number | null; ok: boolean; preview: string }> {
-  const needle = email.trim().toLowerCase();
+  const needle   = email.trim().toLowerCase();
+  const stripped = needle.replace(/\+[^@]*(@)/, "$1"); // strip +alias (e.g. rep+axia@gmail.com → rep@gmail.com)
+  const candidates = [needle, stripped].filter((e, i, arr) => e && arr.indexOf(e) === i);
   let status: number | null = null;
   let ok = false;
   let preview = "";
@@ -1429,7 +1431,7 @@ async function resolveTerrosUserIdByEmail(
     const users = parsed.users as Record<string, unknown>[] | undefined;
     if (!Array.isArray(users)) return { userId: null, status, ok, preview };
     const match = users.find((u) =>
-      typeof u.email === "string" && u.email.trim().toLowerCase() === needle
+      typeof u.email === "string" && candidates.includes(u.email.trim().toLowerCase())
     );
     const userId = (match?.userId as string | undefined) ?? null;
     return { userId, status, ok, preview };
