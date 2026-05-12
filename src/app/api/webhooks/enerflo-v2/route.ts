@@ -661,19 +661,21 @@ async function handleProjectSubmitted(
       }
     }
 
-    // ── Step 3c [best-effort]: Set Closed stage + increment Net Deals counter ──
-    // deal.projectSubmitted is the definitive "net deal" signal — project is committed to installer.
+    // ── Step 3c [best-effort]: Set Closed stage + Net Deals +1 + Installs +1 ──
+    // deal.projectSubmitted increments both counters. Idempotency prevents double-counting on resubmission.
     if (ok) {
       const upsertedAccount = parsedBody?.account as Record<string, unknown> | undefined;
       const upsertedId = upsertedAccount?.accountId as string | undefined;
-      const closedStage = env.terrosWorkflowClosedStageId;
+      const closedStage  = env.terrosWorkflowClosedStageId;
       const installsCfId = env.terrosCfInstalls;
+      const netDealsCfId = env.terrosCfNetDeals;
 
-      if (upsertedId && (closedStage || installsCfId)) {
+      if (upsertedId && (closedStage || installsCfId || netDealsCfId)) {
         // Fetch current account to read existing custom field values before updating.
-        // This preserves counter fields (Net Deals, etc.) that aren't in terrosCustomFieldsForApi,
-        // since Terros account/update replaces the entire customFields object.
+        // Terros account/update replaces the entire customFields object, so we must
+        // merge existing fields to avoid overwriting other counters.
         let currentInstalls = 0;
+        let currentNetDeals = 0;
         let existingCustomFields: Record<string, unknown> = {};
         let storedDealId: string | undefined;
         try {
@@ -694,6 +696,11 @@ async function handleProjectSubmitted(
                 if (typeof existing === "number") currentInstalls = existing;
                 else if (typeof existing === "string") currentInstalls = parseInt(existing, 10) || 0;
               }
+              if (netDealsCfId) {
+                const existing = cfs?.[netDealsCfId];
+                if (typeof existing === "number") currentNetDeals = existing;
+                else if (typeof existing === "string") currentNetDeals = parseInt(existing, 10) || 0;
+              }
               const enerfloDealIdCfId = env.terrosCfEnerfloDealId?.trim();
               if (enerfloDealIdCfId) {
                 const stored = cfs?.[enerfloDealIdCfId];
@@ -704,19 +711,17 @@ async function handleProjectSubmitted(
           }
         } catch { /* best-effort — proceed with 0 if fetch fails */ }
 
-        // Idempotency: skip the Installs increment if this deal was already processed.
-        // CF.HB80hebm (terrosCfEnerfloDealId) is written by terrosCustomFieldsForApi on every
-        // deal.projectSubmitted call, so on resubmission the stored ID will match the incoming one.
+        // Idempotency: skip both counter increments if this deal was already processed.
         const incomingDealId = payload.deal?.id ? String(payload.deal.id).trim() : undefined;
-        const installsAlreadyCounted = Boolean(incomingDealId && storedDealId && storedDealId === incomingDealId);
+        const alreadyCounted = Boolean(incomingDealId && storedDealId && storedDealId === incomingDealId);
 
         const cleanPhoneForClosed = sanitizePhone(customerPhone);
-        // Merge order: existing fields → deal fields (override) → Installs counter (override unless already counted)
-        // This preserves counter fields like Net Deals that aren't in terrosCustomFieldsForApi.
+        // Merge order: existing fields → deal fields (override) → counters (override unless already counted)
         const mergedCustomFields: Record<string, unknown> = {
           ...existingCustomFields,
           ...terrosCustomFieldsForApi,
-          ...(installsCfId && !installsAlreadyCounted ? { [installsCfId]: currentInstalls + 1 } : {}),
+          ...(installsCfId && !alreadyCounted ? { [installsCfId]: currentInstalls + 1 } : {}),
+          ...(netDealsCfId && !alreadyCounted ? { [netDealsCfId]: currentNetDeals + 1 } : {}),
         };
         const updateFields: Record<string, unknown> = {
           accountId: upsertedId,
@@ -746,7 +751,7 @@ async function handleProjectSubmitted(
         }
 
         await writeApiLog({
-          operation: "webhook:enerflo-v2:set-closed-stage-and-net-deals",
+          operation: "webhook:enerflo-v2:set-closed-stage-installs-netdeals",
           vendor: "terros",
           method: "POST",
           url: `${terrosBase}/account/update`,
@@ -757,15 +762,16 @@ async function handleProjectSubmitted(
         });
 
         steps.push({
-          step: "3c [best-effort] — Set Closed stage + Installs +1",
+          step: "3c [best-effort] — Set Closed stage + Net Deals +1 + Installs +1",
           ok: closedOk,
           status: closedStatus,
           data: closedOk
             ? {
                 accountId: upsertedId,
                 workflowStageId: closedStage ?? null,
-                installs: installsAlreadyCounted ? currentInstalls : currentInstalls + 1,
-                installsAlreadyCounted,
+                netDeals: alreadyCounted ? currentNetDeals : currentNetDeals + 1,
+                installs: alreadyCounted ? currentInstalls : currentInstalls + 1,
+                alreadyCounted,
                 incomingDealId,
                 storedDealId,
               }
@@ -882,11 +888,10 @@ async function handleDealCreated(
     responsePreview: upsertPreview,
   });
 
-  // Step 2: Update stage to Knock + Net Deals +1.
+  // Step 2: Update stage to Knock only (no counter — Net Deals is counted on deal.projectSubmitted).
   // Block only if already at Appointment or Closed.
   const appointmentStageId = env.terrosWorkflowAppointmentStageId ?? "";
   const closedStageId      = env.terrosWorkflowClosedStageId      ?? "";
-  const netDealsCfId       = env.terrosCfNetDeals                 ?? "";
   const blockKnockStages   = [appointmentStageId, closedStageId].filter(Boolean);
   const shouldSetKnock = !currentStage || !blockKnockStages.includes(currentStage);
   let stageOk = false;
@@ -894,49 +899,9 @@ async function handleDealCreated(
   let stagePreview = "";
 
   if (accountId && shouldSetKnock) {
-    // Read current Net Deals and the stored deal ID before incrementing.
-    // If the stored Enerflo Deal ID already matches the incoming deal ID this exact webhook
-    // was already processed (duplicate delivery) — skip the counter increment.
-    let currentNetDeals = 0;
-    let storedDealIdForNetDeals: string | undefined;
-    try {
-      const getRes = await fetch(`${terrosBase}/account/get`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ accountId }),
-      });
-      if (getRes.ok) {
-        const getRaw = await getRes.text();
-        if (terrosJsonBodyIndicatesSuccess(getRaw)) {
-          const getParsed = JSON.parse(getRaw) as Record<string, unknown>;
-          const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
-          const cfs = acc.customFields as Record<string, unknown> | undefined;
-          if (netDealsCfId) {
-            const existing = cfs?.[netDealsCfId];
-            if (typeof existing === "number") currentNetDeals = existing;
-            else if (typeof existing === "string") currentNetDeals = parseInt(existing, 10) || 0;
-          }
-          const enerfloDealIdCfId = env.terrosCfEnerfloDealId?.trim();
-          if (enerfloDealIdCfId) {
-            const stored = cfs?.[enerfloDealIdCfId];
-            if (typeof stored === "string") storedDealIdForNetDeals = stored.trim();
-            else if (typeof stored === "number") storedDealIdForNetDeals = String(stored);
-          }
-        }
-      }
-    } catch { /* best-effort */ }
-
-    const incomingDealIdForNetDeals = payload.deal?.id ? String(payload.deal.id).trim() : undefined;
-    const netDealsAlreadyCounted = Boolean(
-      incomingDealIdForNetDeals &&
-      storedDealIdForNetDeals &&
-      storedDealIdForNetDeals === incomingDealIdForNetDeals,
-    );
-
     const knockUpdateFields: Record<string, unknown> = {
       accountId,
       ...(knockStageId ? { workflowStageId: knockStageId } : {}),
-      ...(netDealsCfId && !netDealsAlreadyCounted ? { customFields: { [netDealsCfId]: currentNetDeals + 1 } } : {}),
     };
 
     try {
@@ -953,7 +918,6 @@ async function handleDealCreated(
       stagePreview = e instanceof Error ? e.message : String(e);
     }
 
-    const idempotencyNote = `netDealsAlreadyCounted=${netDealsAlreadyCounted} | dealId=${incomingDealIdForNetDeals ?? "none"} | storedDealId=${storedDealIdForNetDeals ?? "none"} | netDeals=${netDealsAlreadyCounted ? currentNetDeals : currentNetDeals + 1}`;
     await writeApiLog({
       operation: "webhook:enerflo-v2:set-knock-stage-deal-created",
       vendor: "terros",
@@ -962,7 +926,7 @@ async function handleDealCreated(
       hadApiKey: Boolean(terrosKey),
       status: stageStatus,
       ok: stageOk,
-      responsePreview: `${stagePreview.slice(0, 200)} | ${idempotencyNote}`,
+      responsePreview: stagePreview.slice(0, 300),
     });
   } else if (accountId && !shouldSetKnock) {
     stagePreview = `Skipped: account already past Prospect stage (currentStage=${currentStage ?? "none"})`;
