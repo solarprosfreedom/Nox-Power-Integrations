@@ -1430,9 +1430,12 @@ async function resolveTerrosUserIdByEmail(
     const parsed = JSON.parse(rawBody) as Record<string, unknown>;
     const users = parsed.users as Record<string, unknown>[] | undefined;
     if (!Array.isArray(users)) return { userId: null, status, ok, preview };
-    const match = users.find((u) =>
-      typeof u.email === "string" && candidates.includes(u.email.trim().toLowerCase())
-    );
+    const match = users.find((u) => {
+      if (typeof u.email !== "string") return false;
+      const uEmail   = u.email.trim().toLowerCase();
+      const uStripped = uEmail.replace(/\+[^@]*(@)/, "$1"); // strip +alias from Terros user email
+      return candidates.includes(uEmail) || candidates.includes(uStripped);
+    });
     const userId = (match?.userId as string | undefined) ?? null;
     return { userId, status, ok, preview };
   } catch (e) {
