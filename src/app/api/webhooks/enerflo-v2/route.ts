@@ -1764,6 +1764,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   // ── Step 1: find Terros account ──────────────────────────────────────────
 
   let accountId: string | null = null;
+  let accountOwnerIdFromLookup: string | null = null;
   let step1Source = "";
   let step1Status: number | null = null;
   let step1Ok     = false;
@@ -1809,7 +1810,8 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
       if (step1Ok) {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const acc = (parsed.account ?? parsed) as Record<string, unknown>;
-        accountId   = (acc.accountId as string | undefined) ?? null;
+        accountId          = (acc.accountId as string | undefined) ?? null;
+        accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
         step1Source = "upsert-externalLeadId";
       }
     } catch (e) {
@@ -1833,6 +1835,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         const accounts = parsed.accounts as Record<string, unknown>[] | undefined;
         const match    = Array.isArray(accounts) ? accounts[0] : undefined;
         accountId      = (match?.accountId as string | undefined) ?? null;
+        accountOwnerIdFromLookup = (match?.ownerId as string | undefined) ?? null;
         step1Ok        = Boolean(accountId);
         step1Source    = "list-email-fallback";
       }
@@ -1872,24 +1875,21 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     });
   }
 
-  // ── Step 3: account/update — Appointment stage + closerId ────────────────
+  // ── Step 3: update account — Appointment stage (account/update) + closerId (account/upsert) ──
+  // account/update sets workflowStageId but does NOT persist the displayed Closer field.
+  // account/upsert with externalLeadId is required to set closerId in the Assignment panel.
 
   let step3Ok     = false;
   let step3Status: number | null = null;
   let step3Preview = "";
   if (accountId && terrosKey) {
-    const updateFields: Record<string, unknown> = {
-      accountId,
-      ...(appointmentStageId ? { workflowStageId: appointmentStageId } : {}),
-      ...(closerUserId       ? { closerId: closerUserId }               : {}),
-    };
-    // Only update if we actually have something new to set
-    if (appointmentStageId || closerUserId) {
+    // 3a: account/update — set workflow stage
+    if (appointmentStageId) {
       try {
         const r = await fetch(`${terrosBase}/account/update`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: updateFields }),
+          body: JSON.stringify({ account: { accountId, workflowStageId: appointmentStageId } }),
         });
         step3Status  = r.status;
         const raw    = await r.text();
@@ -1908,6 +1908,37 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         status: step3Status,
         ok: step3Ok,
         responsePreview: step3Preview,
+      });
+    }
+
+    // 3b: account/upsert — set closerId (account/update only logs to closerHistory, doesn't update the displayed Closer)
+    if (closerUserId && (customerUuid ?? customerNumericId)) {
+      let step3bOk = false;
+      let step3bStatus: number | null = null;
+      let step3bPreview = "";
+      try {
+        const r = await fetch(`${terrosBase}/account/upsert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ account: { externalLeadId: customerUuid ?? customerNumericId, closerId: closerUserId } }),
+        });
+        step3bStatus  = r.status;
+        const raw     = await r.text();
+        step3bPreview = raw.slice(0, 300);
+        step3bOk      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      } catch (e) {
+        step3bPreview = e instanceof Error ? e.message : String(e);
+      }
+
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:new-appointment:upsert-account-closer",
+        vendor: "terros",
+        method: "POST",
+        url: `${terrosBase}/account/upsert`,
+        hadApiKey: Boolean(terrosKey),
+        status: step3bStatus,
+        ok: step3bOk,
+        responsePreview: step3bPreview,
       });
     }
   }
@@ -1951,8 +1982,9 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
     const eventBody: Record<string, unknown> = {
-      ...(accountId    ? { accountId }                                 : {}),
-      ...(closerUserId ? { attendeeId: closerUserId }                  : {}),
+      ...(accountId                ? { accountId }                                       : {}),
+      ...(accountOwnerIdFromLookup ? { ownerId: accountOwnerIdFromLookup }               : {}),
+      ...(closerUserId             ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
       eventDate: startTimeMs,
