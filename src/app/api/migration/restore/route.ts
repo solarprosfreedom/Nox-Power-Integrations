@@ -185,7 +185,7 @@ export async function POST() {
         let failed = 0;
 
         await batchedMap(rows!, 5, async (row) => {
-          const accountId: string = row.account_id;
+          const accountId: string = row.account_id as string;
           try {
             const snapshot = row.snapshot as Record<string, unknown>;
 
