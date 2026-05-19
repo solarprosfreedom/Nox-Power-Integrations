@@ -1061,6 +1061,9 @@ async function handleCustomerCreated(
   let agentEmailResolved: string | null = null;
   let setterEmailResolved: string | null = null;
   let _ownerDebug: Record<string, unknown> = {};
+  // The numeric Enerflo customer ID, resolved from v1 search.
+  // Used as externalLeadId so it matches what handleNewAppointment searches for.
+  let resolvedNumericId: string | null = null;
 
   // GET /api/v3/customers/{uuid} returns 403 for this API key.
   // Instead, use GET /api/v1/customers?search={email} which returns owner.email directly.
@@ -1097,6 +1100,7 @@ async function handleCustomerCreated(
           }
           const matchedNumericId = matchedRow?.id != null ? String(matchedRow.id) : null;
           _ownerDebug.matchedRowId = matchedNumericId;
+          if (matchedNumericId) resolvedNumericId = matchedNumericId;
 
           // Fetch v3 to get agent_user_id (sales rep) and setter_user_id.
           // owner  = agent / sales rep (fall back to setter if no agent)
@@ -1207,8 +1211,9 @@ async function handleCustomerCreated(
 
   const accountFields: Record<string, unknown> = {
     name: customerName,
-    // externalLeadId = Enerflo customer UUID — used by upsert to match on resubmit / deal.projectSubmitted
-    externalLeadId: customerId,
+    // externalLeadId = Enerflo numeric customer ID (matches what handleNewAppointment searches for).
+    // Fall back to the V2 UUID (customerId) if v1 search didn't resolve a numeric ID.
+    externalLeadId: resolvedNumericId ?? customerId,
     externalId: customerId,
     sourceStatus: "New Lead",
     ...(terrosOwnerId  ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
