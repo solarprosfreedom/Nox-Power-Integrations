@@ -2379,15 +2379,13 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
 
   if (enerfloStatus && (accountId ?? customerUuid) && terrosKey) {
     // Parse JSON map from env (e.g. {"closed":"S.xxx","appointment_set":"S.yyy"})
+    // Only update the Terros stage if there is an explicit entry for this status.
+    // If the status is not in the map, leave Terros unchanged.
     const stageMap: Record<string, string> = {};
     if (env.enerfloStatusToTerrosStageMap) {
       try {
         Object.assign(stageMap, JSON.parse(env.enerfloStatusToTerrosStageMap));
       } catch { /* malformed JSON — ignore */ }
-    }
-    // Fallback: "closed" → terrosWorkflowClosedStageId
-    if (!stageMap["closed"] && env.terrosWorkflowClosedStageId) {
-      stageMap["closed"] = env.terrosWorkflowClosedStageId;
     }
 
     resolvedStageId = stageMap[enerfloStatus] ?? null;
