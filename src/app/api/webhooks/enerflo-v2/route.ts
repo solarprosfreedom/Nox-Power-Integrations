@@ -2097,16 +2097,17 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
       eventDate: startTimeMs,
       duration:  durationMinutes,
       ...(notes  ? { notes }                                           : {}),
-      // Location requires latitude + longitude; only include when both are present
-      ...((customerAddr?.latitude && customerAddr?.longitude) ? {
+      ...((customerAddr?.street || customerAddr?.city || customerAddr?.full_address) ? {
         location: {
-          ...(customerAddr.street      ? { line1:       customerAddr.street }      : {}),
-          ...(customerAddr.full_address? { oneLine:     customerAddr.full_address } : {}),
-          ...(customerAddr.city        ? { locality:    customerAddr.city }         : {}),
-          ...(customerAddr.state       ? { countrySubd: customerAddr.state }        : {}),
-          ...(customerAddr.zip         ? { postal1:     customerAddr.zip }          : {}),
-          latitude:  parseFloat(customerAddr.latitude),
-          longitude: parseFloat(customerAddr.longitude),
+          ...(customerAddr.street       ? { line1:       customerAddr.street }      : {}),
+          ...(customerAddr.full_address ? { oneLine:     customerAddr.full_address } : {}),
+          ...(customerAddr.city         ? { locality:    customerAddr.city }         : {}),
+          ...(customerAddr.state        ? { countrySubd: customerAddr.state }        : {}),
+          ...(customerAddr.zip          ? { postal1:     customerAddr.zip }          : {}),
+          ...((customerAddr.latitude && customerAddr.longitude) ? {
+            latitude:  parseFloat(customerAddr.latitude),
+            longitude: parseFloat(customerAddr.longitude),
+          } : {}),
         },
       } : {}),
     };
@@ -2435,15 +2436,17 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       notes,
       ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
       ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
-      ...((customerAddr?.latitude && customerAddr?.longitude) ? {
+      ...((customerAddr?.street || customerAddr?.city || customerAddr?.full_address) ? {
         location: {
-          ...(customerAddr.street      ? { line1:       customerAddr.street }       : {}),
-          ...(customerAddr.full_address? { oneLine:     customerAddr.full_address }  : {}),
-          ...(customerAddr.city        ? { locality:    customerAddr.city }          : {}),
-          ...(customerAddr.state       ? { countrySubd: customerAddr.state }         : {}),
-          ...(customerAddr.zip         ? { postal1:     customerAddr.zip }           : {}),
-          latitude:  parseFloat(customerAddr.latitude),
-          longitude: parseFloat(customerAddr.longitude),
+          ...(customerAddr.street       ? { line1:       customerAddr.street }       : {}),
+          ...(customerAddr.full_address ? { oneLine:     customerAddr.full_address }  : {}),
+          ...(customerAddr.city         ? { locality:    customerAddr.city }          : {}),
+          ...(customerAddr.state        ? { countrySubd: customerAddr.state }         : {}),
+          ...(customerAddr.zip          ? { postal1:     customerAddr.zip }           : {}),
+          ...((customerAddr.latitude && customerAddr.longitude) ? {
+            latitude:  parseFloat(customerAddr.latitude),
+            longitude: parseFloat(customerAddr.longitude),
+          } : {}),
         },
       } : {}),
     };
