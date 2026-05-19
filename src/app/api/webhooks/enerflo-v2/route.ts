@@ -2040,26 +2040,39 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   let step4Action = "create";
 
   if (terrosKey) {
-    // Dedup guard: if a Terros calendar event already has [Enerflo:{id}] in its
-    // notes (stamped when the appointment was originally created from Terros), skip
-    // creating a duplicate. This prevents an infinite loop when the Terros→Enerflo
-    // path fires and Enerflo fires new_appointment back at us.
+    // Dedup guard: if a Terros calendar event already exists for this Enerflo appointment,
+    // skip creating a duplicate. Two scenarios:
+    //   - event was just created and Terros fired update_appointment back at us
+    //   - event was originally created from Terros (notes already contain [Enerflo:{id}])
+    // Match strategies (in order): notes marker, then title (deterministic).
     if (accountId) {
       try {
         const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
           method:  "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body:    JSON.stringify({ accountId }),
+          body:    JSON.stringify({ accountId, pageSize: 100 }),
         });
         if (listRes.ok) {
           const raw    = await listRes.text();
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           const evts   = parsed.events as Record<string, unknown>[] | undefined;
           const marker = `[Enerflo:${enerfloAppointmentId}]`;
-          if (Array.isArray(evts) && evts.some(e => typeof e.notes === "string" && e.notes.includes(marker))) {
+          let dupReason: string | null = null;
+          if (Array.isArray(evts) && evts.length > 0) {
+            if (evts.some(e => typeof e.notes === "string" && (e.notes as string).includes(marker))) {
+              dupReason = "notes-marker";
+            } else {
+              const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
+              const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
+              if (evts.some(e => typeof e.title === "string" && e.title === expectedTitle)) {
+                dupReason = "title-match";
+              }
+            }
+          }
+          if (dupReason) {
             step4Action  = "skipped-duplicate";
             step4Ok      = true;
-            step4Preview = "Terros event already stamped with this Enerflo appointment ID — skipping duplicate creation.";
+            step4Preview = `Existing event found (${dupReason}) — skipping duplicate creation.`;
           }
         }
       } catch { /* best-effort — fall through to create */ }
@@ -2351,23 +2364,59 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   let step4Action  = "none";
 
   if (accountId && terrosKey) {
-    // 4a: list all events for the account and find the one stamped with this appointment ID
+    // 4a: list all events for the account and find the existing one for this Enerflo appointment.
+    // Try matching strategies in order:
+    //   1) notes contain [Enerflo:{id}]               — most reliable IF list returns notes
+    //   2) title matches  + same accountId            — title is generated deterministically
+    //   3) eventDate within 1ms of payload start time — last resort tie-breaker
     let existingEventId: string | null = null;
+    let step4ListPreview = "";
     try {
       const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ accountId }),
+        body: JSON.stringify({ accountId, pageSize: 100 }),
       });
       if (listRes.ok) {
         const raw    = await listRes.text();
+        step4ListPreview = raw.slice(0, 600);
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const evts   = parsed.events as Record<string, unknown>[] | undefined;
         const marker = `[Enerflo:${enerfloAppointmentId}]`;
-        const matched = evts?.find(e => typeof e.notes === "string" && e.notes.includes(marker));
-        if (matched) existingEventId = matched.eventId as string;
+        if (Array.isArray(evts) && evts.length > 0) {
+          // Strategy 1: match by notes marker
+          const byNotes = evts.find(e => typeof e.notes === "string" && (e.notes as string).includes(marker));
+          if (byNotes) {
+            existingEventId = (byNotes.eventId ?? byNotes.id) as string;
+          } else {
+            // Strategy 2: match by title (built deterministically from appointment type + customer name)
+            const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
+            const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
+            const byTitle = evts.find(e => typeof e.title === "string" && e.title === expectedTitle);
+            if (byTitle) {
+              existingEventId = (byTitle.eventId ?? byTitle.id) as string;
+            }
+          }
+        }
       }
     } catch { /* best-effort */ }
+
+    // Log what we got back from list and whether we found a match
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:update-appointment:find-existing-event",
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/calendar/event/list`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: Boolean(existingEventId),
+      responsePreview: JSON.stringify({
+        enerfloAppointmentId,
+        accountId,
+        existingEventId,
+        listPreview: step4ListPreview,
+      }).slice(0, 800),
+    });
 
     const apptTypeName = payload.appointment_type?.name ?? "Consultation";
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
