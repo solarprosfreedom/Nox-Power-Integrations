@@ -1770,7 +1770,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   let step1Ok     = false;
   let step1Preview = "";
 
-  // 1a: fetch Enerflo customer to get UUID (externalLeadId in Terros)
+  // 1a: fetch Enerflo customer UUID — try v1 first, then v3 integration_maps as fallback
   let customerUuid: string | null = null;
   if (customerNumericId && enerfloKey) {
     try {
@@ -1783,8 +1783,26 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         const integrations = cust.integrations as Record<string, unknown> | undefined;
         const enerfloV2    = integrations?.["Enerflo V2"] as Record<string, unknown> | undefined;
         const enerfloV2Rec = enerfloV2?.EnerfloV2Customer as Record<string, unknown> | undefined;
-        const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.id) as string | undefined;
-        if (candidate) customerUuid = String(candidate);
+        const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.externalId) as string | undefined;
+        if (candidate && /^[0-9a-f-]{36}$/i.test(String(candidate))) customerUuid = String(candidate);
+      }
+    } catch { /* fall through */ }
+  }
+
+  // v3 fallback: integration_maps contains the UUID reliably (v1 often doesn't)
+  if (!customerUuid && customerNumericId && enerfloKey) {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (r.ok) {
+        const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
+        if (Array.isArray(parsed.integration_maps)) {
+          for (const map of parsed.integration_maps as Record<string, unknown>[]) {
+            const extId = map.external_id as string | undefined;
+            if (extId && /^[0-9a-f-]{36}$/i.test(extId)) { customerUuid = extId; break; }
+          }
+        }
       }
     } catch { /* fall through */ }
   }
