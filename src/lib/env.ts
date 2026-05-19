@@ -27,6 +27,12 @@ export const env = {
   terrosWorkflowAppointmentStageId: opt("TERROS_WORKFLOW_APPOINTMENT_STAGE_ID"),
   /** Stage to set when deal.created fires (rep opened a deal on the lead). */
   terrosWorkflowKnockStageId: opt("TERROS_WORKFLOW_KNOCK_STAGE_ID"),
+  /**
+   * JSON map of Enerflo status strings → Terros workflow stage IDs.
+   * Example: {"closed":"S.xxx","appointment_set":"S.yyy","no_answer":"S.zzz"}
+   * Keys are lowercased Enerflo status values; values are Terros stage IDs.
+   */
+  enerfloStatusToTerrosStageMap: opt("ENERFLO_STATUS_TO_TERROS_STAGE_MAP"),
   /** Terros Account custom field definition IDs (keys in `account.customFields`). From Settings → Custom Fields. */
   terrosCfEnerfloDealId: opt("TERROS_CF_ENERFLO_DEAL_ID"),
   terrosCfEnerfloShortCode: opt("TERROS_CF_ENERFLO_SHORT_CODE"),

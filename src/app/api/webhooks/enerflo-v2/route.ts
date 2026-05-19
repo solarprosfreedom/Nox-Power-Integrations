@@ -175,6 +175,7 @@ interface UpdateCustomerPayload {
   email?: string;
   phone?: string;
   external_id?: string | null;
+  status?: string | null;
   address?: {
     street?: string;
     city?: string;
@@ -2228,28 +2229,54 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     });
   }
 
-  // ── Step 2: resolve agent + setter numeric IDs → emails via /api/v3/users/{id} ──
+  // ── Step 2: resolve agent + setter numeric IDs → emails via /api/v3/users list ──
+  // Fetching /api/v3/users/{id} individually is unreliable — instead page through
+  // the user list and match by numeric id, which is the same approach used in the
+  // Terros webhook for user lookups.
 
   let salesRepEmail: string | null = null;
   let setterEmail:   string | null = null;
   let step2Ok = false;
 
-  async function fetchEnerfloUserEmail(userId: string): Promise<string | null> {
-    try {
-      const r = await fetch(`${enerfloBase}/api/v3/users/${encodeURIComponent(userId)}`, {
-        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-      });
-      if (!r.ok) return null;
-      const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
-      return (parsed.email ?? parsed.user_email) as string | null ?? null;
-    } catch { return null; }
+  async function fetchEnerfloUserEmailById(numId: string): Promise<string | null> {
+    if (!numId || !enerfloKey) return null;
+    const target = String(numId);
+    for (let page = 1; page <= 5; page++) {
+      try {
+        const r = await fetch(
+          `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
+          { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
+        );
+        if (!r.ok) break;
+        const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
+        const rows = (
+          (parsed.results ?? parsed.items ?? parsed.users ?? parsed.data) as Record<string, unknown>[] | undefined
+        );
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        const match = rows.find(u => String(u.id ?? u.user_id) === target);
+        if (match) return (match.email ?? match.user_email) as string | null ?? null;
+        if (rows.length < 100) break;
+      } catch { break; }
+    }
+    return null;
   }
 
   if (enerfloKey) {
-    if (agentNumericId)  salesRepEmail = await fetchEnerfloUserEmail(agentNumericId);
-    if (setterNumericId) setterEmail   = await fetchEnerfloUserEmail(setterNumericId);
+    if (agentNumericId)  salesRepEmail = await fetchEnerfloUserEmailById(agentNumericId);
+    if (setterNumericId) setterEmail   = await fetchEnerfloUserEmailById(setterNumericId);
     step2Ok = Boolean(salesRepEmail || setterEmail);
   }
+
+  await writeApiLog({
+    operation: "webhook:enerflo-v2:update-customer:user-resolve",
+    vendor:    "enerflo",
+    method:    "GET",
+    url:       `${enerfloBase}/api/v3/users`,
+    hadApiKey: Boolean(enerfloKey),
+    status:    step2Ok ? 200 : null,
+    ok:        step2Ok,
+    responsePreview: JSON.stringify({ agentNumericId, setterNumericId, salesRepEmail, setterEmail }).slice(0, 300),
+  });
 
   // ── Step 3: resolve emails → Terros user IDs ─────────────────────────────
 
@@ -2339,9 +2366,70 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     responsePreview: step4Preview,
   });
 
+  // ── Step 5: update workflow stage if Enerflo status changed ──────────────
+  // Resolve Enerflo status → Terros stage ID via ENERFLO_STATUS_TO_TERROS_STAGE_MAP
+  // or fall back to the well-known "closed" stage ID.
+
+  let step5Ok     = false;
+  let step5Status: number | null = null;
+  let step5Preview = "";
+  let resolvedStageId: string | null = null;
+
+  const enerfloStatus = (payload.status ?? "").toString().trim().toLowerCase();
+
+  if (enerfloStatus && (accountId ?? customerUuid) && terrosKey) {
+    // Parse JSON map from env (e.g. {"closed":"S.xxx","appointment_set":"S.yyy"})
+    const stageMap: Record<string, string> = {};
+    if (env.enerfloStatusToTerrosStageMap) {
+      try {
+        Object.assign(stageMap, JSON.parse(env.enerfloStatusToTerrosStageMap));
+      } catch { /* malformed JSON — ignore */ }
+    }
+    // Fallback: "closed" → terrosWorkflowClosedStageId
+    if (!stageMap["closed"] && env.terrosWorkflowClosedStageId) {
+      stageMap["closed"] = env.terrosWorkflowClosedStageId;
+    }
+
+    resolvedStageId = stageMap[enerfloStatus] ?? null;
+
+    if (resolvedStageId) {
+      const updateAccountId = accountId ?? customerUuid;
+      try {
+        const r = await fetch(`${terrosBase}/account/update`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body:    JSON.stringify({
+            account: {
+              accountId:       updateAccountId,
+              id:              updateAccountId,
+              workflowStageId: resolvedStageId,
+            },
+          }),
+        });
+        step5Status  = r.status;
+        const raw    = await r.text();
+        step5Preview = raw.slice(0, 300);
+        step5Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      } catch (e) {
+        step5Preview = e instanceof Error ? e.message : String(e);
+      }
+
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:update-customer:terros-stage-update",
+        vendor:    "terros",
+        method:    "POST",
+        url:       `${terrosBase}/account/update`,
+        hadApiKey: Boolean(terrosKey),
+        status:    step5Status,
+        ok:        step5Ok,
+        responsePreview: step5Preview,
+      });
+    }
+  }
+
   return NextResponse.json({
-    received:      true,
-    event:         payload.webhook_event,
+    received:       true,
+    event:          payload.webhook_event,
     numericId,
     customerUuid,
     agentNumericId,
@@ -2354,6 +2442,13 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     closerId,
     accountId,
     upsert: { ok: step4Ok, status: step4Status, preview: step4Preview },
+    stageUpdate: {
+      enerfloStatus: enerfloStatus || null,
+      resolvedStageId,
+      ok: step5Ok,
+      status: step5Status,
+      preview: step5Preview,
+    },
   });
 }
 
