@@ -2095,6 +2095,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   let step1Source = "";
   let customerUuid: string | null = null;
 
+  // Try v1 first for UUID
   if (customerNumericId && enerfloKey) {
     try {
       const r = await fetch(`${enerfloBase}/api/v1/customers/${encodeURIComponent(customerNumericId)}`, {
@@ -2105,12 +2106,29 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         if (raw.trim().startsWith("{")) {
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           const cust   = (parsed.customer ?? parsed) as Record<string, unknown>;
-          // Try nested Enerflo V2 integration record ID first (most reliable)
           const integrations = cust.integrations as Record<string, unknown> | undefined;
           const enerfloV2    = integrations?.["Enerflo V2"] as Record<string, unknown> | undefined;
           const enerfloV2Rec = enerfloV2?.EnerfloV2Customer as Record<string, unknown> | undefined;
           const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.externalId) as string | undefined;
           if (candidate && /^[0-9a-f-]{36}$/i.test(String(candidate))) customerUuid = String(candidate);
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  // Fallback: v3 integration_maps (same approach as handleUpdateCustomer — v1 often lacks UUID)
+  if (!customerUuid && customerNumericId && enerfloKey) {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (r.ok) {
+        const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
+        if (Array.isArray(parsed.integration_maps)) {
+          for (const map of parsed.integration_maps as Record<string, unknown>[]) {
+            const extId = map.external_id as string | undefined;
+            if (extId && /^[0-9a-f-]{36}$/i.test(extId)) { customerUuid = extId; break; }
+          }
         }
       }
     } catch { /* best-effort */ }
