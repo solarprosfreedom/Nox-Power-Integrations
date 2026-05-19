@@ -2507,7 +2507,6 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
 
   // ── Step 5: update workflow stage if Enerflo status changed ──────────────
   // Resolve Enerflo status → Terros stage ID via ENERFLO_STATUS_TO_TERROS_STAGE_MAP
-  // or fall back to the well-known "closed" stage ID.
 
   let step5Ok     = false;
   let step5Status: number | null = null;
@@ -2515,6 +2514,23 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   let resolvedStageId: string | null = null;
 
   const enerfloStatus = (payload.status ?? "").toString().trim().toLowerCase();
+
+  await writeApiLog({
+    operation: "webhook:enerflo-v2:update-customer:stage-check",
+    vendor: "terros",
+    method: "GET",
+    url: `${terrosBase}/account/update`,
+    hadApiKey: Boolean(terrosKey),
+    status: null,
+    ok: false,
+    responsePreview: JSON.stringify({
+      enerfloStatus,
+      payloadStatus: payload.status ?? null,
+      accountId,
+      customerUuid,
+      mapConfigured: Boolean(env.enerfloStatusToTerrosStageMap),
+    }).slice(0, 400),
+  });
 
   if (enerfloStatus && (accountId ?? customerUuid) && terrosKey) {
     // Parse JSON map from env (e.g. {"closed":"S.xxx","appointment_set":"S.yyy"})
