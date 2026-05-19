@@ -1086,13 +1086,60 @@ async function handleCustomerCreated(
           });
           // Fall back to first result if UUID match not found (e.g. newly created, not yet indexed)
           if (!matchedRow && rows.length === 1) matchedRow = rows[0];
-          const ownerObj = matchedRow?.owner as Record<string, unknown> | undefined;
-          const foundEmail = ownerObj?.email as string | undefined;
-          _ownerDebug.matchedRowId = matchedRow?.id ?? null;
-          _ownerDebug.foundOwnerEmail = foundEmail ?? null;
-          if (foundEmail && foundEmail.includes("@")) {
-            ownerEmail = foundEmail.trim();
-            ownerResolvedFrom = "v1-search:owner.email";
+          const matchedNumericId = matchedRow?.id != null ? String(matchedRow.id) : null;
+          _ownerDebug.matchedRowId = matchedNumericId;
+
+          // Prefer agent_user_id from v3 (the assigned sales rep) over v1 owner.email
+          // (v1 owner.email often reflects the admin/API-key holder, not the rep).
+          if (matchedNumericId && enerfloKey) {
+            try {
+              const v3Res = await fetch(
+                `${enerfloBase}/api/v3/customers/${encodeURIComponent(matchedNumericId)}`,
+                { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
+              );
+              if (v3Res.ok) {
+                const v3Data = JSON.parse(await v3Res.text()) as Record<string, unknown>;
+                const agentId = v3Data.agent_user_id != null ? String(v3Data.agent_user_id) : null;
+                _ownerDebug.agentUserId = agentId;
+                if (agentId) {
+                  // Resolve agent numeric ID → email via user list
+                  const agentEmail = await (async () => {
+                    for (let page = 1; page <= 5; page++) {
+                      try {
+                        const ur = await fetch(
+                          `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
+                          { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
+                        );
+                        if (!ur.ok) break;
+                        const ud = JSON.parse(await ur.text()) as Record<string, unknown>;
+                        const urows = (ud.results ?? ud.items ?? ud.users ?? ud.data) as Record<string, unknown>[] | undefined;
+                        if (!Array.isArray(urows) || urows.length === 0) break;
+                        const match = urows.find(u => String(u.id ?? u.user_id) === agentId);
+                        if (match) return (match.email ?? match.user_email) as string | null ?? null;
+                        if (urows.length < 100) break;
+                      } catch { break; }
+                    }
+                    return null;
+                  })();
+                  _ownerDebug.agentEmail = agentEmail;
+                  if (agentEmail && agentEmail.includes("@")) {
+                    ownerEmail = agentEmail.trim();
+                    ownerResolvedFrom = "v3:agent_user_id→user-list";
+                  }
+                }
+              }
+            } catch { /* best-effort */ }
+          }
+
+          // Fall back to v1 owner.email if agent lookup failed
+          if (!ownerEmail) {
+            const ownerObj = matchedRow?.owner as Record<string, unknown> | undefined;
+            const foundEmail = ownerObj?.email as string | undefined;
+            _ownerDebug.foundOwnerEmail = foundEmail ?? null;
+            if (foundEmail && foundEmail.includes("@")) {
+              ownerEmail = foundEmail.trim();
+              ownerResolvedFrom = "v1-search:owner.email";
+            }
           }
         }
       }
