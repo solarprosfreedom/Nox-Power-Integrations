@@ -1059,6 +1059,7 @@ async function handleCustomerCreated(
   let ownerResolvedFrom = "";
   let ownerEmail: string | null = null;
   let agentEmailResolved: string | null = null;
+  let setterEmailResolved: string | null = null;
   let _ownerDebug: Record<string, unknown> = {};
 
   // GET /api/v3/customers/{uuid} returns 403 for this API key.
@@ -1097,11 +1098,9 @@ async function handleCustomerCreated(
           const matchedNumericId = matchedRow?.id != null ? String(matchedRow.id) : null;
           _ownerDebug.matchedRowId = matchedNumericId;
 
-          // Fetch v3 to get agent_user_id (sales rep / closer) and setter_user_id.
-          // owner  = setter (fall back to agent if no setter)
-          // closer = agent (sales rep)
-          let setterEmailResolved: string | null = null;
-
+          // Fetch v3 to get agent_user_id (sales rep) and setter_user_id.
+          // owner  = agent / sales rep (fall back to setter if no agent)
+          // closer = setter
           if (matchedNumericId && enerfloKey) {
             try {
               const v3Res = await fetch(
@@ -1145,12 +1144,12 @@ async function handleCustomerCreated(
                 _ownerDebug.agentEmail  = agentEmailResolved;
                 _ownerDebug.setterEmail = setterEmailResolved;
 
-                // owner = setter (fall back to agent); closer = agent
-                if (setterEmailResolved || agentEmailResolved) {
-                  ownerEmail = (setterEmailResolved || agentEmailResolved)!.trim();
-                  ownerResolvedFrom = setterEmailResolved
-                    ? "v3:setter_user_id→user-list"
-                    : "v3:agent_user_id→user-list";
+                // owner = agent / sales rep (fall back to setter); closer = setter
+                if (agentEmailResolved || setterEmailResolved) {
+                  ownerEmail = (agentEmailResolved || setterEmailResolved)!.trim();
+                  ownerResolvedFrom = agentEmailResolved
+                    ? "v3:agent_user_id→user-list"
+                    : "v3:setter_user_id→user-list";
                 }
               }
             } catch { /* best-effort */ }
@@ -1200,9 +1199,9 @@ async function handleCustomerCreated(
     _ownerDebug.terrosLookupPreview = u.preview.slice(0, 200);
     if (!ownerEmail && terrosOwnerId) _ownerDebug.note = "fell back to DEFAULT_OWNER_EMAIL";
   }
-  // closer = agent (sales rep); only resolve if different from owner
-  if (agentEmailResolved && agentEmailResolved !== ownerEmail) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, agentEmailResolved);
+  // closer = setter; only resolve if different from owner
+  if (setterEmailResolved && setterEmailResolved !== ownerEmail) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmailResolved);
     terrosCloserId = u.userId;
   }
 
@@ -2556,20 +2555,20 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   });
 
   // ── Step 3: resolve emails → Terros user IDs ─────────────────────────────
-  // owner  = setter (the person who set the lead); fall back to sales rep if no setter
-  // closer = sales rep (the agent who closes the deal)
+  // owner  = sales rep / agent (the person who owns and closes the deal)
+  // closer = setter (the person who set the appointment); fall back to sales rep if no setter
 
   let ownerId:  string | null = null;
   let closerId: string | null = null;
 
   if (terrosKey) {
-    const ownerEmailToUse = setterEmail || salesRepEmail || env.defaultOwnerEmail || "";
+    const ownerEmailToUse = salesRepEmail || setterEmail || env.defaultOwnerEmail || "";
     if (ownerEmailToUse) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmailToUse);
       ownerId = r.userId;
     }
-    if (salesRepEmail) {
-      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, salesRepEmail);
+    if (setterEmail) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
       closerId = r.userId;
     }
   }
