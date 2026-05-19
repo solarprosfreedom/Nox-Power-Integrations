@@ -2575,6 +2575,16 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     if (ownerEmailToUse) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmailToUse);
       ownerId = r.userId;
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:update-customer:owner-resolve",
+        vendor: "terros",
+        method: "POST",
+        url: `${terrosBase}/user/list`,
+        hadApiKey: Boolean(terrosKey),
+        status: r.status,
+        ok: Boolean(ownerId),
+        responsePreview: r.preview.slice(0, 400),
+      });
     }
     if (setterEmail) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
