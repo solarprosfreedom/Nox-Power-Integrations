@@ -1542,6 +1542,35 @@ function isWebhookRecord(v: unknown): v is Record<string, unknown> {
 
 /** Terros `/user/list` → find user ID by email match.
  *  `/user/get` always returns the API key user and ignores the email param. */
+/**
+ * Resolve a numeric Enerflo user ID → email by paging through /api/v3/users.
+ * Returns null if not found or on error.
+ */
+async function fetchEnerfloUserEmailByNumericId(
+  enerfloBase: string,
+  enerfloKey: string,
+  numericId: string | number
+): Promise<string | null> {
+  if (!numericId || !enerfloKey) return null;
+  const target = String(numericId);
+  for (let page = 1; page <= 5; page++) {
+    try {
+      const r = await fetch(
+        `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
+        { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
+      );
+      if (!r.ok) break;
+      const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
+      const rows = (parsed.results ?? parsed.items ?? parsed.users ?? parsed.data) as Record<string, unknown>[] | undefined;
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      const match = rows.find(u => String(u.id ?? u.user_id) === target);
+      if (match) return (match.email ?? match.user_email) as string | null ?? null;
+      if (rows.length < 100) break;
+    } catch { break; }
+  }
+  return null;
+}
+
 // Known company domain aliases — if a user's email uses one of these domains in Enerflo
 // but the other in Terros, we still want to match them.
 const DOMAIN_ALIASES: string[][] = [
@@ -1789,7 +1818,9 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     } catch { /* fall through */ }
   }
 
-  // v3 fallback: integration_maps contains the UUID reliably (v1 often doesn't)
+  // v3 fallback: integration_maps has UUID reliably; also grab setter/agent for event ownerId
+  let enerfloSetterNumericId: string | null = null;
+  let enerfloAgentNumericId:  string | null = null;
   if (!customerUuid && customerNumericId && enerfloKey) {
     try {
       const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
@@ -1803,8 +1834,26 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
             if (extId && /^[0-9a-f-]{36}$/i.test(extId)) { customerUuid = extId; break; }
           }
         }
+        if (parsed.setter_user_id) enerfloSetterNumericId = String(parsed.setter_user_id);
+        if (parsed.agent_user_id)  enerfloAgentNumericId  = String(parsed.agent_user_id);
       }
     } catch { /* fall through */ }
+  }
+
+  // Resolve setter (or agent) → Terros ownerId for the calendar event "Setter" field
+  let eventOwnerIdFromSetter: string | null = null;
+  if (terrosKey && enerfloKey && (enerfloSetterNumericId || enerfloAgentNumericId)) {
+    const setterEmail = enerfloSetterNumericId
+      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloSetterNumericId)
+      : null;
+    const agentEmail  = enerfloAgentNumericId
+      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloAgentNumericId)
+      : null;
+    const emailToUse  = setterEmail || agentEmail;
+    if (emailToUse) {
+      const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToUse);
+      eventOwnerIdFromSetter = resolved.userId;
+    }
   }
 
   // 1b: account/upsert by externalLeadId (UUID preferred, numeric id as fallback)
@@ -1999,10 +2048,11 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     const apptTypeName = payload.appointment_type?.name ?? "Consultation";
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
+    const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
     const eventBody: Record<string, unknown> = {
-      ...(accountId                ? { accountId }                                       : {}),
-      ...(accountOwnerIdFromLookup ? { ownerId: accountOwnerIdFromLookup }               : {}),
-      ...(closerUserId             ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
+      ...(accountId         ? { accountId }                                       : {}),
+      ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
+      ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
       eventDate: startTimeMs,
@@ -2134,7 +2184,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     } catch { /* best-effort */ }
   }
 
-  // Fallback: v3 integration_maps (same approach as handleUpdateCustomer — v1 often lacks UUID)
+  // Fallback: v3 integration_maps — also grab setter/agent for event ownerId ("Setter" in Terros)
+  let enerfloSetterNumericId: string | null = null;
+  let enerfloAgentNumericId:  string | null = null;
   if (!customerUuid && customerNumericId && enerfloKey) {
     try {
       const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
@@ -2148,8 +2200,26 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
             if (extId && /^[0-9a-f-]{36}$/i.test(extId)) { customerUuid = extId; break; }
           }
         }
+        if (parsed.setter_user_id) enerfloSetterNumericId = String(parsed.setter_user_id);
+        if (parsed.agent_user_id)  enerfloAgentNumericId  = String(parsed.agent_user_id);
       }
     } catch { /* best-effort */ }
+  }
+
+  // Resolve setter (or agent) → Terros ownerId for the calendar event "Setter" field
+  let eventOwnerIdFromSetter: string | null = null;
+  if (terrosKey && enerfloKey && (enerfloSetterNumericId || enerfloAgentNumericId)) {
+    const setterEmail = enerfloSetterNumericId
+      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloSetterNumericId)
+      : null;
+    const agentEmail  = enerfloAgentNumericId
+      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloAgentNumericId)
+      : null;
+    const emailToUse  = setterEmail || agentEmail;
+    if (emailToUse) {
+      const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToUse);
+      eventOwnerIdFromSetter = resolved.userId;
+    }
   }
 
   if (customerUuid && terrosKey) {
@@ -2297,14 +2367,15 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     const apptTypeName = payload.appointment_type?.name ?? "Consultation";
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
+    const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
     const eventFields: Record<string, unknown> = {
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
       eventDate: startTimeMs,
       duration:  durationMinutes,
       notes,
-      ...(accountOwnerIdFromLookup ? { ownerId: accountOwnerIdFromLookup }               : {}),
-      ...(closerUserId             ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
+      ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
+      ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
       ...((customerAddr?.latitude && customerAddr?.longitude) ? {
         location: {
           ...(customerAddr.street      ? { line1:       customerAddr.street }       : {}),
