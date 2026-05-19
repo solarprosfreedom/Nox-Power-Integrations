@@ -2663,6 +2663,44 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     responsePreview: step4Preview,
   });
 
+  // ── Step 4b: account/update — set ownerId + closerId ─────────────────────
+  // account/upsert ignores ownerId/closerId for existing accounts.
+  // account/update is required to change the displayed Owner and Closer fields.
+  if (accountId && terrosKey && (ownerId || closerId)) {
+    const ownerUpdateFields: Record<string, unknown> = {
+      accountId,
+      id: accountId,
+      ...(ownerId  ? { ownerId }  : {}),
+      ...(closerId ? { closerId } : {}),
+    };
+    let step4bOk = false;
+    let step4bStatus: number | null = null;
+    let step4bPreview = "";
+    try {
+      const r = await fetch(`${terrosBase}/account/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ account: ownerUpdateFields }),
+      });
+      step4bStatus  = r.status;
+      const raw     = await r.text();
+      step4bPreview = raw.slice(0, 400);
+      step4bOk      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+    } catch (e) {
+      step4bPreview = e instanceof Error ? e.message : String(e);
+    }
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:update-customer:owner-update",
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/account/update`,
+      hadApiKey: Boolean(terrosKey),
+      status: step4bStatus,
+      ok: step4bOk,
+      responsePreview: step4bPreview,
+    });
+  }
+
   // ── Step 5: update workflow stage if Enerflo status changed ──────────────
   // Resolve Enerflo status → Terros stage ID via ENERFLO_STATUS_TO_TERROS_STAGE_MAP
 
