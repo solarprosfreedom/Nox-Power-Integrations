@@ -2154,42 +2154,72 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   }
 
   // ── Step 3: update account stage + closer ────────────────────────────────
+  // account/update sets workflowStageId but does NOT persist the displayed Closer field.
+  // account/upsert with externalLeadId is required to set closerId in the Assignment panel.
 
   let step3Ok      = false;
   let step3Status: number | null = null;
   let step3Preview = "";
 
-  if (accountId && terrosKey && (appointmentStageId || closerUserId)) {
-    try {
-      const updatePayload: Record<string, unknown> = {
-        accountId,
-        id: accountId,
-        ...(appointmentStageId ? { workflowStageId: appointmentStageId } : {}),
-        ...(closerUserId       ? { closerId: closerUserId }               : {}),
-      };
-      const r = await fetch(`${terrosBase}/account/update`, {
+  if (accountId && terrosKey) {
+    // 3a: account/update — set workflow stage
+    if (appointmentStageId) {
+      try {
+        const r = await fetch(`${terrosBase}/account/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ account: { accountId, id: accountId, workflowStageId: appointmentStageId } }),
+        });
+        step3Status  = r.status;
+        const raw    = await r.text();
+        step3Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+        step3Preview = raw.slice(0, 400);
+      } catch (e) {
+        step3Preview = e instanceof Error ? e.message : String(e);
+      }
+
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:update-appointment:account-update",
+        vendor: "terros",
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ account: updatePayload }),
+        url: `${terrosBase}/account/update`,
+        hadApiKey: Boolean(terrosKey),
+        status: step3Status,
+        ok: step3Ok,
+        responsePreview: step3Preview,
       });
-      step3Status  = r.status;
-      const raw    = await r.text();
-      step3Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
-      step3Preview = raw.slice(0, 400);
-    } catch (e) {
-      step3Preview = e instanceof Error ? e.message : String(e);
     }
 
-    await writeApiLog({
-      operation: "webhook:enerflo-v2:update-appointment:account-update",
-      vendor: "terros",
-      method: "POST",
-      url: `${terrosBase}/account/update`,
-      hadApiKey: Boolean(terrosKey),
-      status: step3Status,
-      ok: step3Ok,
-      responsePreview: step3Preview,
-    });
+    // 3b: account/upsert — set closerId (account/update only logs to closerHistory, doesn't update the displayed Closer)
+    if (closerUserId && (customerUuid ?? customerNumericId)) {
+      let step3bOk = false;
+      let step3bStatus: number | null = null;
+      let step3bPreview = "";
+      try {
+        const r = await fetch(`${terrosBase}/account/upsert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ account: { externalLeadId: customerUuid ?? customerNumericId, closerId: closerUserId } }),
+        });
+        step3bStatus  = r.status;
+        const raw     = await r.text();
+        step3bPreview = raw.slice(0, 300);
+        step3bOk      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      } catch (e) {
+        step3bPreview = e instanceof Error ? e.message : String(e);
+      }
+
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:update-appointment:upsert-account-closer",
+        vendor: "terros",
+        method: "POST",
+        url: `${terrosBase}/account/upsert`,
+        hadApiKey: Boolean(terrosKey),
+        status: step3bStatus,
+        ok: step3bOk,
+        responsePreview: step3bPreview,
+      });
+    }
   }
 
   // ── Step 4: find + update (or create) Terros calendar event ──────────────
