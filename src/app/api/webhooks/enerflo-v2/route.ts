@@ -1058,6 +1058,7 @@ async function handleCustomerCreated(
 
   let ownerResolvedFrom = "";
   let ownerEmail: string | null = null;
+  let agentEmailResolved: string | null = null;
   let _ownerDebug: Record<string, unknown> = {};
 
   // GET /api/v3/customers/{uuid} returns 403 for this API key.
@@ -1089,8 +1090,11 @@ async function handleCustomerCreated(
           const matchedNumericId = matchedRow?.id != null ? String(matchedRow.id) : null;
           _ownerDebug.matchedRowId = matchedNumericId;
 
-          // Prefer agent_user_id from v3 (the assigned sales rep) over v1 owner.email
-          // (v1 owner.email often reflects the admin/API-key holder, not the rep).
+          // Fetch v3 to get agent_user_id (sales rep / closer) and setter_user_id.
+          // owner  = setter (fall back to agent if no setter)
+          // closer = agent (sales rep)
+          let setterEmailResolved: string | null = null;
+
           if (matchedNumericId && enerfloKey) {
             try {
               const v3Res = await fetch(
@@ -1099,39 +1103,53 @@ async function handleCustomerCreated(
               );
               if (v3Res.ok) {
                 const v3Data = JSON.parse(await v3Res.text()) as Record<string, unknown>;
-                const agentId = v3Data.agent_user_id != null ? String(v3Data.agent_user_id) : null;
-                _ownerDebug.agentUserId = agentId;
-                if (agentId) {
-                  // Resolve agent numeric ID → email via user list
-                  const agentEmail = await (async () => {
-                    for (let page = 1; page <= 5; page++) {
-                      try {
-                        const ur = await fetch(
-                          `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
-                          { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
-                        );
-                        if (!ur.ok) break;
-                        const ud = JSON.parse(await ur.text()) as Record<string, unknown>;
-                        const urows = (ud.results ?? ud.items ?? ud.users ?? ud.data) as Record<string, unknown>[] | undefined;
-                        if (!Array.isArray(urows) || urows.length === 0) break;
-                        const match = urows.find(u => String(u.id ?? u.user_id) === agentId);
-                        if (match) return (match.email ?? match.user_email) as string | null ?? null;
-                        if (urows.length < 100) break;
-                      } catch { break; }
-                    }
-                    return null;
-                  })();
-                  _ownerDebug.agentEmail = agentEmail;
-                  if (agentEmail && agentEmail.includes("@")) {
-                    ownerEmail = agentEmail.trim();
-                    ownerResolvedFrom = "v3:agent_user_id→user-list";
+                const agentId  = v3Data.agent_user_id  != null ? String(v3Data.agent_user_id)  : null;
+                const setterId = v3Data.setter_user_id != null ? String(v3Data.setter_user_id) : null;
+                _ownerDebug.agentUserId  = agentId;
+                _ownerDebug.setterUserId = setterId;
+
+                // Resolve both via user list in one pass (fetch pages once, match both IDs)
+                const idsToFind = [agentId, setterId].filter(Boolean) as string[];
+                if (idsToFind.length > 0) {
+                  const resolved: Record<string, string> = {};
+                  outer: for (let page = 1; page <= 5; page++) {
+                    try {
+                      const ur = await fetch(
+                        `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
+                        { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
+                      );
+                      if (!ur.ok) break;
+                      const ud = JSON.parse(await ur.text()) as Record<string, unknown>;
+                      const urows = (ud.results ?? ud.items ?? ud.users ?? ud.data) as Record<string, unknown>[] | undefined;
+                      if (!Array.isArray(urows) || urows.length === 0) break;
+                      for (const u of urows) {
+                        const uid = String(u.id ?? u.user_id ?? "");
+                        const uemail = (u.email ?? u.user_email) as string | undefined;
+                        if (uid && uemail && idsToFind.includes(uid)) resolved[uid] = uemail;
+                      }
+                      if (Object.keys(resolved).length >= idsToFind.length) break outer;
+                      if (urows.length < 100) break;
+                    } catch { break; }
                   }
+                  if (agentId  && resolved[agentId])  agentEmailResolved  = resolved[agentId];
+                  if (setterId && resolved[setterId]) setterEmailResolved = resolved[setterId];
+                }
+
+                _ownerDebug.agentEmail  = agentEmailResolved;
+                _ownerDebug.setterEmail = setterEmailResolved;
+
+                // owner = setter (fall back to agent); closer = agent
+                if (setterEmailResolved || agentEmailResolved) {
+                  ownerEmail = (setterEmailResolved || agentEmailResolved)!.trim();
+                  ownerResolvedFrom = setterEmailResolved
+                    ? "v3:setter_user_id→user-list"
+                    : "v3:agent_user_id→user-list";
                 }
               }
             } catch { /* best-effort */ }
           }
 
-          // Fall back to v1 owner.email if agent lookup failed
+          // Fall back to v1 owner.email if v3 lookup failed
           if (!ownerEmail) {
             const ownerObj = matchedRow?.owner as Record<string, unknown> | undefined;
             const foundEmail = ownerObj?.email as string | undefined;
@@ -1164,7 +1182,8 @@ async function handleCustomerCreated(
     }
   }
 
-  let terrosOwnerId: string | null = null;
+  let terrosOwnerId:  string | null = null;
+  let terrosCloserId: string | null = null;
   const emailToResolve = ownerEmail || env.defaultOwnerEmail || "";
   if (emailToResolve) {
     const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToResolve);
@@ -1174,6 +1193,11 @@ async function handleCustomerCreated(
     _ownerDebug.terrosLookupPreview = u.preview.slice(0, 200);
     if (!ownerEmail && terrosOwnerId) _ownerDebug.note = "fell back to DEFAULT_OWNER_EMAIL";
   }
+  // closer = agent (sales rep); only resolve if different from owner
+  if (agentEmailResolved && agentEmailResolved !== ownerEmail) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, agentEmailResolved);
+    terrosCloserId = u.userId;
+  }
 
   const accountFields: Record<string, unknown> = {
     name: customerName,
@@ -1181,7 +1205,8 @@ async function handleCustomerCreated(
     externalLeadId: customerId,
     externalId: customerId,
     sourceStatus: "New Lead",
-    ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
+    ...(terrosOwnerId  ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
+    ...(terrosCloserId ? { closerId: terrosCloserId }                               : {}),
     ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
     ...(knockStageId ? { workflowStageId: knockStageId } : {}),
     location,
@@ -2330,18 +2355,20 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   });
 
   // ── Step 3: resolve emails → Terros user IDs ─────────────────────────────
+  // owner  = setter (the person who set the lead); fall back to sales rep if no setter
+  // closer = sales rep (the agent who closes the deal)
 
   let ownerId:  string | null = null;
   let closerId: string | null = null;
 
   if (terrosKey) {
-    const emailToUse = salesRepEmail || env.defaultOwnerEmail || "";
-    if (emailToUse) {
-      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToUse);
+    const ownerEmailToUse = setterEmail || salesRepEmail || env.defaultOwnerEmail || "";
+    if (ownerEmailToUse) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmailToUse);
       ownerId = r.userId;
     }
-    if (setterEmail) {
-      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
+    if (salesRepEmail) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, salesRepEmail);
       closerId = r.userId;
     }
   }
