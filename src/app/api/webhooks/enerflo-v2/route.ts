@@ -2104,8 +2104,12 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         if (raw.trim().startsWith("{")) {
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           const cust   = (parsed.customer ?? parsed) as Record<string, unknown>;
-          const uuid   = (cust.uuid ?? cust.externalId ?? cust.id) as string | undefined;
-          if (uuid && /^[0-9a-f-]{36}$/i.test(uuid)) customerUuid = uuid;
+          // Try nested Enerflo V2 integration record ID first (most reliable)
+          const integrations = cust.integrations as Record<string, unknown> | undefined;
+          const enerfloV2    = integrations?.["Enerflo V2"] as Record<string, unknown> | undefined;
+          const enerfloV2Rec = enerfloV2?.EnerfloV2Customer as Record<string, unknown> | undefined;
+          const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.externalId) as string | undefined;
+          if (candidate && /^[0-9a-f-]{36}$/i.test(String(candidate))) customerUuid = String(candidate);
         }
       }
     } catch { /* best-effort */ }
