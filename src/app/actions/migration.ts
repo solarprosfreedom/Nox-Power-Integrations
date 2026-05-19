@@ -307,6 +307,7 @@ export async function testFilters(overrideZip?: string): Promise<FilterTestResul
     return {
       unfiltered: 0,
       userId: null,
+      stageId: null,
       zipCode: null,
       lastActionDate: null,
       error: e instanceof Error ? e.message : String(e),
