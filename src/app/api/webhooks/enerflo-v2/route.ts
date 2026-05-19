@@ -1257,6 +1257,26 @@ async function handleCustomerCreated(
     responsePreview: logPreview(responseText),
   });
 
+  await writeApiLog({
+    operation: "webhook:enerflo-v2:customer-created:owner-debug",
+    vendor: "enerflo",
+    method: "GET",
+    url: `${enerfloBase}/api/v3/customers`,
+    hadApiKey: Boolean(enerfloKey),
+    status: terrosOwnerId ? 200 : null,
+    ok: Boolean(terrosOwnerId),
+    responsePreview: JSON.stringify({
+      customerEmail,
+      customerId,
+      ownerEmail,
+      ownerResolvedFrom: ownerResolvedFrom || null,
+      agentEmailResolved,
+      terrosOwnerId,
+      terrosCloserId,
+      ..._ownerDebug,
+    }).slice(0, 600),
+  });
+
   let parsedBody: unknown;
   try { parsedBody = JSON.parse(responseText); }
   catch { parsedBody = { raw: logPreview(responseText) }; }
