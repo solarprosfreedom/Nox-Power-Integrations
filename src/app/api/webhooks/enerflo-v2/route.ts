@@ -2091,6 +2091,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   // ── Step 1: find Terros account (same logic as new_appointment) ───────────
 
   let accountId: string | null = null;
+  let accountOwnerIdFromLookup: string | null = null;
   let step1Source = "";
   let customerUuid: string | null = null;
 
@@ -2127,7 +2128,11 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const acc    = (parsed.account ?? parsed) as Record<string, unknown>;
         const aid    = acc.accountId as string | undefined;
-        if (aid) { accountId = aid; step1Source = "upsert:uuid"; }
+        if (aid) {
+          accountId = aid;
+          accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
+          step1Source = "upsert:uuid";
+        }
       }
     } catch { /* best-effort */ }
   }
@@ -2262,7 +2267,8 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       eventDate: startTimeMs,
       duration:  durationMinutes,
       notes,
-      ...(closerUserId ? { attendeeId: closerUserId } : {}),
+      ...(accountOwnerIdFromLookup ? { ownerId: accountOwnerIdFromLookup }               : {}),
+      ...(closerUserId             ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
       ...((customerAddr?.latitude && customerAddr?.longitude) ? {
         location: {
           ...(customerAddr.street      ? { line1:       customerAddr.street }       : {}),
