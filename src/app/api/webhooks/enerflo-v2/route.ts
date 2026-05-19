@@ -2539,7 +2539,10 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     const stageMap: Record<string, string> = {};
     if (env.enerfloStatusToTerrosStageMap) {
       try {
-        Object.assign(stageMap, JSON.parse(env.enerfloStatusToTerrosStageMap));
+        const raw = JSON.parse(env.enerfloStatusToTerrosStageMap) as Record<string, unknown>;
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === "string") stageMap[k.trim().toLowerCase()] = v;
+        }
       } catch { /* malformed JSON — ignore */ }
     }
 
