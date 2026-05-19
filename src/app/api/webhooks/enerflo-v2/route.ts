@@ -1846,16 +1846,15 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     }
   }
 
-  // 1b: account/upsert by externalLeadId (UUID preferred, numeric id as fallback)
-  const externalLeadId = customerUuid ?? customerNumericId;
-  if (externalLeadId && terrosKey) {
+  // 1b: account/upsert by Terros UUID (from integration_maps — most reliable match)
+  if (customerUuid && terrosKey) {
     try {
       const r = await fetch(`${terrosBase}/account/upsert`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
         body: JSON.stringify({
           account: {
-            externalLeadId,
+            externalLeadId: customerUuid,
             ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
           },
         }),
@@ -1869,14 +1868,17 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         const acc = (parsed.account ?? parsed) as Record<string, unknown>;
         accountId          = (acc.accountId as string | undefined) ?? null;
         accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
-        step1Source = "upsert-externalLeadId";
+        step1Source = "upsert-uuid";
       }
     } catch (e) {
       step1Preview = e instanceof Error ? e.message : String(e);
     }
   }
 
-  // 1c: fallback — account/list search by email
+  // 1c: if no UUID match (e.g. brand-new account not yet in integration_maps),
+  //     search by customer email FIRST to find the account created by customer.created.
+  //     This prevents creating a duplicate account when the numeric-id doesn't match the
+  //     V2 UUID stored as externalLeadId by customer.created.
   if (!accountId && customerEmail && terrosKey) {
     try {
       const r = await fetch(`${terrosBase}/account/list`, {
@@ -1894,7 +1896,36 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         accountId      = (match?.accountId as string | undefined) ?? null;
         accountOwnerIdFromLookup = (match?.ownerId as string | undefined) ?? null;
         step1Ok        = Boolean(accountId);
-        step1Source    = "list-email-fallback";
+        step1Source    = "list-email";
+      }
+    } catch (e) {
+      step1Preview = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // 1d: last resort — upsert by numeric ID (may create account if truly not found by email either)
+  if (!accountId && customerNumericId && terrosKey) {
+    try {
+      const r = await fetch(`${terrosBase}/account/upsert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({
+          account: {
+            externalLeadId: customerNumericId,
+            ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
+          },
+        }),
+      });
+      step1Status = r.status;
+      const raw   = await r.text();
+      step1Preview = raw.slice(0, 300);
+      step1Ok = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      if (step1Ok) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const acc = (parsed.account ?? parsed) as Record<string, unknown>;
+        accountId          = (acc.accountId as string | undefined) ?? null;
+        accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
+        step1Source = "upsert-numericId-lastresort";
       }
     } catch (e) {
       step1Preview = e instanceof Error ? e.message : String(e);
@@ -2217,14 +2248,19 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       const r = await fetch(`${terrosBase}/account/list`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ filter: { email: customerEmail }, limit: 1 }),
+        body: JSON.stringify({ size: 10, searchInput: { query: customerEmail } }),
       });
       if (r.ok) {
         const raw    = await r.text();
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const accs   = parsed.accounts as Record<string, unknown>[] | undefined;
-        const aid    = accs?.[0]?.accountId as string | undefined;
-        if (aid) { accountId = aid; step1Source = "list:email"; }
+        const match  = Array.isArray(accs) ? accs[0] : undefined;
+        const aid    = match?.accountId as string | undefined;
+        if (aid) {
+          accountId = aid;
+          accountOwnerIdFromLookup = (match?.ownerId as string | undefined) ?? null;
+          step1Source = "list:email";
+        }
       }
     } catch { /* best-effort */ }
   }

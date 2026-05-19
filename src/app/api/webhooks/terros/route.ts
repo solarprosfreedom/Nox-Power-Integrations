@@ -69,8 +69,10 @@ interface TerrosEventData {
   eventDate?: string;
   duration?: number;
   eventType?: string;
+  notes?: string;
   account?: { accountId?: string };
   owner?: { email?: string; userId?: string; firstName?: string; lastName?: string };
+  attendee?: { email?: string; userId?: string; firstName?: string; lastName?: string };
   resident?: { email?: string; firstName?: string; lastName?: string; phone?: string };
   address?: TerrosAddress;
 }
@@ -934,6 +936,50 @@ async function handleEventAdd(
   const ownerEmail     = (data.owner?.email ?? "").trim();
   const residentEmail  = (data.resident?.email ?? "").trim();
   const eventDate      = data.eventDate ?? "";
+  // notes may or may not be sent by the webhook — start with whatever is in the payload
+  let eventNotes       = typeof data.notes === "string" ? data.notes : "";
+
+  // If notes weren't in the webhook payload, fetch the full event from Terros so we can
+  // check for the [Enerflo:ID] dedup marker (stamped when the event was created FROM Enerflo).
+  if (!eventNotes && terrosEventId && accountId && terrosKey) {
+    try {
+      const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body:    JSON.stringify({ accountId }),
+      });
+      if (listRes.ok) {
+        const parsed = JSON.parse(await listRes.text()) as Record<string, unknown>;
+        const evts   = parsed.events as Record<string, unknown>[] | undefined;
+        if (Array.isArray(evts)) {
+          const thisEvt = evts.find(e => (e.eventId ?? e.id) === terrosEventId);
+          if (thisEvt && typeof thisEvt.notes === "string") {
+            eventNotes = thisEvt.notes;
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  // Dedup guard: if this Terros event was originally created FROM Enerflo, its notes
+  // will already contain [Enerflo:ID]. Skip to avoid an infinite Terros→Enerflo→Terros loop.
+  if (/\[Enerflo:\d+\]/i.test(eventNotes)) {
+    await writeApiLog({
+      operation: "webhook:terros:received-event-add",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosEventId, accountId, eventType: data.eventType,
+        skipped: true, reason: "Event already originated from Enerflo — dedup marker found in notes",
+        notesPreview: eventNotes.slice(0, 100),
+      }).slice(0, 400),
+    });
+    return NextResponse.json({ received: true, action: "event-add", skipped: true, reason: "dedup:enerflo-marker-in-notes" });
+  }
 
   await writeApiLog({
     operation: "webhook:terros:received-event-add",
