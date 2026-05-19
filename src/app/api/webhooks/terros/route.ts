@@ -63,6 +63,24 @@ interface TerrosWebhookBody {
   data?: TerrosAccountWebhookData;
 }
 
+interface TerrosEventData {
+  id?: string;
+  title?: string;
+  eventDate?: string;
+  duration?: number;
+  eventType?: string;
+  account?: { accountId?: string };
+  owner?: { email?: string; userId?: string; firstName?: string; lastName?: string };
+  resident?: { email?: string; firstName?: string; lastName?: string; phone?: string };
+  address?: TerrosAddress;
+}
+
+interface TerrosEventWebhookBody {
+  action?: string;
+  entity?: string;
+  data?: TerrosEventData;
+}
+
 function logPreview(body: string, max = 2000): string {
   if (body.length <= max) return body;
   return `${body.slice(0, max)}…`;
@@ -260,23 +278,8 @@ function parseEnerfloCreateCustomerId(responseText: string): string | null {
   return null;
 }
 
-/**
- * Verify that `email` belongs to an active Enerflo user by searching
- * GET /api/v3/users (paginates up to 3 pages of 100 users).
- *
- * Tries both the raw email (e.g. "user+axia@domain.com") AND the alias-stripped
- * version (e.g. "user@domain.com") because Enerflo has a mix — some reps are
- * registered with +axia in their email, others without.
- *
- * Returns the exact Enerflo-registered email on match, or undefined.
- */
-async function findEnerfloUserByEmail(rawEmail: string): Promise<string | undefined> {
-  const stripped = stripEmailAlias(rawEmail.trim());
-  const candidates = [rawEmail.trim().toLowerCase(), stripped.toLowerCase()].filter(
-    (e, i, arr) => e && arr.indexOf(e) === i
-  );
-
-  // Collect all users up to 3 pages then search
+/** Collect all Enerflo users up to 3 pages of 100 (shared by email/id lookup helpers). */
+async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
   const allUsers: Record<string, unknown>[] = [];
   for (let page = 1; page <= 3; page++) {
     const { ok, data } = await enerfloRequestParsed<unknown>({
@@ -294,17 +297,53 @@ async function findEnerfloUserByEmail(rawEmail: string): Promise<string | undefi
     allUsers.push(...rows);
     if (rows.length < 100) break;
   }
+  return allUsers;
+}
 
+/**
+ * Find the full Enerflo user row matching rawEmail.
+ * Tries both the raw email (e.g. "user+axia@domain.com") AND the alias-stripped
+ * version (e.g. "user@domain.com") because Enerflo has a mix.
+ */
+async function findEnerfloUserRowByEmail(
+  rawEmail: string
+): Promise<Record<string, unknown> | undefined> {
+  const stripped = stripEmailAlias(rawEmail.trim());
+  const candidates = [rawEmail.trim().toLowerCase(), stripped.toLowerCase()].filter(
+    (e, i, arr) => e && arr.indexOf(e) === i
+  );
+  const allUsers = await fetchAllEnerfloUsers();
   for (const candidate of candidates) {
     for (const row of allUsers) {
       const rowEmail =
         typeof row.email === "string" ? row.email.trim().toLowerCase() : null;
-      if (rowEmail && rowEmail === candidate) {
-        return typeof row.email === "string" ? row.email.trim() : rawEmail;
-      }
+      if (rowEmail && rowEmail === candidate) return row;
     }
   }
   return undefined;
+}
+
+/**
+ * Verify that `email` belongs to an active Enerflo user.
+ * Returns the exact Enerflo-registered email on match, or undefined.
+ */
+async function findEnerfloUserByEmail(rawEmail: string): Promise<string | undefined> {
+  const row = await findEnerfloUserRowByEmail(rawEmail);
+  return row && typeof row.email === "string" ? row.email.trim() : undefined;
+}
+
+/**
+ * Find the numeric Enerflo user ID for the given email.
+ * Returns null if the user is not found or has no numeric id.
+ */
+async function findEnerfloUserIdByEmail(rawEmail: string): Promise<number | null> {
+  if (!rawEmail || !rawEmail.includes("@")) return null;
+  const row = await findEnerfloUserRowByEmail(rawEmail);
+  if (!row) return null;
+  const rawId = row.id ?? row.user_id;
+  if (rawId == null) return null;
+  const numId = Number(rawId);
+  return isNaN(numId) ? null : numId;
 }
 
 async function findEnerfloCustomerUuidByIntegrationSearch(
@@ -466,11 +505,16 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     description:
-      "Inbound Terros webhooks (Settings → Webhooks → Entity Account). POST JSON from Terros here.",
+      "Inbound Terros webhooks (Settings → Webhooks → Entity Account + Entity Event). POST JSON from Terros here.",
     path: "/api/webhooks/terros",
-    handles: { entity: "Account", actions: ["add", "update"] },
-    outbound:
-      "Creates or updates an Enerflo customer via REST; resolves the Terros account owner's canonical email via /user/get (supports email or id-only owner payloads) and sets `assign_to_email`. Links Terros externalLeadId after create.",
+    handles: [
+      { entity: "Account", actions: ["add", "update"] },
+      { entity: "Event",   actions: ["add"] },
+    ],
+    outbound: [
+      "Account add/update: Creates or updates an Enerflo customer via REST; resolves the Terros account owner's canonical email via /user/get and sets assign_to_email. Links Terros externalLeadId after create.",
+      "Event add: Creates an Enerflo appointment via POST /api/v1/appointments; resolves numeric customer ID from externalLeadId and numeric user ID from owner.email. Stamps [Enerflo:ID] back onto the Terros event notes.",
+    ],
   });
 }
 
@@ -497,6 +541,53 @@ export async function POST(req: NextRequest) {
   const action = (body.action ?? "").trim().toLowerCase();
   const data = body.data;
 
+  const terrosKey = env.terrosApiKey ?? "";
+  const terrosBase = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
+
+  if (!(env.enerfloV1ApiKey ?? "").trim()) {
+    return NextResponse.json({
+      received: true,
+      skipped: true,
+      reason: "ENERFLO_V1_API_KEY is not configured",
+    });
+  }
+
+  // ── Terros calendar Event entity ──────────────────────────────────────────
+  if (entity === "Event") {
+    if (action !== "add") {
+      return NextResponse.json({
+        received: true,
+        skipped: true,
+        reason: `Unsupported Event action: ${action || "(missing)"}`,
+      });
+    }
+    const eventData = (body as unknown as TerrosEventWebhookBody).data;
+    if (!eventData) {
+      return NextResponse.json({
+        received: true,
+        skipped: true,
+        reason: "Missing data for Event webhook",
+      });
+    }
+    try {
+      return await handleEventAdd(terrosBase, terrosKey, eventData);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await writeApiLog({
+        operation: "webhook:terros:event-unhandled-error",
+        vendor: "terros",
+        method: "POST",
+        url: `/api/webhooks/terros`,
+        hadApiKey: false,
+        status: 500,
+        ok: false,
+        responsePreview: logPreview(msg),
+      });
+      return NextResponse.json({ received: true, success: false, error: msg }, { status: 200 });
+    }
+  }
+
+  // ── Terros Account entity ─────────────────────────────────────────────────
   if (entity !== "Account") {
     return NextResponse.json({
       received: true,
@@ -523,17 +614,6 @@ export async function POST(req: NextRequest) {
 
   if (!data || typeof data !== "object") {
     return NextResponse.json({ received: true, skipped: true, reason: "Missing data object" });
-  }
-
-  const terrosKey = env.terrosApiKey ?? "";
-  const terrosBase = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
-
-  if (!(env.enerfloV1ApiKey ?? "").trim()) {
-    return NextResponse.json({
-      received: true,
-      skipped: true,
-      reason: "ENERFLO_V1_API_KEY is not configured",
-    });
   }
 
   try {
@@ -575,6 +655,10 @@ async function handleAdd(
   let verifiedOwnerEmail: string | undefined;
   if (emailForLookup) {
     verifiedOwnerEmail = await findEnerfloUserByEmail(emailForLookup);
+  }
+  // Fall back to default owner (X Lead) if no owner could be resolved
+  if (!verifiedOwnerEmail && env.defaultOwnerEmail) {
+    verifiedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
   }
 
   const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId, verifiedOwnerEmail);
@@ -731,9 +815,13 @@ async function handleUpdate(
 
   // Resolve canonical owner email (handles +alias mismatches and ID-only owner payloads)
   const ownerData = merged.owner ?? webhookData.owner;
-  const resolvedOwnerEmail = terrosKey
+  let resolvedOwnerEmail = terrosKey
     ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, ownerData)
     : undefined;
+  // Fall back to default owner (X Lead) if no owner could be resolved
+  if (!resolvedOwnerEmail && env.defaultOwnerEmail) {
+    resolvedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
+  }
   const updateBody = buildEnerfloUpdatePayload(merged, resolvedOwnerEmail);
   if (Object.keys(updateBody).length === 0) {
     return NextResponse.json({
@@ -801,4 +889,157 @@ function terrosResidentFromAccount(full: Record<string, unknown>): TerrosResiden
     email: typeof res.email === "string" ? res.email : undefined,
     phone: typeof res.phone === "string" ? res.phone : undefined,
   };
+}
+
+// ── handleEventAdd ────────────────────────────────────────────────────────────
+/**
+ * Called when Terros fires entity:"Event" action:"add".
+ *
+ * Flow:
+ *  1. Fetch Terros account (by data.account.accountId) to get externalLeadId.
+ *  2. Resolve the numeric Enerflo customer ID (POST /api/v1/appointments requires
+ *     a numeric id, not a UUID). Falls back to email search when externalLeadId is a UUID.
+ *  3. Resolve the numeric Enerflo user ID from data.owner.email for assigned_to.
+ *  4. POST /api/v1/appointments to create the appointment in Enerflo.
+ *  5. Stamp [Enerflo:{id}] back onto the Terros event notes so the reverse webhook
+ *     (new_appointment coming back from Enerflo) can detect the duplicate and skip.
+ */
+async function handleEventAdd(
+  terrosBase: string,
+  terrosKey: string,
+  data: TerrosEventData
+): Promise<NextResponse> {
+  const terrosEventId  = (data.id ?? "").trim();
+  const accountId      = (data.account?.accountId ?? "").trim();
+  const ownerEmail     = (data.owner?.email ?? "").trim();
+  const residentEmail  = (data.resident?.email ?? "").trim();
+  const eventDate      = data.eventDate ?? "";
+
+  await writeApiLog({
+    operation: "webhook:terros:received-event-add",
+    vendor: "terros",
+    method: "POST",
+    url: `/api/webhooks/terros`,
+    hadApiKey: Boolean(terrosKey),
+    status: 200,
+    ok: true,
+    responsePreview: JSON.stringify({
+      terrosEventId,
+      accountId,
+      eventType: data.eventType,
+      eventDate,
+    }).slice(0, 300),
+  });
+
+  // ── Step 1: fetch Terros account → externalLeadId ────────────────────────
+  let externalLeadId: string | null = null;
+  if (accountId && terrosKey) {
+    const acc = await fetchTerrosAccountById(terrosBase, terrosKey, accountId);
+    if (acc) {
+      externalLeadId =
+        pickExternalLeadId(acc) ??
+        (typeof acc.externalLeadId === "string" ? acc.externalLeadId.trim() : null);
+    }
+  }
+
+  // ── Step 2: resolve numeric Enerflo customer ID ──────────────────────────
+  // POST /api/v1/appointments requires a numeric customer_id, not a UUID.
+  let enerfloNumericCustomerId: string | null = null;
+
+  if (externalLeadId && !UUID_RE.test(externalLeadId)) {
+    enerfloNumericCustomerId = externalLeadId;
+  } else if (residentEmail) {
+    enerfloNumericCustomerId = await findEnerfloCustomerIdByEmail(residentEmail, accountId);
+  }
+
+  if (!enerfloNumericCustomerId) {
+    return NextResponse.json({
+      received: true,
+      action: "event-add",
+      skipped: true,
+      reason:
+        "Could not resolve Enerflo numeric customer ID. Ensure the account has an externalLeadId or the resident email matches an Enerflo customer.",
+      terrosEventId,
+      accountId,
+      externalLeadId,
+    });
+  }
+
+  // ── Step 3: resolve Enerflo user numeric ID for assigned_to ─────────────
+  let assignedToId: number | null = null;
+  if (ownerEmail) {
+    assignedToId = await findEnerfloUserIdByEmail(ownerEmail);
+  }
+
+  // ── Step 4: POST /api/v1/appointments ────────────────────────────────────
+  const appointmentBody: Record<string, unknown> = {
+    customer_id:      Number(enerfloNumericCustomerId),
+    appointment_date: eventDate,
+  };
+  if (assignedToId != null) appointmentBody.assigned_to = assignedToId;
+
+  const createLog = await enerfloRequest({
+    operation: "webhook:terros:create-enerflo-appointment",
+    method:    "POST",
+    path:      "/api/v1/appointments",
+    body:      appointmentBody,
+  });
+
+  // ── Step 5: parse appointment ID from response ───────────────────────────
+  let enerfloAppointmentId: string | null = null;
+  if (createLog.responsePreview) {
+    try {
+      const j    = JSON.parse(createLog.responsePreview) as Record<string, unknown>;
+      const appt = (j.appointment ?? j.data ?? j) as Record<string, unknown>;
+      const rawId = appt.id ?? appt.appointment_id ?? j.id ?? j.appointment_id;
+      if (rawId != null) enerfloAppointmentId = String(rawId);
+    } catch { /* ignore */ }
+  }
+
+  // ── Step 6: stamp [Enerflo:ID] back onto the Terros event ───────────────
+  // This lets handleNewAppointment (Enerflo → Terros direction) detect the
+  // duplicate when Enerflo fires new_appointment back at us and skip creation.
+  let stampOk     = false;
+  let stampStatus: number | null = null;
+  if (createLog.ok && enerfloAppointmentId && terrosEventId && terrosKey) {
+    try {
+      const r = await fetch(`${terrosBase}/calendar/event/update`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body:    JSON.stringify({
+          event: {
+            eventId: terrosEventId,
+            notes:   `[Enerflo:${enerfloAppointmentId}]`,
+          },
+        }),
+      });
+      stampStatus    = r.status;
+      const stampText = await r.text();
+      stampOk        = r.ok && terrosJsonBodyIndicatesSuccess(stampText);
+      await writeApiLog({
+        operation:       "webhook:terros:stamp-enerflo-appointment-id",
+        vendor:          "terros",
+        method:          "POST",
+        url:             `${terrosBase}/calendar/event/update`,
+        hadApiKey:       Boolean(terrosKey),
+        status:          stampStatus,
+        ok:              stampOk,
+        responsePreview: logPreview(stampText),
+      });
+    } catch { /* best-effort */ }
+  }
+
+  return NextResponse.json({
+    received:                 true,
+    action:                   "event-add",
+    terrosEventId,
+    accountId,
+    externalLeadId,
+    enerfloNumericCustomerId,
+    assignedToId,
+    appointmentCreated:       createLog.ok,
+    enerfloStatus:            createLog.status,
+    enerfloAppointmentId,
+    stamp: { ok: stampOk, status: stampStatus },
+  });
 }

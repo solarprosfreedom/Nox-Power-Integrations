@@ -6,6 +6,15 @@ function opt(name: string, fallback?: string): string | undefined {
 export const env = {
   enerfloV1ApiKey: opt("ENERFLO_V1_API_KEY"),
   enerfloV1BaseUrl: opt("ENERFLO_V1_BASE_URL", "https://enerflo.io"),
+  /** Optional: scope /api/v3/users to a specific company so super-company API keys don't return sub-company users */
+  enerfloCompanyId: opt("ENERFLO_COMPANY_ID"),
+  /** Enerflo GraphQL v2 — generate from Settings → Users → Integrations → +Generate */
+  enerfloGraphqlApiKey: opt("ENERFLO_GRAPHQL_API_KEY"),
+  enerfloGraphqlBaseUrl: opt("ENERFLO_GRAPHQL_BASE_URL", "https://api.enerflo.io/graphql"),
+  /** x-org header required by Enerflo GraphQL (your org slug, e.g. "solar-pros") */
+  enerfloOrgSlug: opt("ENERFLO_ORG_SLUG"),
+  /** Default owner email used when no lead owner can be resolved (e.g. "xlead@noxpwr.com") */
+  defaultOwnerEmail: opt("DEFAULT_OWNER_EMAIL"),
   terrosApiBaseUrl: opt("TERROS_API_BASE_URL", "https://api.terros.com"),
   terrosApiKey: opt("TERROS_API_KEY"),
   /** If set, Terros webhooks must send the same value in `X-Terros-Webhook-Secret` or `X-Webhook-Secret`. */

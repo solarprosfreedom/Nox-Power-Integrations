@@ -3,11 +3,14 @@
 import { useState, useEffect } from "react";
 import EnerfloPanel from "@/components/enerflo/EnerfloPanel";
 import MiddlewarePanel from "@/components/middleware/MiddlewarePanel";
+import SyncTab from "@/components/tabs/SyncTab";
+import UsersTab from "@/components/tabs/UsersTab";
+import MigrationTab from "@/components/tabs/MigrationTab";
 import { fetchStoredLogs } from "@/app/actions/enerflo";
 import { getIntegrationEnvStatus } from "@/app/actions/env-status";
 import type { ApiLog } from "@/lib/logger";
 
-type SectionId = "enerflo" | "sequifi" | "terros" | "middleware";
+type SectionId = "enerflo" | "sequifi" | "terros" | "middleware" | "sync" | "users" | "migration";
 
 const VENDORS: { id: SectionId; label: string; color: string; dot: string; tagline: string }[] = [
   { id: "enerflo",    label: "Enerflo",    color: "text-orange-400", dot: "bg-orange-400", tagline: "CRM & Solar Sales" },
@@ -121,6 +124,57 @@ export default function Dashboard() {
               <p className="text-[10px] text-gray-600 truncate">Connect & automate</p>
             </div>
           </button>
+
+          <button
+            onClick={() => setSection("sync")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "sync"
+                ? "bg-violet-900/40 text-violet-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-violet-400">
+              ⇄
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Bulk Sync</p>
+              <p className="text-[10px] text-gray-600 truncate">Backfill historical data</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => setSection("users")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "users"
+                ? "bg-cyan-900/40 text-cyan-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-cyan-400">
+              👥
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Users</p>
+              <p className="text-[10px] text-gray-600 truncate">Compare across systems</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => setSection("migration")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "migration"
+                ? "bg-amber-900/40 text-amber-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-amber-400">
+              ⬆
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Migration</p>
+              <p className="text-[10px] text-gray-600 truncate">Export &amp; restore accounts</p>
+            </div>
+          </button>
         </nav>
 
         {/* Footer — reflects server env (.env.local), not .env.local.example */}
@@ -155,6 +209,24 @@ export default function Dashboard() {
               <h1 className="text-base font-semibold text-teal-300">Middleware</h1>
               <span className="text-xs text-gray-600">Automated data flows between integrations</span>
             </>
+          ) : section === "sync" ? (
+            <>
+              <span className="text-violet-400">⇄</span>
+              <h1 className="text-base font-semibold text-violet-300">Bulk Sync</h1>
+              <span className="text-xs text-gray-600">Backfill historical data between Enerflo and Terros</span>
+            </>
+          ) : section === "users" ? (
+            <>
+              <span className="text-cyan-400">👥</span>
+              <h1 className="text-base font-semibold text-cyan-300">Users</h1>
+              <span className="text-xs text-gray-600">Compare users between Enerflo and Terros</span>
+            </>
+          ) : section === "migration" ? (
+            <>
+              <span className="text-amber-400">⬆</span>
+              <h1 className="text-base font-semibold text-amber-300">Migration</h1>
+              <span className="text-xs text-gray-600">Export Terros accounts to Supabase and restore after fix</span>
+            </>
           ) : activeVendor ? (
             <>
               <span className={`h-3 w-3 rounded-full ${activeVendor.dot}`} />
@@ -182,6 +254,21 @@ export default function Dashboard() {
           {section === "middleware" && (
             <div className="flex-1 overflow-y-auto px-8 py-8">
               <MiddlewarePanel logs={logs} />
+            </div>
+          )}
+          {section === "sync" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <SyncTab />
+            </div>
+          )}
+          {section === "users" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <UsersTab />
+            </div>
+          )}
+          {section === "migration" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <MigrationTab />
             </div>
           )}
         </div>

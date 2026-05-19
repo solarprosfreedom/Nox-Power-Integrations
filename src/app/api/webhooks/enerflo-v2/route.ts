@@ -166,6 +166,72 @@ interface CustomerUpdatedV2Payload {
   changes: Record<string, unknown>;
 }
 
+/** Enerflo v1 update_customer payload (webhook_event at root, flat structure) */
+interface UpdateCustomerPayload {
+  webhook_event: string;
+  id: number | string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  external_id?: string | null;
+  address?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    county?: string;
+    full_address?: string;
+    latitude?: string;
+    longitude?: string;
+  };
+  customer_timezone?: string;
+  lead_source?: string;
+  timestamps?: { created_at?: string; updated_at?: string };
+}
+
+interface NewAppointmentPayload {
+  id: number;
+  status: string;
+  length_minutes: number;
+  appointment_type: { id: number; name: string; status?: string };
+  times: {
+    iso8601: { start_time: string; end_time: string };
+    unix: { unix_time: number; unix_time_end: number };
+  };
+  deal_id: number | null;
+  customer: {
+    id: number | string;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+    address?: {
+      street?: string;
+      city?: string;
+      state?: string;
+      zip?: string;
+      full_address?: string;
+      latitude?: string;
+      longitude?: string;
+    };
+  };
+  assignee: {
+    id: number;
+    email: string;
+    first_name?: string;
+    last_name?: string;
+  };
+  creator?: {
+    id: number;
+    email?: string;
+    first_name?: string;
+    last_name?: string;
+  };
+  external_notes?: string | null;
+  internal_notes?: string | null;
+}
+
 interface StepResult {
   step: string;
   ok: boolean;
@@ -213,7 +279,7 @@ export async function GET() {
     ok: true,
     description:
       "Enerflo v2 webhook POST. Enerflo includes root-level \"event\"; optional header x-enerflo-event or ?event= for tests.",
-    supportedEvents: ["deal.projectSubmitted", "customer.created", "customer.updated.v2"],
+    supportedEvents: ["deal.projectSubmitted", "deal.created", "customer.created", "customer.updated.v2", "new_appointment", "update_appointment", "update_customer", "new_customer"],
   });
 }
 
@@ -230,9 +296,11 @@ export async function POST(req: NextRequest) {
   const eventName =
     req.headers.get("x-enerflo-event") ??
     req.nextUrl.searchParams.get("event") ??
-    (typeof body.event === "string" ? body.event : "");
+    (typeof body.event         === "string" ? body.event         : null) ??
+    // Appointment webhooks (new_appointment / update_appointment) use webhook_event at root
+    (typeof body.webhook_event === "string" ? body.webhook_event : "") ;
 
-  // Enerflo v2 payloads are wrapped in a `payload` key
+  // v2 payloads are wrapped in a `payload` key; appointment payloads are flat at root
   const payload = (body.payload ?? body) as Record<string, unknown>;
 
   switch (eventName) {
@@ -247,6 +315,16 @@ export async function POST(req: NextRequest) {
 
     case "customer.updated.v2":
       return handleCustomerUpdatedV2(payload as unknown as CustomerUpdatedV2Payload);
+
+    case "new_appointment":
+      return handleNewAppointment(body as unknown as NewAppointmentPayload);
+
+    case "update_appointment":
+      return handleUpdateAppointment(body as unknown as NewAppointmentPayload);
+
+    case "update_customer":
+    case "new_customer":
+      return handleUpdateCustomer(body as unknown as UpdateCustomerPayload);
 
     default:
       return NextResponse.json({
@@ -502,14 +580,15 @@ async function handleProjectSubmitted(
 
   // ── Step 2 [best-effort]: Resolve Terros userId by rep email ─────────────
   let terrosUserId: string | null = null;
-  if (repEmail) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, repEmail);
+  const repEmailToResolve = repEmail || env.defaultOwnerEmail || "";
+  if (repEmailToResolve) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, repEmailToResolve);
     terrosUserId = u.userId;
     steps.push({
       step: "2 [best-effort] — Resolve Terros userId by rep email",
       ok: u.ok && Boolean(terrosUserId),
       status: u.status,
-      data: terrosUserId ? { terrosUserId } : undefined,
+      data: terrosUserId ? { terrosUserId, usedDefault: !repEmail || undefined } : undefined,
       error: u.ok && terrosUserId ? undefined : logPreview(u.preview),
     });
   }
@@ -661,20 +740,18 @@ async function handleProjectSubmitted(
       }
     }
 
-    // ── Step 3c [best-effort]: Set Closed stage + Net Deals +1 + Installs +1 ──
-    // deal.projectSubmitted increments both counters. Idempotency prevents double-counting on resubmission.
+    // ── Step 3c [best-effort]: Set Closed stage + Net Deals +1 (Installs stays 0) ──
+    // project_submitted increments netDeals only; Installs is incremented by a separate install event.
     if (ok) {
       const upsertedAccount = parsedBody?.account as Record<string, unknown> | undefined;
       const upsertedId = upsertedAccount?.accountId as string | undefined;
       const closedStage  = env.terrosWorkflowClosedStageId;
-      const installsCfId = env.terrosCfInstalls;
       const netDealsCfId = env.terrosCfNetDeals;
 
-      if (upsertedId && (closedStage || installsCfId || netDealsCfId)) {
+      if (upsertedId && (closedStage || netDealsCfId)) {
         // Fetch current account to read existing custom field values before updating.
         // Terros account/update replaces the entire customFields object, so we must
         // merge existing fields to avoid overwriting other counters.
-        let currentInstalls = 0;
         let currentNetDeals = 0;
         let existingCustomFields: Record<string, unknown> = {};
         let storedDealId: string | undefined;
@@ -691,11 +768,6 @@ async function handleProjectSubmitted(
               const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
               const cfs = acc.customFields as Record<string, unknown> | undefined;
               if (cfs && typeof cfs === "object") existingCustomFields = cfs;
-              if (installsCfId) {
-                const existing = cfs?.[installsCfId];
-                if (typeof existing === "number") currentInstalls = existing;
-                else if (typeof existing === "string") currentInstalls = parseInt(existing, 10) || 0;
-              }
               if (netDealsCfId) {
                 const existing = cfs?.[netDealsCfId];
                 if (typeof existing === "number") currentNetDeals = existing;
@@ -711,16 +783,15 @@ async function handleProjectSubmitted(
           }
         } catch { /* best-effort — proceed with 0 if fetch fails */ }
 
-        // Idempotency: skip both counter increments if this deal was already processed.
+        // Idempotency: skip netDeals increment if this deal was already processed.
         const incomingDealId = payload.deal?.id ? String(payload.deal.id).trim() : undefined;
         const alreadyCounted = Boolean(incomingDealId && storedDealId && storedDealId === incomingDealId);
 
         const cleanPhoneForClosed = sanitizePhone(customerPhone);
-        // Merge order: existing fields → deal fields (override) → counters (override unless already counted)
+        // Merge order: existing fields → deal fields (override) → netDeals counter (unless already counted)
         const mergedCustomFields: Record<string, unknown> = {
           ...existingCustomFields,
           ...terrosCustomFieldsForApi,
-          ...(installsCfId && !alreadyCounted ? { [installsCfId]: currentInstalls + 1 } : {}),
           ...(netDealsCfId && !alreadyCounted ? { [netDealsCfId]: currentNetDeals + 1 } : {}),
         };
         const updateFields: Record<string, unknown> = {
@@ -751,7 +822,7 @@ async function handleProjectSubmitted(
         }
 
         await writeApiLog({
-          operation: "webhook:enerflo-v2:set-closed-stage-installs-netdeals",
+          operation: "webhook:enerflo-v2:set-closed-stage-netdeals",
           vendor: "terros",
           method: "POST",
           url: `${terrosBase}/account/update`,
@@ -762,7 +833,7 @@ async function handleProjectSubmitted(
         });
 
         steps.push({
-          step: "3c [best-effort] — Set Closed stage + Net Deals +1 + Installs +1",
+          step: "3c [best-effort] — Set Closed stage + Net Deals +1",
           ok: closedOk,
           status: closedStatus,
           data: closedOk
@@ -770,7 +841,7 @@ async function handleProjectSubmitted(
                 accountId: upsertedId,
                 workflowStageId: closedStage ?? null,
                 netDeals: alreadyCounted ? currentNetDeals : currentNetDeals + 1,
-                installs: alreadyCounted ? currentInstalls : currentInstalls + 1,
+                installs: 0,
                 alreadyCounted,
                 incomingDealId,
                 storedDealId,
@@ -1046,12 +1117,14 @@ async function handleCustomerCreated(
   }
 
   let terrosOwnerId: string | null = null;
-  if (ownerEmail) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmail);
+  const emailToResolve = ownerEmail || env.defaultOwnerEmail || "";
+  if (emailToResolve) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToResolve);
     terrosOwnerId = u.userId;
     _ownerDebug.terrosLookupStatus = u.status;
     _ownerDebug.terrosLookupOk = u.ok;
     _ownerDebug.terrosLookupPreview = u.preview.slice(0, 200);
+    if (!ownerEmail && terrosOwnerId) _ownerDebug.note = "fell back to DEFAULT_OWNER_EMAIL";
   }
 
   const accountFields: Record<string, unknown> = {
@@ -1533,6 +1606,755 @@ function repUserRecordMatchesLookup(u: EnerfloUser, repLookupId: string): boolea
     rec.enerfloUserId,
   ];
   return candidates.some((c) => c != null && String(c).toLowerCase() === want);
+}
+
+// ── new_appointment ──────────────────────────────────────────────────────────
+/**
+ * Flow:
+ *  1 [best-effort] Fetch full Enerflo customer record to get the UUID stored as
+ *    externalLeadId in Terros → account/upsert to retrieve accountId.
+ *    Fallback: account/list query by customer email.
+ *  2 [best-effort] Resolve assignee.email → Terros closerUserId via user/list.
+ *  3 [best-effort] account/update — set Appointment stage + closerId.
+ *  4 [required]    POST /calendar/event/add.
+ */
+async function handleNewAppointment(payload: NewAppointmentPayload): Promise<NextResponse> {
+  const enerfloBase  = (env.enerfloV1BaseUrl  ?? "https://enerflo.io").replace(/\/$/, "");
+  const enerfloKey   = env.enerfloV1ApiKey   ?? "";
+  const terrosBase   = (env.terrosApiBaseUrl  ?? "https://api.terros.com").replace(/\/$/, "");
+  const terrosKey    = env.terrosApiKey       ?? "";
+  const terrosWorkflowId      = env.terrosWorkflowId                    ?? "";
+  const appointmentStageId    = env.terrosWorkflowAppointmentStageId    ?? "";
+
+  const enerfloAppointmentId  = payload.id;
+  const startTimeMs           = payload.times.unix.unix_time * 1000;
+  const durationMinutes       = payload.length_minutes;
+  const assigneeEmail         = payload.assignee?.email?.trim() ?? "";
+  const customerNumericId     = String(payload.customer?.id ?? "");
+  const customerEmail         = payload.customer?.email?.trim() ?? "";
+  const customerAddr          = payload.customer?.address;
+  // Stamp the Enerflo appointment ID so update_appointment can find the right event later
+  const notesBase             = [payload.external_notes, payload.internal_notes]
+                                  .filter(Boolean).join("\n").trim();
+  const notes                 = [`[Enerflo:${payload.id}]`, notesBase].filter(Boolean).join("\n");
+
+  // ── Step 1: find Terros account ──────────────────────────────────────────
+
+  let accountId: string | null = null;
+  let step1Source = "";
+  let step1Status: number | null = null;
+  let step1Ok     = false;
+  let step1Preview = "";
+
+  // 1a: fetch Enerflo customer to get UUID (externalLeadId in Terros)
+  let customerUuid: string | null = null;
+  if (customerNumericId && enerfloKey) {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v1/customers/${encodeURIComponent(customerNumericId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (r.ok) {
+        const raw = await r.json() as Record<string, unknown>;
+        const cust = (raw.data ?? raw) as Record<string, unknown>;
+        const integrations = cust.integrations as Record<string, unknown> | undefined;
+        const enerfloV2    = integrations?.["Enerflo V2"] as Record<string, unknown> | undefined;
+        const enerfloV2Rec = enerfloV2?.EnerfloV2Customer as Record<string, unknown> | undefined;
+        const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.id) as string | undefined;
+        if (candidate) customerUuid = String(candidate);
+      }
+    } catch { /* fall through */ }
+  }
+
+  // 1b: account/upsert by externalLeadId (UUID preferred, numeric id as fallback)
+  const externalLeadId = customerUuid ?? customerNumericId;
+  if (externalLeadId && terrosKey) {
+    try {
+      const r = await fetch(`${terrosBase}/account/upsert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({
+          account: {
+            externalLeadId,
+            ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
+          },
+        }),
+      });
+      step1Status = r.status;
+      const raw   = await r.text();
+      step1Preview = raw.slice(0, 300);
+      step1Ok = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      if (step1Ok) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const acc = (parsed.account ?? parsed) as Record<string, unknown>;
+        accountId   = (acc.accountId as string | undefined) ?? null;
+        step1Source = "upsert-externalLeadId";
+      }
+    } catch (e) {
+      step1Preview = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // 1c: fallback — account/list search by email
+  if (!accountId && customerEmail && terrosKey) {
+    try {
+      const r = await fetch(`${terrosBase}/account/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ size: 10, searchInput: { query: customerEmail } }),
+      });
+      step1Status = r.status;
+      const raw   = await r.text();
+      step1Preview = raw.slice(0, 300);
+      if (r.ok && terrosJsonBodyIndicatesSuccess(raw)) {
+        const parsed   = JSON.parse(raw) as Record<string, unknown>;
+        const accounts = parsed.accounts as Record<string, unknown>[] | undefined;
+        const match    = Array.isArray(accounts) ? accounts[0] : undefined;
+        accountId      = (match?.accountId as string | undefined) ?? null;
+        step1Ok        = Boolean(accountId);
+        step1Source    = "list-email-fallback";
+      }
+    } catch (e) {
+      step1Preview = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  await writeApiLog({
+    operation: "webhook:enerflo-v2:new-appointment:find-terros-account",
+    vendor: "terros",
+    method: "POST",
+    url: `${terrosBase}/account/upsert`,
+    hadApiKey: Boolean(terrosKey),
+    status: step1Status,
+    ok: step1Ok,
+    responsePreview: step1Preview,
+  });
+
+  // ── Step 2: resolve assignee email → Terros closerUserId ─────────────────
+
+  let closerUserId: string | null = null;
+  let step2Preview = "";
+  if (assigneeEmail && terrosKey) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, assigneeEmail);
+    closerUserId = u.userId;
+    step2Preview = u.preview;
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:new-appointment:resolve-closer",
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/user/list`,
+      hadApiKey: Boolean(terrosKey),
+      status: u.status,
+      ok: u.ok,
+      responsePreview: u.preview,
+    });
+  }
+
+  // ── Step 3: account/update — Appointment stage + closerId ────────────────
+
+  let step3Ok     = false;
+  let step3Status: number | null = null;
+  let step3Preview = "";
+  if (accountId && terrosKey) {
+    const updateFields: Record<string, unknown> = {
+      accountId,
+      ...(appointmentStageId ? { workflowStageId: appointmentStageId } : {}),
+      ...(closerUserId       ? { closerId: closerUserId }               : {}),
+    };
+    // Only update if we actually have something new to set
+    if (appointmentStageId || closerUserId) {
+      try {
+        const r = await fetch(`${terrosBase}/account/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ account: updateFields }),
+        });
+        step3Status  = r.status;
+        const raw    = await r.text();
+        step3Preview = raw.slice(0, 300);
+        step3Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      } catch (e) {
+        step3Preview = e instanceof Error ? e.message : String(e);
+      }
+
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:new-appointment:update-account-stage",
+        vendor: "terros",
+        method: "POST",
+        url: `${terrosBase}/account/update`,
+        hadApiKey: Boolean(terrosKey),
+        status: step3Status,
+        ok: step3Ok,
+        responsePreview: step3Preview,
+      });
+    }
+  }
+
+  // ── Step 4: /calendar/event/add ──────────────────────────────────────────
+
+  let step4Ok     = false;
+  let step4Status: number | null = null;
+  let step4Preview = "";
+  let calendarEventId: string | null = null;
+  let step4Action = "create";
+
+  if (terrosKey) {
+    // Dedup guard: if a Terros calendar event already has [Enerflo:{id}] in its
+    // notes (stamped when the appointment was originally created from Terros), skip
+    // creating a duplicate. This prevents an infinite loop when the Terros→Enerflo
+    // path fires and Enerflo fires new_appointment back at us.
+    if (accountId) {
+      try {
+        const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body:    JSON.stringify({ accountId }),
+        });
+        if (listRes.ok) {
+          const raw    = await listRes.text();
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          const evts   = parsed.events as Record<string, unknown>[] | undefined;
+          const marker = `[Enerflo:${enerfloAppointmentId}]`;
+          if (Array.isArray(evts) && evts.some(e => typeof e.notes === "string" && e.notes.includes(marker))) {
+            step4Action  = "skipped-duplicate";
+            step4Ok      = true;
+            step4Preview = "Terros event already stamped with this Enerflo appointment ID — skipping duplicate creation.";
+          }
+        }
+      } catch { /* best-effort — fall through to create */ }
+    }
+
+    if (step4Action !== "skipped-duplicate") {
+    const apptTypeName = payload.appointment_type?.name ?? "Consultation";
+    const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
+
+    const eventBody: Record<string, unknown> = {
+      ...(accountId    ? { accountId }                                 : {}),
+      ...(closerUserId ? { attendeeId: closerUserId }                  : {}),
+      eventType: "Consultation",
+      title:     eventTitle || "Consultation",
+      eventDate: startTimeMs,
+      duration:  durationMinutes,
+      ...(notes  ? { notes }                                           : {}),
+      // Location requires latitude + longitude; only include when both are present
+      ...((customerAddr?.latitude && customerAddr?.longitude) ? {
+        location: {
+          ...(customerAddr.street      ? { line1:       customerAddr.street }      : {}),
+          ...(customerAddr.full_address? { oneLine:     customerAddr.full_address } : {}),
+          ...(customerAddr.city        ? { locality:    customerAddr.city }         : {}),
+          ...(customerAddr.state       ? { countrySubd: customerAddr.state }        : {}),
+          ...(customerAddr.zip         ? { postal1:     customerAddr.zip }          : {}),
+          latitude:  parseFloat(customerAddr.latitude),
+          longitude: parseFloat(customerAddr.longitude),
+        },
+      } : {}),
+    };
+
+    try {
+      const r = await fetch(`${terrosBase}/calendar/event/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ event: eventBody }),
+      });
+      step4Status  = r.status;
+      const raw    = await r.text();
+      step4Preview = raw.slice(0, 400);
+      step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      if (step4Ok) {
+        try {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          const evt    = (parsed.event ?? parsed) as Record<string, unknown>;
+          calendarEventId = (evt.eventId ?? evt.id) as string | null ?? null;
+        } catch { /* ignore */ }
+      }
+    } catch (e) {
+      step4Preview = e instanceof Error ? e.message : String(e);
+    }
+
+    await writeApiLog({
+      operation: `webhook:enerflo-v2:new-appointment:calendar-event-${step4Action}`,
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/calendar/event/add`,
+      hadApiKey: Boolean(terrosKey),
+      status: step4Status,
+      ok: step4Ok,
+      responsePreview: step4Preview,
+    });
+    } // end if (step4Action !== "skipped-duplicate")
+  }
+
+  return NextResponse.json({
+    received: true,
+    event: "new_appointment",
+    enerfloAppointmentId,
+    customerNumericId,
+    customerUuid,
+    accountId,
+    step1Source,
+    closerUserId,
+    appointmentStageId: appointmentStageId || null,
+    stageUpdate: { ok: step3Ok, status: step3Status, preview: step3Preview },
+    calendarEvent: {
+      ok:      step4Ok,
+      action:  step4Action,
+      status:  step4Status,
+      eventId: calendarEventId,
+      preview: step4Preview,
+    },
+  });
+}
+
+// ── update_appointment ────────────────────────────────────────────────────────
+/**
+ * Flow:
+ *  1 [best-effort]  Find Terros account via Enerflo customer UUID → externalLeadId,
+ *                   or fall back to account/list by email.
+ *  2 [best-effort]  Resolve assignee.email → Terros closerUserId.
+ *  3 [best-effort]  Update account: set Appointment stage + closerId.
+ *  4 [best-effort]  Find existing Terros calendar event by searching notes for
+ *                   "[Enerflo:{id}]" marker, then update it with new time/duration/closer.
+ *                   If not found, create a new event as fallback.
+ */
+async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<NextResponse> {
+  const enerfloBase  = (env.enerfloV1BaseUrl  ?? "https://enerflo.io").replace(/\/$/, "");
+  const enerfloKey   = env.enerfloV1ApiKey   ?? "";
+  const terrosBase   = (env.terrosApiBaseUrl  ?? "https://api.terros.com").replace(/\/$/, "");
+  const terrosKey    = env.terrosApiKey       ?? "";
+  const appointmentStageId = env.terrosWorkflowAppointmentStageId ?? "";
+
+  const enerfloAppointmentId = payload.id;
+  const startTimeMs          = payload.times.unix.unix_time * 1000;
+  const durationMinutes      = payload.length_minutes;
+  const assigneeEmail        = payload.assignee?.email?.trim() ?? "";
+  const customerNumericId    = String(payload.customer?.id ?? "");
+  const customerEmail        = payload.customer?.email?.trim() ?? "";
+  const customerAddr         = payload.customer?.address;
+  const notesBase            = [payload.external_notes, payload.internal_notes]
+                                 .filter(Boolean).join("\n").trim();
+  const notes                = [`[Enerflo:${enerfloAppointmentId}]`, notesBase].filter(Boolean).join("\n");
+
+  // ── Step 1: find Terros account (same logic as new_appointment) ───────────
+
+  let accountId: string | null = null;
+  let step1Source = "";
+  let customerUuid: string | null = null;
+
+  if (customerNumericId && enerfloKey) {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v1/customers/${encodeURIComponent(customerNumericId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (r.ok) {
+        const raw = await r.text();
+        if (raw.trim().startsWith("{")) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          const cust   = (parsed.customer ?? parsed) as Record<string, unknown>;
+          const uuid   = (cust.uuid ?? cust.externalId ?? cust.id) as string | undefined;
+          if (uuid && /^[0-9a-f-]{36}$/i.test(uuid)) customerUuid = uuid;
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  if (customerUuid && terrosKey) {
+    try {
+      const r = await fetch(`${terrosBase}/account/upsert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ account: { externalLeadId: customerUuid } }),
+      });
+      if (r.ok) {
+        const raw  = await r.text();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const acc    = (parsed.account ?? parsed) as Record<string, unknown>;
+        const aid    = acc.accountId as string | undefined;
+        if (aid) { accountId = aid; step1Source = "upsert:uuid"; }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  if (!accountId && customerEmail && terrosKey) {
+    try {
+      const r = await fetch(`${terrosBase}/account/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ filter: { email: customerEmail }, limit: 1 }),
+      });
+      if (r.ok) {
+        const raw    = await r.text();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const accs   = parsed.accounts as Record<string, unknown>[] | undefined;
+        const aid    = accs?.[0]?.accountId as string | undefined;
+        if (aid) { accountId = aid; step1Source = "list:email"; }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  // ── Step 2: resolve closer ────────────────────────────────────────────────
+
+  let closerUserId: string | null = null;
+  if (assigneeEmail && terrosKey) {
+    const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, assigneeEmail);
+    closerUserId = resolved.userId;
+  }
+
+  // ── Step 3: update account stage + closer ────────────────────────────────
+
+  let step3Ok      = false;
+  let step3Status: number | null = null;
+  let step3Preview = "";
+
+  if (accountId && terrosKey && (appointmentStageId || closerUserId)) {
+    try {
+      const updatePayload: Record<string, unknown> = {
+        accountId,
+        id: accountId,
+        ...(appointmentStageId ? { workflowStageId: appointmentStageId } : {}),
+        ...(closerUserId       ? { closerId: closerUserId }               : {}),
+      };
+      const r = await fetch(`${terrosBase}/account/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ account: updatePayload }),
+      });
+      step3Status  = r.status;
+      const raw    = await r.text();
+      step3Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+      step3Preview = raw.slice(0, 400);
+    } catch (e) {
+      step3Preview = e instanceof Error ? e.message : String(e);
+    }
+
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:update-appointment:account-update",
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/account/update`,
+      hadApiKey: Boolean(terrosKey),
+      status: step3Status,
+      ok: step3Ok,
+      responsePreview: step3Preview,
+    });
+  }
+
+  // ── Step 4: find + update (or create) Terros calendar event ──────────────
+
+  let step4Ok      = false;
+  let step4Status: number | null = null;
+  let step4Preview = "";
+  let calendarEventId: string | null = null;
+  let step4Action  = "none";
+
+  if (accountId && terrosKey) {
+    // 4a: list all events for the account and find the one stamped with this appointment ID
+    let existingEventId: string | null = null;
+    try {
+      const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ accountId }),
+      });
+      if (listRes.ok) {
+        const raw    = await listRes.text();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const evts   = parsed.events as Record<string, unknown>[] | undefined;
+        const marker = `[Enerflo:${enerfloAppointmentId}]`;
+        const matched = evts?.find(e => typeof e.notes === "string" && e.notes.includes(marker));
+        if (matched) existingEventId = matched.eventId as string;
+      }
+    } catch { /* best-effort */ }
+
+    const apptTypeName = payload.appointment_type?.name ?? "Consultation";
+    const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
+
+    const eventFields: Record<string, unknown> = {
+      eventType: "Consultation",
+      title:     eventTitle || "Consultation",
+      eventDate: startTimeMs,
+      duration:  durationMinutes,
+      notes,
+      ...(closerUserId ? { attendeeId: closerUserId } : {}),
+      ...((customerAddr?.latitude && customerAddr?.longitude) ? {
+        location: {
+          ...(customerAddr.street      ? { line1:       customerAddr.street }       : {}),
+          ...(customerAddr.full_address? { oneLine:     customerAddr.full_address }  : {}),
+          ...(customerAddr.city        ? { locality:    customerAddr.city }          : {}),
+          ...(customerAddr.state       ? { countrySubd: customerAddr.state }         : {}),
+          ...(customerAddr.zip         ? { postal1:     customerAddr.zip }           : {}),
+          latitude:  parseFloat(customerAddr.latitude),
+          longitude: parseFloat(customerAddr.longitude),
+        },
+      } : {}),
+    };
+
+    if (existingEventId) {
+      // 4b: update the existing event
+      step4Action = "update";
+      try {
+        const r = await fetch(`${terrosBase}/calendar/event/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ event: { eventId: existingEventId, ...eventFields } }),
+        });
+        step4Status  = r.status;
+        const raw    = await r.text();
+        step4Preview = raw.slice(0, 400);
+        step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+        if (step4Ok) {
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const evt    = (parsed.event ?? parsed) as Record<string, unknown>;
+            calendarEventId = evt.eventId as string | null ?? existingEventId;
+          } catch { calendarEventId = existingEventId; }
+        }
+      } catch (e) {
+        step4Preview = e instanceof Error ? e.message : String(e);
+      }
+    } else {
+      // 4c: no matching event found — create a new one as fallback
+      step4Action = "create";
+      try {
+        const r = await fetch(`${terrosBase}/calendar/event/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ event: { accountId, ...eventFields } }),
+        });
+        step4Status  = r.status;
+        const raw    = await r.text();
+        step4Preview = raw.slice(0, 400);
+        step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+        if (step4Ok) {
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const evt    = (parsed.event ?? parsed) as Record<string, unknown>;
+            calendarEventId = (evt.eventId ?? evt.id) as string | null ?? null;
+          } catch { /* ignore */ }
+        }
+      } catch (e) {
+        step4Preview = e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    await writeApiLog({
+      operation: `webhook:enerflo-v2:update-appointment:calendar-event-${step4Action}`,
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/calendar/event/${step4Action === "update" ? "update" : "add"}`,
+      hadApiKey: Boolean(terrosKey),
+      status: step4Status,
+      ok: step4Ok,
+      responsePreview: step4Preview,
+    });
+  }
+
+  return NextResponse.json({
+    received: true,
+    event: "update_appointment",
+    enerfloAppointmentId,
+    customerNumericId,
+    customerUuid,
+    accountId,
+    step1Source,
+    closerUserId,
+    appointmentStageId: appointmentStageId || null,
+    stageUpdate: { ok: step3Ok, status: step3Status, preview: step3Preview },
+    calendarEvent: {
+      ok:      step4Ok,
+      action:  step4Action,
+      status:  step4Status,
+      eventId: calendarEventId,
+      preview: step4Preview,
+    },
+  });
+}
+
+// ── update_customer / new_customer ───────────────────────────────────────────
+/**
+ * Flow:
+ *  1 [best-effort]  Fetch Enerflo customer UUID via REST GET /api/v1/customers/{id}
+ *                   (the v1 payload only has the numeric id).
+ *  2 [best-effort]  Query Enerflo GraphQL fetchDealList to get salesRep + setter emails
+ *                   for this customer — these are NOT in the webhook payload.
+ *  3 [best-effort]  Resolve salesRep email → Terros ownerId, setter email → Terros closerId.
+ *  4 [required]     Upsert Terros account by externalLeadId (customer UUID): update name,
+ *                   address, contact info, ownerId, closerId.
+ */
+async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<NextResponse> {
+  const enerfloBase    = (env.enerfloV1BaseUrl      ?? "https://enerflo.io").replace(/\/$/, "");
+  const enerfloKey     = env.enerfloV1ApiKey ?? "";
+  const terrosBase     = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
+  const terrosKey      = env.terrosApiKey ?? "";
+
+  const numericId     = String(payload.id ?? "");
+  const customerEmail = payload.email?.trim() ?? "";
+  const customerName  = `${payload.first_name ?? ""} ${payload.last_name ?? ""}`.trim();
+  const addr          = payload.address;
+
+  // ── Step 1: GET /api/v3/customers/{id} — uuid, agent_user_id, setter_user_id, office_id ──
+  // v3 endpoint returns all assignment fields directly — no GraphQL needed.
+
+  let customerUuid:    string | null = null;
+  let agentNumericId:  string | null = null;
+  let setterNumericId: string | null = null;
+  let v3CustomerRaw:   Record<string, unknown> = {};
+  let step1Ok = false;
+
+  if (numericId && enerfloKey) {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(numericId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (r.ok) {
+        const raw    = await r.text();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        v3CustomerRaw = parsed;
+        const uuid = (parsed.uuid ?? parsed.external_id ?? payload.external_id) as string | undefined;
+        if (uuid && /^[0-9a-f-]{36}$/i.test(uuid)) customerUuid = uuid;
+        if (parsed.agent_user_id)  agentNumericId  = String(parsed.agent_user_id);
+        if (parsed.setter_user_id) setterNumericId = String(parsed.setter_user_id);
+        step1Ok = true;
+      }
+    } catch { /* best-effort */ }
+
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:update-customer:v3-fetch",
+      vendor: "enerflo",
+      method: "GET",
+      url: `${enerfloBase}/api/v3/customers/${numericId}`,
+      hadApiKey: Boolean(enerfloKey),
+      status: null,
+      ok: step1Ok,
+      responsePreview: JSON.stringify(v3CustomerRaw).slice(0, 600),
+    });
+  }
+
+  // ── Step 2: resolve agent + setter numeric IDs → emails via /api/v3/users/{id} ──
+
+  let salesRepEmail: string | null = null;
+  let setterEmail:   string | null = null;
+  let step2Ok = false;
+
+  async function fetchEnerfloUserEmail(userId: string): Promise<string | null> {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v3/users/${encodeURIComponent(userId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (!r.ok) return null;
+      const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
+      return (parsed.email ?? parsed.user_email) as string | null ?? null;
+    } catch { return null; }
+  }
+
+  if (enerfloKey) {
+    if (agentNumericId)  salesRepEmail = await fetchEnerfloUserEmail(agentNumericId);
+    if (setterNumericId) setterEmail   = await fetchEnerfloUserEmail(setterNumericId);
+    step2Ok = Boolean(salesRepEmail || setterEmail);
+  }
+
+  // ── Step 3: resolve emails → Terros user IDs ─────────────────────────────
+
+  let ownerId:  string | null = null;
+  let closerId: string | null = null;
+
+  if (terrosKey) {
+    const emailToUse = salesRepEmail || env.defaultOwnerEmail || "";
+    if (emailToUse) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToUse);
+      ownerId = r.userId;
+    }
+    if (setterEmail) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
+      closerId = r.userId;
+    }
+  }
+
+  // ── Step 4: upsert Terros account ────────────────────────────────────────
+
+  const residentFields: Record<string, string> = {};
+  if (customerName)  residentFields.name  = customerName;
+  if (payload.first_name?.trim()) residentFields.firstName = payload.first_name.trim();
+  if (payload.last_name?.trim())  residentFields.lastName  = payload.last_name.trim();
+  if (customerEmail) residentFields.email = customerEmail;
+  const cleanPhone = sanitizePhone(payload.phone ?? "");
+  if (cleanPhone)    residentFields.phone = cleanPhone;
+
+  const accountFields: Record<string, unknown> = {
+    // externalLeadId = customer UUID — upsert key shared with customer.created
+    ...(customerUuid  ? { externalLeadId: customerUuid }              : {}),
+    ...(customerName  ? { name: customerName }                         : {}),
+    ...(ownerId       ? { ownerId }                                    : {}),
+    ...(closerId      ? { closerId }                                   : {}),
+    ...(Object.keys(residentFields).length > 0 ? { resident: residentFields } : {}),
+  };
+
+  if (addr?.street || addr?.full_address) {
+    const location: Record<string, unknown> = {
+      ...(addr.street       ? { line1:       addr.street }       : {}),
+      ...(addr.full_address ? { oneLine:     addr.full_address }  : {}),
+      ...(addr.city         ? { locality:    addr.city }          : {}),
+      ...(addr.state        ? { countrySubd: addr.state }         : {}),
+      ...(addr.zip          ? { postal1:     addr.zip }           : {}),
+    };
+    if (addr.latitude && addr.longitude) {
+      location.latitude  = parseFloat(addr.latitude);
+      location.longitude = parseFloat(addr.longitude);
+    }
+    accountFields.location = location;
+  }
+
+  let step4Ok      = false;
+  let step4Status: number | null = null;
+  let step4Preview = "";
+  let accountId: string | null = null;
+
+  try {
+    const r = await fetch(`${terrosBase}/account/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({ account: accountFields }),
+    });
+    step4Status  = r.status;
+    const raw    = await r.text();
+    step4Preview = raw.slice(0, 400);
+    step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+    if (step4Ok) {
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const acc    = (parsed.account ?? parsed) as Record<string, unknown>;
+        accountId    = acc.accountId as string | null ?? null;
+      } catch { /* ignore */ }
+    }
+  } catch (e) {
+    step4Preview = e instanceof Error ? e.message : String(e);
+  }
+
+  await writeApiLog({
+    operation: "webhook:enerflo-v2:update-customer:terros-upsert",
+    vendor: "terros",
+    method: "POST",
+    url: `${terrosBase}/account/upsert`,
+    hadApiKey: Boolean(terrosKey),
+    status: step4Status,
+    ok: step4Ok,
+    responsePreview: step4Preview,
+  });
+
+  return NextResponse.json({
+    received:      true,
+    event:         payload.webhook_event,
+    numericId,
+    customerUuid,
+    agentNumericId,
+    setterNumericId,
+    step1Ok,
+    salesRepEmail,
+    setterEmail,
+    step2Ok,
+    ownerId,
+    closerId,
+    accountId,
+    upsert: { ok: step4Ok, status: step4Status, preview: step4Preview },
+  });
 }
 
 /** Enerflo nests kW under pricingOutputs.design, not always on pricingOutputs root */

@@ -5,13 +5,16 @@
  * e.g. `update_customer`, `new_customer`. Point a **separate** subscription URL here:
  *   https://<your-domain>/api/webhooks/enerflo-v1
  *
- * Payload shape is documented at:
- *   https://docs.enerflo.io/docs/update-customer
- * Typical root field: `webhook_event` (string).
+ * Events with real handlers (update_customer, new_customer, new_appointment, update_appointment)
+ * are forwarded internally to the enerflo-v2 POST handler which has the full logic.
+ * Unknown events are logged and acknowledged.
+ *
+ * Payload shape: https://docs.enerflo.io/docs/update-customer
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { writeApiLog } from "@/lib/logger";
+import { POST as enerfloV2Post } from "@/app/api/webhooks/enerflo-v2/route";
 
 const MAX_PREVIEW = 4000;
 
@@ -62,6 +65,12 @@ export async function POST(req: NextRequest) {
     req.nextUrl.searchParams.get("event") ||
     fromHeader ||
     "(unknown)";
+
+  // Events with real handlers — forward to v2 route which reads webhook_event too
+  const handledEvents = new Set(["update_customer", "new_customer", "new_appointment", "update_appointment"]);
+  if (handledEvents.has(webhookEvent)) {
+    return enerfloV2Post(req);
+  }
 
   const url = `${req.nextUrl.pathname}${req.nextUrl.search}`;
   await writeApiLog({
