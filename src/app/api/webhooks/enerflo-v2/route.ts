@@ -1605,26 +1605,35 @@ async function resolveTerrosUserIdByEmail(
   let status: number | null = null;
   let ok = false;
   let preview = "";
+  // Collect all users across pages — user/list may paginate
+  const allUsers: Record<string, unknown>[] = [];
   try {
-    const res = await fetch(`${terrosBase}/user/list`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-      body: JSON.stringify({}),
-    });
-    status = res.status;
-    const rawBody = await res.text();
-    preview = rawBody.slice(0, 300);
-    ok = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
-    if (!ok) return { userId: null, status, ok, preview };
-    const parsed = JSON.parse(rawBody) as Record<string, unknown>;
-    const users = parsed.users as Record<string, unknown>[] | undefined;
-    if (!Array.isArray(users)) return { userId: null, status, ok, preview };
-    const match = users.find((u) => {
+    for (let page = 1; page <= 5; page++) {
+      const res = await fetch(`${terrosBase}/user/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body: JSON.stringify({ page, pageSize: 100 }),
+      });
+      status = res.status;
+      const rawBody = await res.text();
+      if (page === 1) preview = `totalFetched:${allUsers.length} | ` + rawBody.slice(0, 200);
+      ok = res.ok && terrosJsonBodyIndicatesSuccess(rawBody);
+      if (!ok) break;
+      const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+      const users = (parsed.users ?? parsed.data ?? parsed.results) as Record<string, unknown>[] | undefined;
+      if (!Array.isArray(users) || users.length === 0) break;
+      allUsers.push(...users);
+      if (users.length < 100) break; // last page
+    }
+    if (allUsers.length === 0) return { userId: null, status, ok, preview };
+    preview = `totalFetched:${allUsers.length} candidates:${JSON.stringify(candidates)}`;
+    const match = allUsers.find((u) => {
       if (typeof u.email !== "string") return false;
       const uCandidates = expandEmailCandidates(u.email);
       return uCandidates.some((ue) => candidates.includes(ue));
     });
     const userId = (match?.userId as string | undefined) ?? null;
+    preview += ` matched:${match ? (match.email as string) : "none"} userId:${userId}`;
     return { userId, status, ok, preview };
   } catch (e) {
     preview = e instanceof Error ? e.message : String(e);
