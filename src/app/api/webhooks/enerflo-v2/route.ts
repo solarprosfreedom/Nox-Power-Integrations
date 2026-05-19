@@ -2331,8 +2331,19 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
         const raw    = await r.text();
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         v3CustomerRaw = parsed;
-        const uuid = (parsed.uuid ?? parsed.external_id ?? payload.external_id) as string | undefined;
-        if (uuid && /^[0-9a-f-]{36}$/i.test(uuid)) customerUuid = uuid;
+        // Try top-level uuid/external_id first
+        const topUuid = (parsed.uuid ?? parsed.external_id ?? payload.external_id) as string | undefined;
+        if (topUuid && /^[0-9a-f-]{36}$/i.test(topUuid)) customerUuid = topUuid;
+        // Fallback: extract UUID from integration_maps (Enerflo V2 stores it there)
+        if (!customerUuid && Array.isArray(parsed.integration_maps)) {
+          for (const map of parsed.integration_maps as Record<string, unknown>[]) {
+            const extId = map.external_id as string | undefined;
+            if (extId && /^[0-9a-f-]{36}$/i.test(extId)) {
+              customerUuid = extId;
+              break;
+            }
+          }
+        }
         if (parsed.agent_user_id)  agentNumericId  = String(parsed.agent_user_id);
         if (parsed.setter_user_id) setterNumericId = String(parsed.setter_user_id);
         // Prefer the v3 status (always current) over what the webhook payload sends
