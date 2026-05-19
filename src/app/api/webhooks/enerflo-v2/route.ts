@@ -1799,29 +1799,11 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   let step1Ok     = false;
   let step1Preview = "";
 
-  // 1a: fetch Enerflo customer UUID — try v1 first, then v3 integration_maps as fallback
+  // 1a: always fetch v3 — gets UUID from integration_maps AND setter/agent for event Setter field
   let customerUuid: string | null = null;
-  if (customerNumericId && enerfloKey) {
-    try {
-      const r = await fetch(`${enerfloBase}/api/v1/customers/${encodeURIComponent(customerNumericId)}`, {
-        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-      });
-      if (r.ok) {
-        const raw = await r.json() as Record<string, unknown>;
-        const cust = (raw.data ?? raw) as Record<string, unknown>;
-        const integrations = cust.integrations as Record<string, unknown> | undefined;
-        const enerfloV2    = integrations?.["Enerflo V2"] as Record<string, unknown> | undefined;
-        const enerfloV2Rec = enerfloV2?.EnerfloV2Customer as Record<string, unknown> | undefined;
-        const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.externalId) as string | undefined;
-        if (candidate && /^[0-9a-f-]{36}$/i.test(String(candidate))) customerUuid = String(candidate);
-      }
-    } catch { /* fall through */ }
-  }
-
-  // v3 fallback: integration_maps has UUID reliably; also grab setter/agent for event ownerId
   let enerfloSetterNumericId: string | null = null;
   let enerfloAgentNumericId:  string | null = null;
-  if (!customerUuid && customerNumericId && enerfloKey) {
+  if (customerNumericId && enerfloKey) {
     try {
       const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
         headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
@@ -2163,31 +2145,10 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   let step1Source = "";
   let customerUuid: string | null = null;
 
-  // Try v1 first for UUID
-  if (customerNumericId && enerfloKey) {
-    try {
-      const r = await fetch(`${enerfloBase}/api/v1/customers/${encodeURIComponent(customerNumericId)}`, {
-        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-      });
-      if (r.ok) {
-        const raw = await r.text();
-        if (raw.trim().startsWith("{")) {
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          const cust   = (parsed.customer ?? parsed) as Record<string, unknown>;
-          const integrations = cust.integrations as Record<string, unknown> | undefined;
-          const enerfloV2    = integrations?.["Enerflo V2"] as Record<string, unknown> | undefined;
-          const enerfloV2Rec = enerfloV2?.EnerfloV2Customer as Record<string, unknown> | undefined;
-          const candidate    = (enerfloV2Rec?.integration_record_id ?? cust.uuid ?? cust.externalId) as string | undefined;
-          if (candidate && /^[0-9a-f-]{36}$/i.test(String(candidate))) customerUuid = String(candidate);
-        }
-      }
-    } catch { /* best-effort */ }
-  }
-
-  // Fallback: v3 integration_maps — also grab setter/agent for event ownerId ("Setter" in Terros)
+  // Always fetch v3 — gets UUID from integration_maps AND setter/agent for event Setter field
   let enerfloSetterNumericId: string | null = null;
   let enerfloAgentNumericId:  string | null = null;
-  if (!customerUuid && customerNumericId && enerfloKey) {
+  if (customerNumericId && enerfloKey) {
     try {
       const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
         headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
