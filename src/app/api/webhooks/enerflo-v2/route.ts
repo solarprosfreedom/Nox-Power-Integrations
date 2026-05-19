@@ -2213,6 +2213,10 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
         if (uuid && /^[0-9a-f-]{36}$/i.test(uuid)) customerUuid = uuid;
         if (parsed.agent_user_id)  agentNumericId  = String(parsed.agent_user_id);
         if (parsed.setter_user_id) setterNumericId = String(parsed.setter_user_id);
+        // Prefer the v3 status (always current) over what the webhook payload sends
+        if (parsed.status != null && String(parsed.status).trim()) {
+          payload.status = String(parsed.status).trim();
+        }
         step1Ok = true;
       }
     } catch { /* best-effort */ }
