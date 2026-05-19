@@ -1085,8 +1085,15 @@ async function handleCustomerCreated(
             )?.EnerfloV2Customer as Record<string, unknown> | undefined;
             return integId?.integration_record_id === customerId;
           });
-          // Fall back to first result if UUID match not found (e.g. newly created, not yet indexed)
-          if (!matchedRow && rows.length === 1) matchedRow = rows[0];
+          // UUID match often fails on newly-created customers (integration record not yet indexed).
+          // Fall back to the row with the highest numeric ID (most recently created customer with this email).
+          if (!matchedRow && rows.length > 0) {
+            matchedRow = rows.reduce((best, r) => {
+              const bId = typeof best?.id === "number" ? best.id : 0;
+              const rId = typeof r.id === "number" ? r.id : 0;
+              return rId > bId ? r : best;
+            }, rows[0]);
+          }
           const matchedNumericId = matchedRow?.id != null ? String(matchedRow.id) : null;
           _ownerDebug.matchedRowId = matchedNumericId;
 
