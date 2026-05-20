@@ -2062,22 +2062,15 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           const evts   = parsed.events as Record<string, unknown>[] | undefined;
           const marker = `[Enerflo:${enerfloAppointmentId}]`;
-          let dupReason: string | null = null;
+          // new_appointment: only skip if THIS EXACT appointment ID is already stamped in notes.
+          // Do NOT match by title — the same customer can have multiple appointments, and stale
+          // events from previous test runs would incorrectly block all future appointments.
           if (Array.isArray(evts) && evts.length > 0) {
             if (evts.some(e => typeof e.notes === "string" && (e.notes as string).includes(marker))) {
-              dupReason = "notes-marker";
-            } else {
-              const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
-              const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
-              if (evts.some(e => typeof e.title === "string" && e.title === expectedTitle)) {
-                dupReason = "title-match";
-              }
+              step4Action  = "skipped-duplicate";
+              step4Ok      = true;
+              step4Preview = `Existing event found (notes-marker [Enerflo:${enerfloAppointmentId}]) — skipping duplicate.`;
             }
-          }
-          if (dupReason) {
-            step4Action  = "skipped-duplicate";
-            step4Ok      = true;
-            step4Preview = `Existing event found (${dupReason}) — skipping duplicate creation.`;
           }
         }
       } catch { /* best-effort — fall through to create */ }
@@ -2372,9 +2365,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   if (accountId && terrosKey) {
     // 4a: list all events for the account and find the existing one for this Enerflo appointment.
     // Try matching strategies in order:
-    //   1) notes contain [Enerflo:{id}]               — most reliable IF list returns notes
-    //   2) title matches  + same accountId            — title is generated deterministically
-    //   3) eventDate within 1ms of payload start time — last resort tie-breaker
+    //   1) notes contain [Enerflo:{id}]          — most reliable if list returns notes
+    //   2) title + eventDate match               — title is deterministic; eventDate scopes to this
+    //                                               specific appointment so stale events won't match
     let existingEventId: string | null = null;
     let step4ListPreview = "";
     try {
@@ -2390,17 +2383,20 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         const evts   = parsed.events as Record<string, unknown>[] | undefined;
         const marker = `[Enerflo:${enerfloAppointmentId}]`;
         if (Array.isArray(evts) && evts.length > 0) {
-          // Strategy 1: match by notes marker
+          // Strategy 1: match by notes marker (requires list to return notes)
           const byNotes = evts.find(e => typeof e.notes === "string" && (e.notes as string).includes(marker));
           if (byNotes) {
             existingEventId = (byNotes.eventId ?? byNotes.id) as string;
           } else {
-            // Strategy 2: match by title (built deterministically from appointment type + customer name)
+            // Strategy 2: title + eventDate — unique per appointment instance
             const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
             const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
-            const byTitle = evts.find(e => typeof e.title === "string" && e.title === expectedTitle);
-            if (byTitle) {
-              existingEventId = (byTitle.eventId ?? byTitle.id) as string;
+            const byTitleAndDate = evts.find(e =>
+              typeof e.title === "string" && e.title === expectedTitle &&
+              (e.eventDate === startTimeMs || e.eventDate === String(startTimeMs))
+            );
+            if (byTitleAndDate) {
+              existingEventId = (byTitleAndDate.eventId ?? byTitleAndDate.id) as string;
             }
           }
         }
