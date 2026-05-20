@@ -274,7 +274,9 @@ function parseEnerfloCreateCustomerId(responseText: string): string | null {
     if (numericId != null) return String(numericId);
     // fallback: UUID from customer create endpoints
     const c = (j.customer ?? j.data ?? j) as Record<string, unknown>;
-    const id = j.id ?? c.id ?? c.uuid;
+    // lead/add returns { data: { lead: { id: 12345 } } } — check data.lead.id too
+    const leadObj = c.lead as Record<string, unknown> | undefined;
+    const id = j.id ?? c.id ?? c.uuid ?? leadObj?.id;
     if (typeof id === "string" && UUID_RE.test(id)) return id;
     if (typeof id === "number") return String(id);
   } catch {
