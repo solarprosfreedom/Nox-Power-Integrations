@@ -2038,106 +2038,16 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
 
   // ── Step 4: /calendar/event/add ──────────────────────────────────────────
 
-  let step4Ok     = false;
-  let step4Status: number | null = null;
-  let step4Preview = "";
-  let calendarEventId: string | null = null;
-  let step4Action = "create";
-
-  if (terrosKey) {
-    // Dedup guard: if a Terros calendar event already exists for this Enerflo appointment,
-    // skip creating a duplicate. Two scenarios:
-    //   - event was just created and Terros fired update_appointment back at us
-    //   - event was originally created from Terros (notes already contain [Enerflo:{id}])
-    // Match strategies (in order): notes marker, then title (deterministic).
-    if (accountId) {
-      try {
-        const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
-          method:  "POST",
-          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body:    JSON.stringify({ accountId, pageSize: 100 }),
-        });
-        if (listRes.ok) {
-          const raw    = await listRes.text();
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          const evts   = parsed.events as Record<string, unknown>[] | undefined;
-          const marker = `[Enerflo:${enerfloAppointmentId}]`;
-          // new_appointment: only skip if THIS EXACT appointment ID is already stamped in notes.
-          // Do NOT match by title — the same customer can have multiple appointments, and stale
-          // events from previous test runs would incorrectly block all future appointments.
-          if (Array.isArray(evts) && evts.length > 0) {
-            if (evts.some(e => typeof e.notes === "string" && (e.notes as string).includes(marker))) {
-              step4Action  = "skipped-duplicate";
-              step4Ok      = true;
-              step4Preview = `Existing event found (notes-marker [Enerflo:${enerfloAppointmentId}]) — skipping duplicate.`;
-            }
-          }
-        }
-      } catch { /* best-effort — fall through to create */ }
-    }
-
-    if (step4Action !== "skipped-duplicate") {
-    const apptTypeName = payload.appointment_type?.name ?? "Consultation";
-    const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
-
-    const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
-    const eventBody: Record<string, unknown> = {
-      ...(accountId         ? { accountId }                                       : {}),
-      ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
-      ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
-      eventType: "Consultation",
-      title:     eventTitle || "Consultation",
-      eventDate: startTimeMs,
-      duration:  durationMinutes,
-      ...(notes  ? { notes }                                           : {}),
-      ...((customerAddr?.street || customerAddr?.city || customerAddr?.full_address) ? {
-        location: {
-          ...(customerAddr.street       ? { line1:       customerAddr.street }      : {}),
-          ...(customerAddr.full_address ? { oneLine:     customerAddr.full_address } : {}),
-          ...(customerAddr.city         ? { locality:    customerAddr.city }         : {}),
-          ...(customerAddr.state        ? { countrySubd: customerAddr.state }        : {}),
-          ...(customerAddr.zip          ? { postal1:     customerAddr.zip }          : {}),
-          ...((customerAddr.latitude && customerAddr.longitude) ? {
-            latitude:  parseFloat(customerAddr.latitude),
-            longitude: parseFloat(customerAddr.longitude),
-          } : {}),
-        },
-      } : {}),
-    };
-
-    try {
-      const r = await fetch(`${terrosBase}/calendar/event/add`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ event: eventBody }),
-      });
-      step4Status  = r.status;
-      const raw    = await r.text();
-      step4Preview = raw.slice(0, 400);
-      step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
-      if (step4Ok) {
-        try {
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          const evt    = (parsed.event ?? parsed) as Record<string, unknown>;
-          calendarEventId = (evt.eventId ?? evt.id) as string | null ?? null;
-        } catch { /* ignore */ }
-      }
-    } catch (e) {
-      step4Preview = e instanceof Error ? e.message : String(e);
-    }
-
-    await writeApiLog({
-      operation: `webhook:enerflo-v2:new-appointment:calendar-event-${step4Action}`,
-      vendor: "terros",
-      method: "POST",
-      url: `${terrosBase}/calendar/event/add`,
-      hadApiKey: Boolean(terrosKey),
-      status: step4Status,
-      ok: step4Ok,
-      responsePreview: step4Preview,
-    });
-    } // end if (step4Action !== "skipped-duplicate")
-  }
+  // Calendar event creation is intentionally NOT done here.
+  // Enerflo fires both new_appointment and update_appointment for every appointment creation,
+  // causing a race condition where both handlers run simultaneously, both find no existing event,
+  // and both create a duplicate. update_appointment is responsible for all calendar event
+  // creation/updates — it fires immediately after new_appointment and has proper dedup logic.
+  const step4Ok      = false;
+  const step4Status: number | null = null;
+  const step4Preview = "skipped: calendar event handled by update_appointment";
+  const calendarEventId: string | null = null;
+  const step4Action  = "skipped-handled-by-update";
 
   return NextResponse.json({
     received: true,
