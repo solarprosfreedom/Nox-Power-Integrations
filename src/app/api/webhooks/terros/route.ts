@@ -815,6 +815,18 @@ async function handleUpdate(
     customerUuid = await findEnerfloCustomerIdByEmail(residentEmail, terrosAccountId);
   }
 
+  // Final fallback: use the raw numeric externalLeadId stored by handleAdd.
+  // When an account is created in Terros without a resident (no email to resolve UUID),
+  // handleAdd stores the Enerflo numeric ID directly. UUID_RE rejects it above, so we
+  // pick it up here so subsequent resident-add updates can still reach Enerflo.
+  if (!customerUuid) {
+    const rawId =
+      merged.externalLeadId ??
+      webhookData.externalLeadId ??
+      (typeof full?.externalLeadId === "string" ? full.externalLeadId : null);
+    if (rawId && /^\d+$/.test(rawId.trim())) customerUuid = rawId.trim();
+  }
+
   if (!customerUuid) {
     return NextResponse.json({
       received: true,
