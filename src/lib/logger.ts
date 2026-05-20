@@ -112,41 +112,60 @@ export async function writeApiLog(
 export async function acquireCalendarEventLock(
   enerfloAppointmentId: number
 ): Promise<boolean> {
-  const supabase = getSupabase();
-  if (!supabase) return true;
+  // Wrap everything in try/catch — if Supabase is unavailable or throws for any
+  // reason we must not crash the calling webhook handler. Returning true lets
+  // event creation proceed so nothing is silently dropped.
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return true;
 
-  const lockId        = crypto.randomUUID();
-  const lockTimestamp = new Date().toISOString();
+    const lockId        = crypto.randomUUID();
+    const lockTimestamp = new Date().toISOString();
 
-  await supabase.from("api_logs").insert({
-    id:              lockId,
-    timestamp:       lockTimestamp,
-    operation:       "calendar-event-lock",
-    vendor:          "terros",
-    method:          "POST",
-    url:             "",
-    had_api_key:     false,
-    status:          null,
-    status_text:     null,
-    ok:              false,
-    response_preview: String(enerfloAppointmentId),
-    fetch_error:     null,
-  });
+    const { error: insertError } = await supabase.from("api_logs").insert({
+      id:               lockId,
+      timestamp:        lockTimestamp,
+      operation:        "calendar-event-lock",
+      vendor:           "terros",
+      method:           "POST",
+      url:              "",
+      had_api_key:      false,
+      status:           null,
+      status_text:      null,
+      ok:               false,
+      response_preview: String(enerfloAppointmentId),
+      fetch_error:      null,
+    });
+    if (insertError) {
+      console.error("[LOCK] insert failed:", insertError.message);
+      return true; // allow on insert error
+    }
 
-  // Give concurrent requests 300 ms to write their own lock entries
-  await new Promise<void>(resolve => setTimeout(resolve, 300));
+    // Give concurrent requests 300 ms to write their own lock entries
+    await new Promise<void>(resolve => setTimeout(resolve, 300));
 
-  const cutoff = new Date(Date.now() - 60_000).toISOString();
-  const { data } = await supabase
-    .from("api_logs")
-    .select("id")
-    .eq("operation", "calendar-event-lock")
-    .eq("response_preview", String(enerfloAppointmentId))
-    .gte("timestamp", cutoff)
-    .order("timestamp", { ascending: true })
-    .limit(1);
+    // 10-second window: wide enough for concurrent fires (< 2 s apart),
+    // narrow enough that re-testing the same appointment after a few seconds works.
+    const cutoff = new Date(Date.now() - 10_000).toISOString();
+    const { data, error: queryError } = await supabase
+      .from("api_logs")
+      .select("id")
+      .eq("operation", "calendar-event-lock")
+      .eq("response_preview", String(enerfloAppointmentId))
+      .gte("timestamp", cutoff)
+      .order("timestamp", { ascending: true })
+      .limit(1);
 
-  return data?.[0]?.id === lockId;
+    if (queryError) {
+      console.error("[LOCK] query failed:", queryError.message);
+      return true; // allow on query error
+    }
+
+    return data?.[0]?.id === lockId;
+  } catch (err) {
+    console.error("[LOCK] unexpected error:", err);
+    return true; // allow on any unexpected error
+  }
 }
 
 export async function getAllLogs(): Promise<ApiLog[]> {

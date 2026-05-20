@@ -318,10 +318,20 @@ export async function POST(req: NextRequest) {
       return handleCustomerUpdatedV2(payload as unknown as CustomerUpdatedV2Payload);
 
     case "new_appointment":
-      return handleNewAppointment(body as unknown as NewAppointmentPayload);
+      try {
+        return await handleNewAppointment(body as unknown as NewAppointmentPayload);
+      } catch (err) {
+        console.error("[new_appointment] unhandled error:", err);
+        return NextResponse.json({ received: true, event: "new_appointment", error: String(err) }, { status: 200 });
+      }
 
     case "update_appointment":
-      return handleUpdateAppointment(body as unknown as NewAppointmentPayload);
+      try {
+        return await handleUpdateAppointment(body as unknown as NewAppointmentPayload);
+      } catch (err) {
+        console.error("[update_appointment] unhandled error:", err);
+        return NextResponse.json({ received: true, event: "update_appointment", error: String(err) }, { status: 200 });
+      }
 
     case "update_customer":
     case "new_customer":
@@ -2340,7 +2350,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ accountId, pageSize: 100 }),
+        body: JSON.stringify({ accountId, size: 200 }),
       });
       if (listRes.ok) {
         const raw    = await listRes.text();
@@ -2382,8 +2392,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         enerfloAppointmentId,
         accountId,
         existingEventId,
-        listPreview: step4ListPreview,
-      }).slice(0, 800),
+        resolvedLocationUsed: resolvedLocation,
+        listRaw: step4ListPreview,
+      }).slice(0, 1200),
     });
 
     const apptTypeName = payload.appointment_type?.name ?? "Consultation";
