@@ -95,6 +95,60 @@ export async function writeApiLog(
   return full;
 }
 
+/**
+ * Distributed lock for calendar event creation.
+ *
+ * When Enerflo fires update_appointment 3× simultaneously for the same
+ * appointment, all three requests race to create the event. This function
+ * uses Supabase as a coordination point:
+ *   1. Write our lock entry immediately (with our unique lockId).
+ *   2. Wait 300 ms so concurrent requests also write their entries.
+ *   3. Query for the EARLIEST lock entry for this appointment.
+ *   4. Return true only if we are the earliest writer → we won.
+ *
+ * Returns true (won = proceed) when Supabase is unavailable so we don't
+ * silently swallow events in environments without a DB.
+ */
+export async function acquireCalendarEventLock(
+  enerfloAppointmentId: number
+): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return true;
+
+  const lockId        = crypto.randomUUID();
+  const lockTimestamp = new Date().toISOString();
+
+  await supabase.from("api_logs").insert({
+    id:              lockId,
+    timestamp:       lockTimestamp,
+    operation:       "calendar-event-lock",
+    vendor:          "terros",
+    method:          "POST",
+    url:             "",
+    had_api_key:     false,
+    status:          null,
+    status_text:     null,
+    ok:              false,
+    response_preview: String(enerfloAppointmentId),
+    fetch_error:     null,
+  });
+
+  // Give concurrent requests 300 ms to write their own lock entries
+  await new Promise<void>(resolve => setTimeout(resolve, 300));
+
+  const cutoff = new Date(Date.now() - 60_000).toISOString();
+  const { data } = await supabase
+    .from("api_logs")
+    .select("id")
+    .eq("operation", "calendar-event-lock")
+    .eq("response_preview", String(enerfloAppointmentId))
+    .gte("timestamp", cutoff)
+    .order("timestamp", { ascending: true })
+    .limit(1);
+
+  return data?.[0]?.id === lockId;
+}
+
 export async function getAllLogs(): Promise<ApiLog[]> {
   const supabase = getSupabase();
   if (supabase) {

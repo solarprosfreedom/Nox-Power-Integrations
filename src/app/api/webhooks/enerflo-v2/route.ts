@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { writeApiLog } from "@/lib/logger";
+import { writeApiLog, acquireCalendarEventLock } from "@/lib/logger";
 import { env } from "@/lib/env";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -2273,6 +2273,29 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   let step4Action  = "none";
 
   if (accountId && terrosKey) {
+    // Acquire a distributed lock so concurrent update_appointment fires (Enerflo sends 2-3
+    // for every appointment creation) don't all race to create the same event simultaneously.
+    // The earliest writer among concurrent requests wins; the others skip event creation.
+    const wonLock = await acquireCalendarEventLock(enerfloAppointmentId);
+    if (!wonLock) {
+      step4Action  = "skipped-lock-lost";
+      step4Ok      = true;
+      step4Preview = "Another concurrent update_appointment request won the lock — skipping to prevent duplicate.";
+      await writeApiLog({
+        operation: "webhook:enerflo-v2:update-appointment:find-existing-event",
+        vendor: "terros",
+        method: "POST",
+        url: `${terrosBase}/calendar/event/list`,
+        hadApiKey: Boolean(terrosKey),
+        status: 200,
+        ok: false,
+        responsePreview: JSON.stringify({ enerfloAppointmentId, accountId, skipped: "lock-lost" }).slice(0, 400),
+      });
+    }
+
+    if (!wonLock) {
+      // fall through to return
+    } else {
     // 4a: list all events for the account and find the existing one for this Enerflo appointment.
     // Try matching strategies in order:
     //   1) notes contain [Enerflo:{id}]          — most reliable if list returns notes
@@ -2415,6 +2438,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       ok: step4Ok,
       responsePreview: step4Preview,
     });
+    } // end else (wonLock)
   }
 
   return NextResponse.json({
