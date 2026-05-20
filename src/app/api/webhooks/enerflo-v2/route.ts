@@ -2196,6 +2196,24 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     } catch { /* best-effort */ }
   }
 
+  // ── Build location (shared by step 3b account update and step 4 event) ──
+  // Prefer address from the Enerflo payload; fall back to the Terros account's
+  // existing location (captured from the account/upsert response above).
+  const hasPayloadAddr = !!(customerAddr?.street || customerAddr?.city || customerAddr?.full_address);
+  const resolvedLocation: Record<string, unknown> | null = hasPayloadAddr
+    ? {
+        ...(customerAddr!.street       ? { line1:       customerAddr!.street }      : {}),
+        ...(customerAddr!.full_address ? { oneLine:     customerAddr!.full_address } : {}),
+        ...(customerAddr!.city         ? { locality:    customerAddr!.city }         : {}),
+        ...(customerAddr!.state        ? { countrySubd: customerAddr!.state }        : {}),
+        ...(customerAddr!.zip          ? { postal1:     customerAddr!.zip }          : {}),
+        ...((customerAddr!.latitude && customerAddr!.longitude) ? {
+          latitude:  parseFloat(customerAddr!.latitude),
+          longitude: parseFloat(customerAddr!.longitude),
+        } : {}),
+      }
+    : (accountLocation ?? null);
+
   // ── Step 2: resolve closer ────────────────────────────────────────────────
 
   let closerUserId: string | null = null;
@@ -2241,8 +2259,10 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       });
     }
 
-    // 3b: account/upsert — set closerId (account/update only logs to closerHistory, doesn't update the displayed Closer)
-    if (closerUserId && (customerUuid ?? customerNumericId)) {
+    // 3b: account/upsert — set closerId + location
+    // account/update only logs closerId to history; upsert is required for the Assignment panel.
+    // We also write location here so the calendar list "Address" column is populated.
+    if ((closerUserId || resolvedLocation) && (customerUuid ?? customerNumericId)) {
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2250,7 +2270,11 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         const r = await fetch(`${terrosBase}/account/upsert`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: { externalLeadId: customerUuid ?? customerNumericId, closerId: closerUserId } }),
+          body: JSON.stringify({ account: {
+            externalLeadId: customerUuid ?? customerNumericId,
+            ...(closerUserId     ? { closerId: closerUserId }     : {}),
+            ...(resolvedLocation ? { location: resolvedLocation } : {}),
+          } }),
         });
         step3bStatus  = r.status;
         const raw     = await r.text();
@@ -2366,23 +2390,6 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
     const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
-    // Build location: prefer live address from Enerflo payload; fall back to
-    // the address already stored on the Terros account (captured during lookup).
-    const hasPayloadAddr = !!(customerAddr?.street || customerAddr?.city || customerAddr?.full_address);
-    const eventLocation: Record<string, unknown> | null = hasPayloadAddr
-      ? {
-          ...(customerAddr!.street       ? { line1:       customerAddr!.street }       : {}),
-          ...(customerAddr!.full_address ? { oneLine:     customerAddr!.full_address }  : {}),
-          ...(customerAddr!.city         ? { locality:    customerAddr!.city }          : {}),
-          ...(customerAddr!.state        ? { countrySubd: customerAddr!.state }         : {}),
-          ...(customerAddr!.zip          ? { postal1:     customerAddr!.zip }           : {}),
-          ...((customerAddr!.latitude && customerAddr!.longitude) ? {
-            latitude:  parseFloat(customerAddr!.latitude),
-            longitude: parseFloat(customerAddr!.longitude),
-          } : {}),
-        }
-      : (accountLocation ?? null);
-
     const eventFields: Record<string, unknown> = {
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
@@ -2391,7 +2398,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       notes,
       ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
       ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
-      ...(eventLocation     ? { location: eventLocation }                          : {}),
+      ...(resolvedLocation  ? { location: resolvedLocation }                       : {}),
     };
 
     if (existingEventId) {
