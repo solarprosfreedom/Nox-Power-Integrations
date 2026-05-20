@@ -2543,10 +2543,11 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   // ── Step 1: GET /api/v3/customers/{id} — uuid, agent_user_id, setter_user_id, office_id ──
   // v3 endpoint returns all assignment fields directly — no GraphQL needed.
 
-  let customerUuid:    string | null = null;
-  let agentNumericId:  string | null = null;
-  let setterNumericId: string | null = null;
-  let v3CustomerRaw:   Record<string, unknown> = {};
+  let customerUuid:         string | null = null;
+  let terrosAccountIdFromMap: string | null = null;
+  let agentNumericId:       string | null = null;
+  let setterNumericId:      string | null = null;
+  let v3CustomerRaw:        Record<string, unknown> = {};
   let step1Ok = false;
 
   if (numericId && enerfloKey) {
@@ -2567,6 +2568,17 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
             const extId = map.external_id as string | undefined;
             if (extId && /^[0-9a-f-]{36}$/i.test(extId)) {
               customerUuid = extId;
+              break;
+            }
+          }
+        }
+        // Fallback: if still no UUID, look for a Terros Account ID in integration_maps
+        // (accounts created in Terros first store "Account.xxx" as the external_id)
+        if (!customerUuid && Array.isArray(parsed.integration_maps)) {
+          for (const map of parsed.integration_maps as Record<string, unknown>[]) {
+            const extId = map.external_id as string | undefined;
+            if (extId?.startsWith("Account.")) {
+              terrosAccountIdFromMap = extId;
               break;
             }
           }
@@ -2683,10 +2695,13 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
 
   const accountFields: Record<string, unknown> = {
     // externalLeadId = customer UUID — upsert key shared with customer.created
-    ...(customerUuid  ? { externalLeadId: customerUuid }              : {}),
-    ...(customerName  ? { name: customerName }                         : {}),
-    ...(ownerId       ? { ownerId }                                    : {}),
-    ...(closerId      ? { closerId }                                   : {}),
+    ...(customerUuid          ? { externalLeadId: customerUuid }        : {}),
+    // Fallback: if customer has no UUID (v1 partner-created), use the Terros accountId
+    // stored in integration_maps to directly target the right account.
+    ...(terrosAccountIdFromMap ? { accountId: terrosAccountIdFromMap }  : {}),
+    ...(customerName  ? { name: customerName }                          : {}),
+    ...(ownerId       ? { ownerId }                                     : {}),
+    ...(closerId      ? { closerId }                                    : {}),
     ...(Object.keys(residentFields).length > 0 ? { resident: residentFields } : {}),
   };
 
