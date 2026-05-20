@@ -2014,8 +2014,9 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
       });
     }
 
-    // 3b: account/upsert — set closerId (account/update only logs to closerHistory, doesn't update the displayed Closer)
-    if (closerUserId && (customerUuid ?? customerNumericId)) {
+    // 3b: account/upsert — set closerId using the accountId we already resolved in step 1.
+    // Using accountId (not externalLeadId) prevents creating duplicate accounts.
+    if (closerUserId && accountId) {
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2023,7 +2024,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         const r = await fetch(`${terrosBase}/account/upsert`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: { externalLeadId: customerUuid ?? customerNumericId, closerId: closerUserId } }),
+          body: JSON.stringify({ account: { accountId, closerId: closerUserId } }),
         });
         step3bStatus  = r.status;
         const raw     = await r.text();
@@ -2269,10 +2270,12 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       });
     }
 
-    // 3b: account/upsert — set closerId + location
-    // account/update only logs closerId to history; upsert is required for the Assignment panel.
-    // We also write location here so the calendar list "Address" column is populated.
-    if ((closerUserId || resolvedLocation) && (customerUuid ?? customerNumericId)) {
+    // 3b: account/update — set closerId + location on the EXACT account we found in step 1.
+    // We use accountId (not externalLeadId) to avoid creating a duplicate account when the
+    // externalLeadId stored in Terros (numeric) doesn't match what we'd look up (UUID or string).
+    // account/update alone doesn't persist closerId in the Assignment panel, so we also call
+    // account/upsert but with accountId to guarantee we're touching the right record.
+    if ((closerUserId || resolvedLocation) && accountId) {
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2281,7 +2284,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
           body: JSON.stringify({ account: {
-            externalLeadId: customerUuid ?? customerNumericId,
+            accountId,
             ...(closerUserId     ? { closerId: closerUserId }     : {}),
             ...(resolvedLocation ? { location: resolvedLocation } : {}),
           } }),
@@ -2421,16 +2424,21 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     if (existingEventId) {
       // 4b: update the existing event
       step4Action = "update";
+      const updateBody = { event: { eventId: existingEventId, ...eventFields } };
       try {
         const r = await fetch(`${terrosBase}/calendar/event/update`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ event: { eventId: existingEventId, ...eventFields } }),
+          body: JSON.stringify(updateBody),
         });
         step4Status  = r.status;
         const raw    = await r.text();
-        step4Preview = raw.slice(0, 400);
         step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+        step4Preview = JSON.stringify({
+          requestBody: updateBody,
+          responseStatus: r.status,
+          responseBody: raw.slice(0, 600),
+        }).slice(0, 1200);
         if (step4Ok) {
           try {
             const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -2439,34 +2447,38 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           } catch { calendarEventId = existingEventId; }
         }
       } catch (e) {
-        step4Preview = e instanceof Error ? e.message : String(e);
+        step4Preview = JSON.stringify({ requestBody: updateBody, error: String(e) });
       }
     } else {
-      // 4c: no matching event found — create a new one as fallback
+      // 4c: no matching event found — create a new one
       step4Action = "create";
+      const createBody = { event: { accountId, ...eventFields } };
       try {
         const r = await fetch(`${terrosBase}/calendar/event/add`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ event: { accountId, ...eventFields } }),
+          body: JSON.stringify(createBody),
         });
         step4Status  = r.status;
         const raw    = await r.text();
-        step4Preview = raw.slice(0, 400);
         step4Ok      = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+        step4Preview = JSON.stringify({
+          requestBody: createBody,
+          responseStatus: r.status,
+          responseBody: raw.slice(0, 600),
+        }).slice(0, 1200);
         if (step4Ok) {
           try {
             const parsed = JSON.parse(raw) as Record<string, unknown>;
             const evt    = (parsed.event ?? parsed) as Record<string, unknown>;
             calendarEventId = (evt.eventId ?? evt.id) as string | null ?? null;
-            // Persist the mapping so future update_appointment fires can find this event
             if (calendarEventId) {
               await saveCalendarEventMapping(enerfloAppointmentId, calendarEventId);
             }
           } catch { /* ignore */ }
         }
       } catch (e) {
-        step4Preview = e instanceof Error ? e.message : String(e);
+        step4Preview = JSON.stringify({ requestBody: createBody, error: String(e) });
       }
     }
 
