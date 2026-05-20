@@ -2409,18 +2409,18 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     const apptTypeName = payload.appointment_type?.name ?? "Consultation";
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
-    // Do NOT set ownerId: Terros defaults it to the API key owner (Jonas Lim).
-    // Events only appear in the account Appointments section when ownerId equals
-    // the API key owner; setting it to the actual setter hides events from that section.
+    const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
     const eventFields: Record<string, unknown> = {
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
       eventDate: startTimeMs,
       duration:  durationMinutes,
       notes,
-      // Only attendeeId (Closer) — NOT closerId (undocumented, hides from Appointments section).
-      ...(closerUserId     ? { attendeeId: closerUserId }   : {}),
-      ...(resolvedLocation ? { location: resolvedLocation } : {}),
+      ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }  : {}),
+      // Only attendeeId — NOT closerId (undocumented field that hides the event
+      // from the account Appointments section) and NOT actionId (same issue).
+      ...(closerUserId      ? { attendeeId: closerUserId }    : {}),
+      ...(resolvedLocation  ? { location: resolvedLocation }  : {}),
     };
 
     if (existingEventId) {
