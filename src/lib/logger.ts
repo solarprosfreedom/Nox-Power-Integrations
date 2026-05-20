@@ -168,6 +168,63 @@ export async function acquireCalendarEventLock(
   }
 }
 
+/**
+ * Persist the mapping from Enerflo appointment ID → Terros calendar event ID.
+ * Stored as a dedicated log entry so update_appointment can look it up even
+ * when calendar/event/list doesn't return notes.
+ */
+export async function saveCalendarEventMapping(
+  enerfloAppointmentId: number,
+  terrosEventId: string
+): Promise<void> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    await supabase.from("api_logs").insert({
+      id:               crypto.randomUUID(),
+      timestamp:        new Date().toISOString(),
+      operation:        "calendar-event-id-map",
+      vendor:           "terros",
+      method:           "POST",
+      url:              "",
+      had_api_key:      false,
+      status:           null,
+      status_text:      null,
+      ok:               true,
+      response_preview: JSON.stringify({ enerfloAppointmentId, terrosEventId }),
+      fetch_error:      null,
+    });
+  } catch (err) {
+    console.error("[EVENT MAP] save failed:", err);
+  }
+}
+
+/**
+ * Look up the Terros calendar event ID previously saved for an Enerflo appointment.
+ * Returns null if no mapping exists (event was never created via this system).
+ */
+export async function getCalendarEventId(
+  enerfloAppointmentId: number
+): Promise<string | null> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    const { data } = await supabase
+      .from("api_logs")
+      .select("response_preview")
+      .eq("operation", "calendar-event-id-map")
+      .ilike("response_preview", `%"enerfloAppointmentId":${enerfloAppointmentId}%`)
+      .order("timestamp", { ascending: false })
+      .limit(1);
+    if (!data?.[0]?.response_preview) return null;
+    const parsed = JSON.parse(data[0].response_preview) as { terrosEventId?: string };
+    return parsed.terrosEventId ?? null;
+  } catch (err) {
+    console.error("[EVENT MAP] lookup failed:", err);
+    return null;
+  }
+}
+
 export async function getAllLogs(): Promise<ApiLog[]> {
   const supabase = getSupabase();
   if (supabase) {

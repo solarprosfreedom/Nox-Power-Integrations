@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { writeApiLog, acquireCalendarEventLock } from "@/lib/logger";
+import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId } from "@/lib/logger";
 import { env } from "@/lib/env";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -2339,45 +2339,51 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     if (!wonLock) {
       // fall through to return
     } else {
-    // 4a: list all events for the account and find the existing one for this Enerflo appointment.
-    // Try matching strategies in order:
-    //   1) notes contain [Enerflo:{id}]          — most reliable if list returns notes
-    //   2) title + eventDate match               — title is deterministic; eventDate scopes to this
-    //                                               specific appointment so stale events won't match
+    // 4a: find the existing Terros event for this Enerflo appointment.
+    // Strategy order (most → least reliable):
+    //   1) Supabase id-map   — saved when we first created the event; survives date changes
+    //   2) notes [Enerflo:ID]— in the event list (only works if Terros returns notes in list)
+    //   3) title + eventDate — fallback for events created before the id-map feature
     let existingEventId: string | null = null;
     let step4ListPreview = "";
-    try {
-      const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ accountId, size: 200 }),
-      });
-      if (listRes.ok) {
-        const raw    = await listRes.text();
-        step4ListPreview = raw.slice(0, 600);
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const evts   = parsed.events as Record<string, unknown>[] | undefined;
-        const marker = `[Enerflo:${enerfloAppointmentId}]`;
-        if (Array.isArray(evts) && evts.length > 0) {
-          // Strategy 1: match by notes marker (requires list to return notes)
-          const byNotes = evts.find(e => typeof e.notes === "string" && (e.notes as string).includes(marker));
-          if (byNotes) {
-            existingEventId = (byNotes.eventId ?? byNotes.id) as string;
-          } else {
-            // Strategy 2: title + eventDate — unique per appointment instance
-            const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
-            const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
-            const byTitleAndDate = evts.find(e =>
-              typeof e.title === "string" && e.title === expectedTitle &&
-              (e.eventDate === startTimeMs || e.eventDate === String(startTimeMs))
-            );
-            if (byTitleAndDate) {
-              existingEventId = (byTitleAndDate.eventId ?? byTitleAndDate.id) as string;
+
+    // Strategy 1: Supabase mapping (most reliable for updates)
+    existingEventId = await getCalendarEventId(enerfloAppointmentId);
+
+    // Strategies 2 & 3: search the event list (needed when id-map has no entry yet)
+    if (!existingEventId) {
+      try {
+        const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+          body: JSON.stringify({ accountId, size: 200 }),
+        });
+        if (listRes.ok) {
+          const raw    = await listRes.text();
+          step4ListPreview = raw.slice(0, 600);
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          const evts   = parsed.events as Record<string, unknown>[] | undefined;
+          const marker = `[Enerflo:${enerfloAppointmentId}]`;
+          if (Array.isArray(evts) && evts.length > 0) {
+            // Strategy 2: notes marker
+            const byNotes = evts.find(e => typeof e.notes === "string" && (e.notes as string).includes(marker));
+            if (byNotes) {
+              existingEventId = (byNotes.eventId ?? byNotes.id) as string;
+            } else {
+              // Strategy 3: title only (date may have changed, so don't require date match)
+              const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
+              const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
+              const byTitle = evts.find(e =>
+                typeof e.title === "string" && e.title === expectedTitle
+              );
+              if (byTitle) {
+                existingEventId = (byTitle.eventId ?? byTitle.id) as string;
+              }
             }
           }
         }
-      }
-    } catch { /* best-effort */ }
+      } catch { /* best-effort */ }
+    }
 
     // Log what we got back from list and whether we found a match
     await writeApiLog({
@@ -2453,6 +2459,10 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
             const parsed = JSON.parse(raw) as Record<string, unknown>;
             const evt    = (parsed.event ?? parsed) as Record<string, unknown>;
             calendarEventId = (evt.eventId ?? evt.id) as string | null ?? null;
+            // Persist the mapping so future update_appointment fires can find this event
+            if (calendarEventId) {
+              await saveCalendarEventMapping(enerfloAppointmentId, calendarEventId);
+            }
           } catch { /* ignore */ }
         }
       } catch (e) {
