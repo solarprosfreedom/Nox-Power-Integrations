@@ -2144,6 +2144,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     }
   }
 
+  // Fallback location if payload.customer.address is empty — read from Terros account
+  let accountLocation: Record<string, unknown> | null = null;
+
   if (customerUuid && terrosKey) {
     try {
       const r = await fetch(`${terrosBase}/account/upsert`, {
@@ -2160,6 +2163,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           accountId = aid;
           accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
           step1Source = "upsert:uuid";
+          if (acc.location && typeof acc.location === "object") {
+            accountLocation = acc.location as Record<string, unknown>;
+          }
         }
       }
     } catch { /* best-effort */ }
@@ -2182,6 +2188,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           accountId = aid;
           accountOwnerIdFromLookup = (match?.ownerId as string | undefined) ?? null;
           step1Source = "list:email";
+          if (match?.location && typeof match.location === "object") {
+            accountLocation = match.location as Record<string, unknown>;
+          }
         }
       }
     } catch { /* best-effort */ }
@@ -2357,6 +2366,23 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
     const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
+    // Build location: prefer live address from Enerflo payload; fall back to
+    // the address already stored on the Terros account (captured during lookup).
+    const hasPayloadAddr = !!(customerAddr?.street || customerAddr?.city || customerAddr?.full_address);
+    const eventLocation: Record<string, unknown> | null = hasPayloadAddr
+      ? {
+          ...(customerAddr!.street       ? { line1:       customerAddr!.street }       : {}),
+          ...(customerAddr!.full_address ? { oneLine:     customerAddr!.full_address }  : {}),
+          ...(customerAddr!.city         ? { locality:    customerAddr!.city }          : {}),
+          ...(customerAddr!.state        ? { countrySubd: customerAddr!.state }         : {}),
+          ...(customerAddr!.zip          ? { postal1:     customerAddr!.zip }           : {}),
+          ...((customerAddr!.latitude && customerAddr!.longitude) ? {
+            latitude:  parseFloat(customerAddr!.latitude),
+            longitude: parseFloat(customerAddr!.longitude),
+          } : {}),
+        }
+      : (accountLocation ?? null);
+
     const eventFields: Record<string, unknown> = {
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
@@ -2365,19 +2391,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       notes,
       ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
       ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
-      ...((customerAddr?.street || customerAddr?.city || customerAddr?.full_address) ? {
-        location: {
-          ...(customerAddr.street       ? { line1:       customerAddr.street }       : {}),
-          ...(customerAddr.full_address ? { oneLine:     customerAddr.full_address }  : {}),
-          ...(customerAddr.city         ? { locality:    customerAddr.city }          : {}),
-          ...(customerAddr.state        ? { countrySubd: customerAddr.state }         : {}),
-          ...(customerAddr.zip          ? { postal1:     customerAddr.zip }           : {}),
-          ...((customerAddr.latitude && customerAddr.longitude) ? {
-            latitude:  parseFloat(customerAddr.latitude),
-            longitude: parseFloat(customerAddr.longitude),
-          } : {}),
-        },
-      } : {}),
+      ...(eventLocation     ? { location: eventLocation }                          : {}),
     };
 
     if (existingEventId) {
