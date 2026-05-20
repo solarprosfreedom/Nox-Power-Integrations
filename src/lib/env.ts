@@ -25,6 +25,8 @@ export const env = {
   terrosWorkflowClosedStageId: opt("TERROS_WORKFLOW_CLOSED_STAGE_ID"),
   /** Stage to set when an appointment is created. */
   terrosWorkflowAppointmentStageId: opt("TERROS_WORKFLOW_APPOINTMENT_STAGE_ID"),
+  /** Workflow action ID for "Appointment" — links calendar events to the account's Appointments section. */
+  terrosWorkflowAppointmentActionId: opt("TERROS_WORKFLOW_APPOINTMENT_ACTION_ID"),
   /** Stage to set when deal.created fires (rep opened a deal on the lead). */
   terrosWorkflowKnockStageId: opt("TERROS_WORKFLOW_KNOCK_STAGE_ID"),
   /**

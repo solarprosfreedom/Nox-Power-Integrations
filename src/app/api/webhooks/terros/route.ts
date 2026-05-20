@@ -992,6 +992,28 @@ function extractEventNoteMarker(data: TerrosEventData): string {
   return data.note ?? data.notes ?? "";
 }
 
+/**
+ * Clean an email address for use as the Enerflo `user` field.
+ *
+ * Enerflo users are registered under @noxpwr.com. Terros may store aliases
+ * with the same username but a different domain (@solarpros.io) or with
+ * a +alias suffix (e.g. user+axia@solarpros.io). Strip the alias and
+ * normalise the domain so Enerflo can resolve the user.
+ *
+ * Examples:
+ *   "claytongranch+axia@solarpros.io"  → "claytongranch@noxpwr.com"
+ *   "xanderdavis@solarpros.io"          → "xanderdavis@noxpwr.com"
+ *   "xanderdavis@noxpwr.com"            → "xanderdavis@noxpwr.com"  (unchanged)
+ */
+function cleanEmailForEnerflo(raw: string): string {
+  if (!raw) return raw;
+  // Strip +alias portion before @
+  let email = raw.replace(/\+[^@]+(?=@)/, "");
+  // Normalise domain: solarpros.io → noxpwr.com
+  email = email.replace(/@solarpros\.io$/i, "@noxpwr.com");
+  return email.toLowerCase().trim();
+}
+
 async function handleEventAdd(
   terrosBase: string,
   terrosKey: string,
@@ -1067,6 +1089,7 @@ async function handleEventAdd(
       enerfloStart,
       enerfloEnd,
       assigneeEmail,
+      assigneeEmailCleaned: assigneeEmail ? cleanEmailForEnerflo(assigneeEmail) : "",
       appointmentType,
     }).slice(0, 400),
   });
@@ -1111,13 +1134,14 @@ async function handleEventAdd(
   // ── Step 2: POST /v1/appointments ────────────────────────────────────────
   // Required: customer, appointment_type, start, end
   // Optional: user (email of assigned closer), creator
+  const cleanedAssigneeEmail = assigneeEmail ? cleanEmailForEnerflo(assigneeEmail) : "";
   const appointmentBody: Record<string, unknown> = {
     customer:         enerfloCustomer,
     appointment_type: appointmentType,
     start:            enerfloStart ?? "",
     end:              enerfloEnd ?? "",
   };
-  if (assigneeEmail) appointmentBody.user = assigneeEmail;
+  if (cleanedAssigneeEmail) appointmentBody.user = cleanedAssigneeEmail;
 
   const createLog = await enerfloRequest({
     operation: "webhook:terros:create-enerflo-appointment",
@@ -1320,10 +1344,11 @@ async function handleEventUpdate(
 
   // ── PUT /v1/appointments/{id} ─────────────────────────────────────────────
   // Enerflo update accepts: start, end (yyyy-mm-dd hh:mm:ss UTC), user (email)
+  const cleanedAssigneeEmail = assigneeEmail ? cleanEmailForEnerflo(assigneeEmail) : "";
   const updateBody: Record<string, unknown> = {};
-  if (enerfloStart) updateBody.start = enerfloStart;
-  if (enerfloEnd)   updateBody.end   = enerfloEnd;
-  if (assigneeEmail) updateBody.user = assigneeEmail;
+  if (enerfloStart)          updateBody.start = enerfloStart;
+  if (enerfloEnd)            updateBody.end   = enerfloEnd;
+  if (cleanedAssigneeEmail)  updateBody.user  = cleanedAssigneeEmail;
 
   const updateLog = await enerfloRequest({
     operation: "webhook:terros:update-enerflo-appointment",

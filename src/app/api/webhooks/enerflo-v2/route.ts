@@ -2410,15 +2410,19 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     const eventTitle   = `${apptTypeName} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
 
     const eventOwnerIdFinal = eventOwnerIdFromSetter ?? accountOwnerIdFromLookup;
+    // actionId links the calendar event to the "Appointments" section on the
+    // Terros account profile page (same ID Terros sets when scheduling from its UI).
+    const appointmentActionId = env.terrosWorkflowAppointmentActionId;
     const eventFields: Record<string, unknown> = {
       eventType: "Consultation",
       title:     eventTitle || "Consultation",
       eventDate: startTimeMs,
       duration:  durationMinutes,
       notes,
-      ...(eventOwnerIdFinal ? { ownerId: eventOwnerIdFinal }                      : {}),
-      ...(closerUserId      ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
-      ...(resolvedLocation  ? { location: resolvedLocation }                       : {}),
+      ...(eventOwnerIdFinal    ? { ownerId: eventOwnerIdFinal }                      : {}),
+      ...(closerUserId         ? { attendeeId: closerUserId, closerId: closerUserId } : {}),
+      ...(resolvedLocation     ? { location: resolvedLocation }                       : {}),
+      ...(appointmentActionId  ? { actionId: appointmentActionId }                    : {}),
     };
 
     if (existingEventId) {
