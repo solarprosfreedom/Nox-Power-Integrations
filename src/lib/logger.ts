@@ -180,6 +180,7 @@ export async function saveCalendarEventMapping(
   try {
     const supabase = getSupabase();
     if (!supabase) return;
+    // Store both directions in the JSON so we can look up by either key.
     await supabase.from("api_logs").insert({
       id:               crypto.randomUUID(),
       timestamp:        new Date().toISOString(),
@@ -196,6 +197,33 @@ export async function saveCalendarEventMapping(
     });
   } catch (err) {
     console.error("[EVENT MAP] save failed:", err);
+  }
+}
+
+/**
+ * Reverse-lookup: given a Terros event ID, find the Enerflo appointment ID
+ * that was created for it. The mapping is the same api_logs table used by
+ * saveCalendarEventMapping — we just search the JSON for the terrosEventId.
+ */
+export async function getEnerfloAppointmentIdByTerrosEventId(
+  terrosEventId: string
+): Promise<number | null> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    const { data } = await supabase
+      .from("api_logs")
+      .select("response_preview")
+      .eq("operation", "calendar-event-id-map")
+      .ilike("response_preview", `%"terrosEventId":"${terrosEventId}"%`)
+      .order("timestamp", { ascending: false })
+      .limit(1);
+    if (!data?.[0]?.response_preview) return null;
+    const parsed = JSON.parse(data[0].response_preview) as { enerfloAppointmentId?: number };
+    return parsed.enerfloAppointmentId ?? null;
+  } catch (err) {
+    console.error("[EVENT MAP] reverse lookup failed:", err);
+    return null;
   }
 }
 

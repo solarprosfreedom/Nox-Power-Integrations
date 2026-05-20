@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
-import { writeApiLog } from "@/lib/logger";
+import { writeApiLog, getEnerfloAppointmentIdByTerrosEventId } from "@/lib/logger";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,11 +66,14 @@ interface TerrosWebhookBody {
 interface TerrosEventData {
   id?: string;
   title?: string;
-  eventDate?: string;
+  eventDate?: string | number;
   duration?: number;
   eventType?: string;
+  /** Terros webhook sends the dedup marker as "note" (singular) */
+  note?: string;
+  /** Some older payloads may use "notes" (plural) — check both */
   notes?: string;
-  account?: { accountId?: string };
+  account?: { accountId?: string; externalLeadId?: string };
   owner?: { email?: string; userId?: string; firstName?: string; lastName?: string };
   attendee?: { email?: string; userId?: string; firstName?: string; lastName?: string };
   resident?: { email?: string; firstName?: string; lastName?: string; phone?: string };
@@ -576,7 +579,7 @@ export async function POST(req: NextRequest) {
 
   // ── Terros calendar Event entity ──────────────────────────────────────────
   if (entity === "Event") {
-    if (action !== "add") {
+    if (action !== "add" && action !== "update") {
       return NextResponse.json({
         received: true,
         skipped: true,
@@ -592,6 +595,9 @@ export async function POST(req: NextRequest) {
       });
     }
     try {
+      if (action === "update") {
+        return await handleEventUpdate(terrosBase, terrosKey, eventData);
+      }
       return await handleEventAdd(terrosBase, terrosKey, eventData);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -926,6 +932,66 @@ function terrosResidentFromAccount(full: Record<string, unknown>): TerrosResiden
  *  5. Stamp [Enerflo:{id}] back onto the Terros event notes so the reverse webhook
  *     (new_appointment coming back from Enerflo) can detect the duplicate and skip.
  */
+/**
+ * Convert a Terros eventDate to the format Enerflo's REST API expects:
+ *   "yyyy-mm-dd hh:mm:ss"  (UTC, no timezone suffix)
+ *
+ * Terros sends eventDate as an ISO 8601 string with timezone offset, e.g.
+ *   "2026-05-20T18:00:00.000-05:00"
+ * We parse it, convert to UTC, and reformat.
+ * Fallback: if the value looks like a ms timestamp we also handle that.
+ */
+function terrosEventDateToEnerflo(raw: string | number | undefined): string | null {
+  if (raw == null || raw === "") return null;
+  let d: Date;
+  const n = Number(raw);
+  if (!isNaN(n) && n > 1_000_000_000_000) {
+    d = new Date(n);
+  } else if (!isNaN(n) && n > 1_000_000_000) {
+    d = new Date(n * 1000);
+  } else {
+    d = new Date(String(raw));
+  }
+  if (isNaN(d.getTime())) return null;
+  // Format as "yyyy-mm-dd hh:mm:ss" UTC
+  const pad = (x: number) => String(x).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+    ` ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+  );
+}
+
+/**
+ * Add `durationMinutes` to an Enerflo-formatted date string and return
+ * the new "yyyy-mm-dd hh:mm:ss" UTC string.
+ */
+function addMinutesToEnerfloDate(enerfloDate: string, durationMinutes: number): string {
+  const d = new Date(enerfloDate.replace(" ", "T") + "Z");
+  d.setUTCMinutes(d.getUTCMinutes() + durationMinutes);
+  const pad = (x: number) => String(x).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+    ` ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+  );
+}
+
+/**
+ * Map a Terros eventType / title to an Enerflo appointment_type ID.
+ * 9164 = In-Home, 9166 = Virtual
+ */
+function resolveEnerfloAppointmentType(title?: string, eventType?: string): number {
+  const text = `${title ?? ""} ${eventType ?? ""}`.toLowerCase();
+  if (text.includes("virtual")) return 9166;
+  return 9164; // default to In-Home
+}
+
+/** Extract the [Enerflo:ID] dedup marker from a Terros event payload.
+ *  Terros sends the field as "note" (singular) in webhook payloads.
+ */
+function extractEventNoteMarker(data: TerrosEventData): string {
+  return data.note ?? data.notes ?? "";
+}
+
 async function handleEventAdd(
   terrosBase: string,
   terrosKey: string,
@@ -933,15 +999,21 @@ async function handleEventAdd(
 ): Promise<NextResponse> {
   const terrosEventId  = (data.id ?? "").trim();
   const accountId      = (data.account?.accountId ?? "").trim();
-  const ownerEmail     = (data.owner?.email ?? "").trim();
+  // Prefer attendee (Closer) email for Enerflo `user`; fall back to owner
+  const assigneeEmail  = (data.attendee?.email ?? data.owner?.email ?? "").trim();
   const residentEmail  = (data.resident?.email ?? "").trim();
-  const eventDate      = data.eventDate ?? "";
-  // notes may or may not be sent by the webhook — start with whatever is in the payload
-  let eventNotes       = typeof data.notes === "string" ? data.notes : "";
+  const enerfloStart   = terrosEventDateToEnerflo(data.eventDate);
+  const enerfloEnd     = enerfloStart
+    ? addMinutesToEnerfloDate(enerfloStart, data.duration ?? 60)
+    : null;
+  const appointmentType = resolveEnerfloAppointmentType(data.title, data.eventType);
 
-  // If notes weren't in the webhook payload, fetch the full event from Terros so we can
-  // check for the [Enerflo:ID] dedup marker (stamped when the event was created FROM Enerflo).
-  if (!eventNotes && terrosEventId && accountId && terrosKey) {
+  // ── Dedup guard ──────────────────────────────────────────────────────────
+  // Terros sends the dedup marker in "note" (singular). Check both "note" and
+  // "notes" in case of payload variation, then fall back to fetching the full event.
+  let eventNote = extractEventNoteMarker(data);
+
+  if (!eventNote && terrosEventId && accountId && terrosKey) {
     try {
       const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
         method:  "POST",
@@ -953,17 +1025,16 @@ async function handleEventAdd(
         const evts   = parsed.events as Record<string, unknown>[] | undefined;
         if (Array.isArray(evts)) {
           const thisEvt = evts.find(e => (e.eventId ?? e.id) === terrosEventId);
-          if (thisEvt && typeof thisEvt.notes === "string") {
-            eventNotes = thisEvt.notes;
+          if (thisEvt) {
+            // API may return "note" or "notes"
+            eventNote = String(thisEvt.note ?? thisEvt.notes ?? "");
           }
         }
       }
     } catch { /* best-effort */ }
   }
 
-  // Dedup guard: if this Terros event was originally created FROM Enerflo, its notes
-  // will already contain [Enerflo:ID]. Skip to avoid an infinite Terros→Enerflo→Terros loop.
-  if (/\[Enerflo:\d+\]/i.test(eventNotes)) {
+  if (/\[Enerflo:\d+\]/i.test(eventNote)) {
     await writeApiLog({
       operation: "webhook:terros:received-event-add",
       vendor: "terros",
@@ -974,11 +1045,11 @@ async function handleEventAdd(
       ok: true,
       responsePreview: JSON.stringify({
         terrosEventId, accountId, eventType: data.eventType,
-        skipped: true, reason: "Event already originated from Enerflo — dedup marker found in notes",
-        notesPreview: eventNotes.slice(0, 100),
+        skipped: true, reason: "Event already originated from Enerflo — dedup marker found",
+        notePreview: eventNote.slice(0, 100),
       }).slice(0, 400),
     });
-    return NextResponse.json({ received: true, action: "event-add", skipped: true, reason: "dedup:enerflo-marker-in-notes" });
+    return NextResponse.json({ received: true, action: "event-add", skipped: true, reason: "dedup:enerflo-marker-in-note" });
   }
 
   await writeApiLog({
@@ -993,56 +1064,60 @@ async function handleEventAdd(
       terrosEventId,
       accountId,
       eventType: data.eventType,
-      eventDate,
-    }).slice(0, 300),
+      enerfloStart,
+      enerfloEnd,
+      assigneeEmail,
+      appointmentType,
+    }).slice(0, 400),
   });
 
-  // ── Step 1: fetch Terros account → externalLeadId ────────────────────────
-  let externalLeadId: string | null = null;
-  if (accountId && terrosKey) {
+  // ── Step 1: resolve Enerflo customer (numeric ID or email) ───────────────
+  // Enerflo POST /v1/appointments accepts `customer` as numeric ID or email.
+  // Prefer the numeric externalLeadId from Terros; fall back to resident email.
+  let enerfloCustomer: string | null = null;
+
+  // Check inline externalLeadId in the webhook payload first (update payloads include it)
+  const inlineExtId = (data.account?.externalLeadId ?? "").trim();
+  if (inlineExtId && !UUID_RE.test(inlineExtId)) {
+    enerfloCustomer = inlineExtId;
+  } else if (accountId && terrosKey) {
     const acc = await fetchTerrosAccountById(terrosBase, terrosKey, accountId);
     if (acc) {
-      externalLeadId =
+      const eid =
         pickExternalLeadId(acc) ??
         (typeof acc.externalLeadId === "string" ? acc.externalLeadId.trim() : null);
+      if (eid && !UUID_RE.test(eid)) {
+        enerfloCustomer = eid;
+      }
     }
   }
 
-  // ── Step 2: resolve numeric Enerflo customer ID ──────────────────────────
-  // POST /api/v1/appointments requires a numeric customer_id, not a UUID.
-  let enerfloNumericCustomerId: string | null = null;
-
-  if (externalLeadId && !UUID_RE.test(externalLeadId)) {
-    enerfloNumericCustomerId = externalLeadId;
-  } else if (residentEmail) {
-    enerfloNumericCustomerId = await findEnerfloCustomerIdByEmail(residentEmail, accountId);
+  // Fall back to resident email — Enerflo accepts email as `customer` value
+  if (!enerfloCustomer && residentEmail) {
+    enerfloCustomer = residentEmail;
   }
 
-  if (!enerfloNumericCustomerId) {
+  if (!enerfloCustomer) {
     return NextResponse.json({
       received: true,
       action: "event-add",
       skipped: true,
-      reason:
-        "Could not resolve Enerflo numeric customer ID. Ensure the account has an externalLeadId or the resident email matches an Enerflo customer.",
+      reason: "Could not resolve Enerflo customer (no externalLeadId or resident email).",
       terrosEventId,
       accountId,
-      externalLeadId,
     });
   }
 
-  // ── Step 3: resolve Enerflo user numeric ID for assigned_to ─────────────
-  let assignedToId: number | null = null;
-  if (ownerEmail) {
-    assignedToId = await findEnerfloUserIdByEmail(ownerEmail);
-  }
-
-  // ── Step 4: POST /api/v1/appointments ────────────────────────────────────
+  // ── Step 2: POST /v1/appointments ────────────────────────────────────────
+  // Required: customer, appointment_type, start, end
+  // Optional: user (email of assigned closer), creator
   const appointmentBody: Record<string, unknown> = {
-    customer_id:      Number(enerfloNumericCustomerId),
-    appointment_date: eventDate,
+    customer:         enerfloCustomer,
+    appointment_type: appointmentType,
+    start:            enerfloStart ?? "",
+    end:              enerfloEnd ?? "",
   };
-  if (assignedToId != null) appointmentBody.assigned_to = assignedToId;
+  if (assigneeEmail) appointmentBody.user = assigneeEmail;
 
   const createLog = await enerfloRequest({
     operation: "webhook:terros:create-enerflo-appointment",
@@ -1075,7 +1150,9 @@ async function handleEventAdd(
         body:    JSON.stringify({
           event: {
             eventId: terrosEventId,
-            notes:   `[Enerflo:${enerfloAppointmentId}]`,
+            // Use "note" (singular) — that is the field name Terros sends back
+            // in its webhook payloads, which is what our dedup guard reads.
+            note:    `[Enerflo:${enerfloAppointmentId}]`,
           },
         }),
       });
@@ -1096,16 +1173,176 @@ async function handleEventAdd(
   }
 
   return NextResponse.json({
-    received:                 true,
-    action:                   "event-add",
+    received:             true,
+    action:               "event-add",
     terrosEventId,
     accountId,
-    externalLeadId,
-    enerfloNumericCustomerId,
-    assignedToId,
-    appointmentCreated:       createLog.ok,
-    enerfloStatus:            createLog.status,
+    enerfloCustomer,
+    assigneeEmail,
+    appointmentType,
+    enerfloStart,
+    enerfloEnd,
+    appointmentCreated:   createLog.ok,
+    enerfloStatus:        createLog.status,
     enerfloAppointmentId,
     stamp: { ok: stampOk, status: stampStatus },
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// handleEventUpdate  – Terros → Enerflo appointment rescheduling
+// ────────────────────────────────────────────────────────────────────────────
+async function handleEventUpdate(
+  terrosBase: string,
+  terrosKey: string,
+  data: TerrosEventData
+): Promise<NextResponse> {
+  const terrosEventId  = (data.id ?? "").trim();
+  const accountId      = (data.account?.accountId ?? "").trim();
+  // Prefer attendee (Closer) email for Enerflo `user`; fall back to owner
+  const assigneeEmail  = (data.attendee?.email ?? data.owner?.email ?? "").trim();
+  const enerfloStart   = terrosEventDateToEnerflo(data.eventDate);
+  const enerfloEnd     = enerfloStart
+    ? addMinutesToEnerfloDate(enerfloStart, data.duration ?? 60)
+    : null;
+
+  // ── Dedup guard ──────────────────────────────────────────────────────────
+  // Terros sends the dedup marker in "note" (singular). If the event originated
+  // from Enerflo, the update is just the echo — skip to prevent a loop.
+  let eventNote = extractEventNoteMarker(data);
+
+  if (!eventNote && terrosEventId && accountId && terrosKey) {
+    try {
+      const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+        body:    JSON.stringify({ accountId }),
+      });
+      if (listRes.ok) {
+        const parsed = JSON.parse(await listRes.text()) as Record<string, unknown>;
+        const evts   = parsed.events as Record<string, unknown>[] | undefined;
+        if (Array.isArray(evts)) {
+          const thisEvt = evts.find(e => (e.eventId ?? e.id) === terrosEventId);
+          if (thisEvt) {
+            eventNote = String(thisEvt.note ?? thisEvt.notes ?? "");
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  if (/\[Enerflo:\d+\]/i.test(eventNote)) {
+    await writeApiLog({
+      operation:       "webhook:terros:event-update-dedup",
+      vendor:          "terros",
+      method:          "POST",
+      url:             `/api/webhooks/terros`,
+      hadApiKey:       Boolean(terrosKey),
+      status:          200,
+      ok:              true,
+      responsePreview: JSON.stringify({ terrosEventId, accountId, reason: "originated-from-enerflo", notePreview: eventNote.slice(0, 80) }).slice(0, 400),
+    });
+    return NextResponse.json({ received: true, action: "event-update", skipped: true, reason: "dedup:enerflo-marker-in-note" });
+  }
+
+  // ── Resolve Enerflo appointment ID ───────────────────────────────────────
+  // Primary: reverse-lookup from Supabase calendar-event-id-map
+  let enerfloAppointmentId: number | null = null;
+  if (terrosEventId) {
+    enerfloAppointmentId = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
+  }
+
+  // Fallback: scan customer appointments via Enerflo API and match by closest date
+  if (!enerfloAppointmentId) {
+    const inlineExtId = (data.account?.externalLeadId ?? "").trim();
+    let numericCustomerId: string | null =
+      (inlineExtId && !UUID_RE.test(inlineExtId)) ? inlineExtId : null;
+
+    if (!numericCustomerId && accountId && terrosKey) {
+      const acc = await fetchTerrosAccountById(terrosBase, terrosKey, accountId);
+      if (acc) {
+        const eid = pickExternalLeadId(acc) ?? (typeof acc.externalLeadId === "string" ? acc.externalLeadId.trim() : null);
+        if (eid && !UUID_RE.test(eid)) {
+          numericCustomerId = eid;
+        }
+      }
+    }
+
+    if (numericCustomerId && enerfloStart) {
+      try {
+        const enerfloBase = (process.env.ENERFLO_V1_BASE_URL ?? "https://enerflo.io").replace(/\/$/, "");
+        const enerfloKey  = process.env.ENERFLO_V1_API_KEY ?? "";
+        const apptRes = await fetch(
+          `${enerfloBase}/api/v3/customers/${numericCustomerId}/appointments`,
+          { headers: { "api-key": enerfloKey } }
+        );
+        if (apptRes.ok) {
+          const parsed = (await apptRes.json()) as Record<string, unknown>;
+          const list   = (parsed.appointments ?? parsed.data ?? parsed) as Record<string, unknown>[];
+          if (Array.isArray(list) && list.length > 0) {
+            const targetMs = new Date(enerfloStart.replace(" ", "T") + "Z").getTime();
+            let bestDiff   = Infinity;
+            let bestId: number | null = null;
+            for (const appt of list) {
+              const apptDate = appt.start ?? appt.appointment_date ?? appt.date;
+              if (apptDate) {
+                const apptMs = new Date(String(apptDate).replace(" ", "T") + (String(apptDate).includes("T") ? "" : "Z")).getTime();
+                const diff   = Math.abs(apptMs - targetMs);
+                if (diff < bestDiff) { bestDiff = diff; bestId = appt.id != null ? Number(appt.id) : null; }
+              }
+            }
+            if (bestId != null) enerfloAppointmentId = bestId;
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+  }
+
+  if (!enerfloAppointmentId) {
+    await writeApiLog({
+      operation:       "webhook:terros:event-update-no-appt-id",
+      vendor:          "terros",
+      method:          "POST",
+      url:             `/api/webhooks/terros`,
+      hadApiKey:       Boolean(terrosKey),
+      status:          200,
+      ok:              false,
+      responsePreview: JSON.stringify({ terrosEventId, accountId, reason: "could-not-resolve-enerflo-appointment-id" }).slice(0, 400),
+    });
+    return NextResponse.json({
+      received:     true,
+      action:       "event-update",
+      skipped:      true,
+      reason:       "Could not resolve Enerflo appointment ID",
+      terrosEventId,
+    });
+  }
+
+  // ── PUT /v1/appointments/{id} ─────────────────────────────────────────────
+  // Enerflo update accepts: start, end (yyyy-mm-dd hh:mm:ss UTC), user (email)
+  const updateBody: Record<string, unknown> = {};
+  if (enerfloStart) updateBody.start = enerfloStart;
+  if (enerfloEnd)   updateBody.end   = enerfloEnd;
+  if (assigneeEmail) updateBody.user = assigneeEmail;
+
+  const updateLog = await enerfloRequest({
+    operation: "webhook:terros:update-enerflo-appointment",
+    method:    "PUT",
+    path:      `/api/v1/appointments/${enerfloAppointmentId}`,
+    body:      updateBody,
+  });
+
+  return NextResponse.json({
+    received:               true,
+    action:                 "event-update",
+    terrosEventId,
+    accountId,
+    enerfloAppointmentId,
+    assigneeEmail,
+    enerfloStart,
+    enerfloEnd,
+    enerfloStatus:          updateLog.status,
+    enerfloOk:              updateLog.ok,
+    enerfloResponsePreview: updateLog.responsePreview,
   });
 }
