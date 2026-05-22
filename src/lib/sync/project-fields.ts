@@ -2,6 +2,7 @@ import { env } from "@/lib/env";
 
 /** Proposal pricingOutputs shape (webhook payload or survey GET response). */
 interface PricingOutputs {
+  totalSystemSizeWatts?: number;
   netPPW?: number;
   grossPPW?: number;
   netCost?: number;
@@ -11,6 +12,7 @@ interface PricingOutputs {
   federalRebateTotal?: number;
   financeProduct?: { name?: string };
   design?: {
+    totalSystemSizeWatts?: number;
     firstYearProduction?: number;
     offset?: number;
     mountingType?: string;
