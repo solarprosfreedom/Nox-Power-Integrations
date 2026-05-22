@@ -1,11 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { previewSync, executeSyncE2T, executeSyncT2E, executeSyncInstalls } from "@/app/actions/sync";
+import {
+  previewSyncInstalls,
+  previewSyncE2T,
+  previewSyncT2E,
+  executeSyncE2T,
+  executeSyncT2E,
+  executeSyncInstalls,
+} from "@/app/actions/sync";
 import type { E2TRow, T2ERow, InstallsRow } from "@/lib/sync/preview";
 import type { ExecuteResultRow } from "@/lib/sync/execute";
 
 type RowStatus = "pending" | "syncing" | "created" | "error";
+type SyncSubTab = "installs" | "e2t" | "t2e";
 
 interface E2TUiRow extends E2TRow {
   rowStatus: RowStatus;
@@ -26,12 +34,12 @@ interface InstallsUiRow extends InstallsRow {
   targetId?: string;
 }
 
-function SyncBadge({ status, errorMsg }: { status: RowStatus; errorMsg?: string }) {
+function SyncBadge({ status, errorMsg, label = "Created" }: { status: RowStatus; errorMsg?: string; label?: string }) {
   if (status === "pending") return null;
   if (status === "syncing")
     return <span className="inline-block rounded-full bg-yellow-900/60 px-2.5 py-0.5 text-xs font-medium text-yellow-300 animate-pulse">Syncing…</span>;
   if (status === "created")
-    return <span className="inline-block rounded-full bg-emerald-900/60 px-2.5 py-0.5 text-xs font-medium text-emerald-300">Created</span>;
+    return <span className="inline-block rounded-full bg-emerald-900/60 px-2.5 py-0.5 text-xs font-medium text-emerald-300">{label}</span>;
   return (
     <span title={errorMsg} className="inline-block max-w-[180px] truncate rounded-full bg-red-900/60 px-2.5 py-0.5 text-xs font-medium text-red-300">
       Error{errorMsg ? `: ${errorMsg}` : ""}
@@ -164,14 +172,15 @@ function T2ETable({ rows, onSyncAll, onSyncRow, syncing }: {
   );
 }
 
-function InstallsTable({ rows, onSyncAll, onSyncRow, syncing }: {
+function InstallsTable({ rows, onSyncAll, onSyncRow, syncing, hideTitle }: {
   rows: InstallsUiRow[]; onSyncAll: () => void;
   onSyncRow: (idx: number) => void; syncing: boolean;
+  hideTitle?: boolean;
 }) {
   const pending = rows.filter(r => r.rowStatus === "pending").length;
   return (
     <TableShell
-      title="Installs Backfill (Closed Stage)" dot="bg-emerald-400"
+      title={hideTitle ? "Installs" : "Installs Backfill (Closed Stage)"} dot="bg-emerald-400"
       count={pending}
       onSyncAll={onSyncAll} syncing={syncing}
       headers={["Name", "Email", "Phone", "Address", "Sales Rep", "Installs", "In Terros?", "Status", ""]}
@@ -190,16 +199,23 @@ function InstallsTable({ rows, onSyncAll, onSyncRow, syncing }: {
           </td>
           <td className="px-4 py-2.5 whitespace-nowrap">
             {row.action === "update" ? (
-              <span className="inline-block rounded-full bg-sky-900/60 px-2 py-0.5 text-[10px] font-medium text-sky-300">
-                Update
-              </span>
+              <div className="flex flex-col gap-0.5">
+                <span className="inline-block rounded-full bg-sky-900/60 px-2 py-0.5 text-[10px] font-medium text-sky-300 w-fit">
+                  Update
+                </span>
+                {row.terrosAccountId && (
+                  <span className="text-[10px] text-gray-500 font-mono truncate max-w-[120px]" title={row.terrosAccountId}>
+                    {row.terrosAccountId}
+                  </span>
+                )}
+              </div>
             ) : (
               <span className="inline-block rounded-full bg-orange-900/60 px-2 py-0.5 text-[10px] font-medium text-orange-300">
                 Create
               </span>
             )}
           </td>
-          <td className="px-4 py-2.5 whitespace-nowrap"><SyncBadge status={row.rowStatus} errorMsg={row.errorMsg} /></td>
+          <td className="px-4 py-2.5 whitespace-nowrap"><SyncBadge status={row.rowStatus} errorMsg={row.errorMsg} label="Synced" /></td>
           <td className="px-4 py-2.5 whitespace-nowrap">
             {row.rowStatus === "pending" && (
               <button onClick={() => onSyncRow(i)} disabled={syncing}
@@ -214,37 +230,145 @@ function InstallsTable({ rows, onSyncAll, onSyncRow, syncing }: {
   );
 }
 
-export default function SyncTab() {
-  const [loadingPreview, setLoadingPreview]       = useState(false);
-  const [previewErrors, setPreviewErrors]         = useState<string[]>([]);
-  const [loaded, setLoaded]                       = useState(false);
-  const [e2tRows, setE2tRows]                     = useState<E2TUiRow[]>([]);
-  const [t2eRows, setT2eRows]                     = useState<T2EUiRow[]>([]);
-  const [installsRows, setInstallsRows]           = useState<InstallsUiRow[]>([]);
-  const [e2tSyncing, setE2tSyncing]               = useState(false);
-  const [t2eSyncing, setT2eSyncing]               = useState(false);
-  const [installsSyncing, setInstallsSyncing]     = useState(false);
+const SUB_TABS: { id: SyncSubTab; label: string; dot: string; description: string }[] = [
+  {
+    id: "installs",
+    label: "Installs",
+    dot: "bg-emerald-400",
+    description: "Backfill closed installs — updates existing Terros accounts or creates new ones with project details.",
+  },
+  {
+    id: "e2t",
+    label: "Enerflo → Terros",
+    dot: "bg-orange-400",
+    description: "Create Enerflo customers that are missing in Terros.",
+  },
+  {
+    id: "t2e",
+    label: "Terros → Enerflo",
+    dot: "bg-sky-400",
+    description: "Create Terros accounts that are missing in Enerflo.",
+  },
+];
 
-  async function handleLoadPreview() {
-    setLoadingPreview(true);
-    setPreviewErrors([]);
-    setLoaded(false);
-    setE2tRows([]);
-    setT2eRows([]);
+function PreviewEmpty({ onLoad, loading, loaded }: { onLoad: () => void; loading: boolean; loaded: boolean }) {
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-700 py-20 gap-3">
+        <svg className="animate-spin h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+        </svg>
+        <p className="text-sm text-gray-500">Fetching records…</p>
+        <p className="text-xs text-gray-600">Loading Enerflo installs and matching Terros accounts — usually 30–60 seconds.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-800 py-20 text-center gap-4">
+      <p className="text-4xl text-gray-700">⟳</p>
+      <div>
+        <p className="text-base font-medium text-gray-400">No preview loaded</p>
+        <p className="mt-1 text-sm text-gray-600">Load preview for this tab only — other tabs stay idle.</p>
+      </div>
+      <button
+        onClick={onLoad}
+        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500"
+      >
+        {loaded ? "Refresh Preview" : "Load Preview"}
+      </button>
+    </div>
+  );
+}
+
+export default function SyncTab() {
+  const [activeTab, setActiveTab]                   = useState<SyncSubTab>("installs");
+
+  const [installsLoaded, setInstallsLoaded]         = useState(false);
+  const [installsLoading, setInstallsLoading]       = useState(false);
+  const [installsErrors, setInstallsErrors]         = useState<string[]>([]);
+  const [installsRows, setInstallsRows]           = useState<InstallsUiRow[]>([]);
+  const [installsSyncing, setInstallsSyncing]       = useState(false);
+
+  const [e2tLoaded, setE2tLoaded]                 = useState(false);
+  const [e2tLoading, setE2tLoading]                 = useState(false);
+  const [e2tErrors, setE2tErrors]                   = useState<string[]>([]);
+  const [e2tRows, setE2tRows]                       = useState<E2TUiRow[]>([]);
+  const [e2tSyncing, setE2tSyncing]                 = useState(false);
+
+  const [t2eLoaded, setT2eLoaded]                 = useState(false);
+  const [t2eLoading, setT2eLoading]                 = useState(false);
+  const [t2eErrors, setT2eErrors]                   = useState<string[]>([]);
+  const [t2eRows, setT2eRows]                       = useState<T2EUiRow[]>([]);
+  const [t2eSyncing, setT2eSyncing]                 = useState(false);
+
+  async function handleLoadInstallsPreview() {
+    setInstallsLoading(true);
+    setInstallsErrors([]);
     try {
-      const result = await previewSync();
+      const result = await previewSyncInstalls();
       if (result.fetchError) {
-        setPreviewErrors([result.fetchError]);
+        setInstallsErrors([result.fetchError]);
       } else {
-        setPreviewErrors(result.errors ?? []);
-        setE2tRows(result.enerfloToTerros.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
-        setT2eRows(result.terrosToEnerflo.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
-        setInstallsRows(result.installsResync.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
-        setLoaded(true);
+        setInstallsErrors(result.errors ?? []);
+        setInstallsRows(result.rows.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
+        setInstallsLoaded(true);
       }
     } finally {
-      setLoadingPreview(false);
+      setInstallsLoading(false);
     }
+  }
+
+  async function handleLoadE2TPreview() {
+    setE2tLoading(true);
+    setE2tErrors([]);
+    try {
+      const result = await previewSyncE2T();
+      if (result.fetchError) {
+        setE2tErrors([result.fetchError]);
+      } else {
+        setE2tErrors(result.errors ?? []);
+        setE2tRows(result.rows.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
+        setE2tLoaded(true);
+      }
+    } finally {
+      setE2tLoading(false);
+    }
+  }
+
+  async function handleLoadT2EPreview() {
+    setT2eLoading(true);
+    setT2eErrors([]);
+    try {
+      const result = await previewSyncT2E();
+      if (result.fetchError) {
+        setT2eErrors([result.fetchError]);
+      } else {
+        setT2eErrors(result.errors ?? []);
+        setT2eRows(result.rows.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
+        setT2eLoaded(true);
+      }
+    } finally {
+      setT2eLoading(false);
+    }
+  }
+
+  function handleLoadActivePreview() {
+    if (activeTab === "installs") return handleLoadInstallsPreview();
+    if (activeTab === "e2t") return handleLoadE2TPreview();
+    return handleLoadT2EPreview();
+  }
+
+  const activeMeta = SUB_TABS.find(t => t.id === activeTab)!;
+  const activeLoading = activeTab === "installs" ? installsLoading : activeTab === "e2t" ? e2tLoading : t2eLoading;
+  const activeLoaded = activeTab === "installs" ? installsLoaded : activeTab === "e2t" ? e2tLoaded : t2eLoaded;
+  const activeErrors = activeTab === "installs" ? installsErrors : activeTab === "e2t" ? e2tErrors : t2eErrors;
+
+  function pendingCount(tab: SyncSubTab): number | null {
+    if (tab === "installs") return installsLoaded ? installsRows.filter(r => r.rowStatus === "pending").length : null;
+    if (tab === "e2t") return e2tLoaded ? e2tRows.filter(r => r.rowStatus === "pending").length : null;
+    return t2eLoaded ? t2eRows.filter(r => r.rowStatus === "pending").length : null;
   }
 
   function applyE2TResults(results: ExecuteResultRow[]) {
@@ -364,58 +488,85 @@ export default function SyncTab() {
         <div>
           <h2 className="text-lg font-semibold text-white">Bulk Sync</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Preview missing records in each system, then sync individually or all at once. Only creates records — existing records are never modified.
+            Each tab loads its own preview on demand — switch tabs without re-fetching everything.
           </p>
         </div>
-        <button
-          onClick={handleLoadPreview}
-          disabled={loadingPreview}
-          className="flex-shrink-0 flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loadingPreview ? (
-            <>
-              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
-              Loading…
-            </>
-          ) : loaded ? "Refresh Preview" : "Load Preview"}
-        </button>
+        {activeLoaded && (
+          <button
+            onClick={handleLoadActivePreview}
+            disabled={activeLoading}
+            className="flex-shrink-0 flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-semibold text-gray-200 transition hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {activeLoading ? "Refreshing…" : "Refresh Preview"}
+          </button>
+        )}
       </div>
 
-      {previewErrors.length > 0 && (
+      <div className="flex flex-wrap gap-2 border-b border-gray-800 pb-1">
+        {SUB_TABS.map(tab => {
+          const count = pendingCount(tab.id);
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-medium transition ${
+                isActive
+                  ? "bg-gray-800 text-white border border-b-0 border-gray-700 -mb-px"
+                  : "text-gray-500 hover:text-gray-300 hover:bg-gray-900/60"
+              }`}
+            >
+              <span className={`h-2 w-2 rounded-full ${tab.dot}`} />
+              {tab.label}
+              {count != null && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                  isActive ? "bg-gray-700 text-gray-300" : "bg-gray-800 text-gray-500"
+                }`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="text-xs text-gray-500 -mt-3">{activeMeta.description}</p>
+
+      {activeErrors.length > 0 && (
         <div className="rounded-lg border border-red-800/50 bg-red-950/30 px-4 py-3 text-xs text-red-300 space-y-1">
           <p className="font-semibold text-red-200">Preview warnings:</p>
-          {previewErrors.map((e, i) => <p key={i}>{e}</p>)}
+          {activeErrors.map((e, i) => <p key={i}>{e}</p>)}
         </div>
       )}
 
-      {loadingPreview && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-700 py-20 gap-3">
-          <svg className="animate-spin h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-          </svg>
-          <p className="text-sm text-gray-500">Fetching records from both systems…</p>
-          <p className="text-xs text-gray-600">This may take 30–60 seconds for large datasets.</p>
-        </div>
+      {activeTab === "installs" && (
+        installsLoaded && !installsLoading ? (
+          <InstallsTable
+            rows={installsRows}
+            onSyncAll={handleSyncAllInstalls}
+            onSyncRow={handleSyncRowInstalls}
+            syncing={installsSyncing}
+            hideTitle
+          />
+        ) : (
+          <PreviewEmpty onLoad={handleLoadInstallsPreview} loading={installsLoading} loaded={installsLoaded} />
+        )
       )}
 
-      {!loadingPreview && !loaded && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-800 py-20 text-center">
-          <p className="text-4xl text-gray-700">⟳</p>
-          <p className="mt-3 text-base font-medium text-gray-400">No preview loaded</p>
-          <p className="mt-1 text-sm text-gray-600">Click "Load Preview" to compare records across both systems.</p>
-        </div>
-      )}
-
-      {!loadingPreview && loaded && (
-        <>
-          <InstallsTable rows={installsRows} onSyncAll={handleSyncAllInstalls} onSyncRow={handleSyncRowInstalls} syncing={installsSyncing} />
+      {activeTab === "e2t" && (
+        e2tLoaded && !e2tLoading ? (
           <E2TTable rows={e2tRows} onSyncAll={handleSyncAllE2T} onSyncRow={handleSyncRowE2T} syncing={e2tSyncing} />
+        ) : (
+          <PreviewEmpty onLoad={handleLoadE2TPreview} loading={e2tLoading} loaded={e2tLoaded} />
+        )
+      )}
+
+      {activeTab === "t2e" && (
+        t2eLoaded && !t2eLoading ? (
           <T2ETable rows={t2eRows} onSyncAll={handleSyncAllT2E} onSyncRow={handleSyncRowT2E} syncing={t2eSyncing} />
-        </>
+        ) : (
+          <PreviewEmpty onLoad={handleLoadT2EPreview} loading={t2eLoading} loaded={t2eLoaded} />
+        )
       )}
     </div>
   );

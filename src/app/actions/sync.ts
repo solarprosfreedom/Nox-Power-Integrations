@@ -1,9 +1,17 @@
 "use server";
 
-import { buildSyncPreview, buildUsersPreview } from "@/lib/sync/preview";
+import {
+  buildSyncPreview,
+  buildInstallsPreview,
+  buildE2TPreview,
+  buildT2EPreview,
+  buildUsersPreview,
+} from "@/lib/sync/preview";
 import { executeE2T, executeT2E, executeInstallsResync } from "@/lib/sync/execute";
 import type { SyncPreviewResult, E2TRow, T2ERow, InstallsRow, UsersPreviewResult } from "@/lib/sync/preview";
 import type { ExecuteResult } from "@/lib/sync/execute";
+
+type PreviewResult<T> = { rows: T[]; errors: string[]; fetchError?: string };
 
 export async function previewSync(): Promise<SyncPreviewResult & { fetchError?: string }> {
   try {
@@ -16,6 +24,30 @@ export async function previewSync(): Promise<SyncPreviewResult & { fetchError?: 
       errors: [],
       fetchError: e instanceof Error ? e.message : String(e),
     };
+  }
+}
+
+export async function previewSyncInstalls(): Promise<PreviewResult<InstallsRow>> {
+  try {
+    return await buildInstallsPreview();
+  } catch (e) {
+    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function previewSyncE2T(): Promise<PreviewResult<E2TRow>> {
+  try {
+    return await buildE2TPreview();
+  } catch (e) {
+    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function previewSyncT2E(): Promise<PreviewResult<T2ERow>> {
+  try {
+    return await buildT2EPreview();
+  } catch (e) {
+    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
   }
 }
 

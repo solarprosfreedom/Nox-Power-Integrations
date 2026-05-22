@@ -1,5 +1,22 @@
 import { env } from "@/lib/env";
 import type { E2TRow, T2ERow, InstallsRow } from "@/lib/sync/preview";
+import { resolveTerrosAccountForInstalls } from "@/lib/sync/account-matcher";
+import {
+  buildInstallCounterFields,
+  fetchEnerfloCustomerV3,
+  fetchInstallProjectCustomFields,
+  fetchSalesRepEmailFromInstall,
+} from "@/lib/sync/project-fields";
+import {
+  buildTerrosLookupMaps,
+  createTerrosSearchCache,
+  fetchAllTerrosAccounts,
+} from "@/lib/sync/terros-accounts";
+import {
+  fetchTerrosUsers,
+  resolveTerrosUserIdFromList,
+} from "@/lib/sync/terros-users";
+import { postTerros } from "@/lib/sync/terros-api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,7 +79,7 @@ async function fetchDealCounts(
   let installs = 0;
   try {
     const res = await fetch(
-      `${enerfloBase}/api/v3/installs?customer_uuid=${encodeURIComponent(enerfloId)}&pageSize=50&page=1`,
+      `${enerfloBase}/api/v3/installs?customer_uuid=${encodeURIComponent(enerfloId)}&per_page=100&page=1`,
       { method: "GET", headers },
     );
     if (res.ok) {
@@ -299,380 +316,218 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
   const workflowId    = env.terrosWorkflowId              ?? "";
   const knockStageId  = env.terrosWorkflowKnockStageId    ?? "";
   const closedStageId = env.terrosWorkflowClosedStageId   ?? "";
-  const netDealsCfId  = env.terrosCfNetDeals              ?? "";
-  const installsCfId  = env.terrosCfInstalls              ?? "";
 
-  // Fetch Terros users once for owner resolution on creates
-  let terrosUsers: Record<string, unknown>[] = [];
-  try {
-    const res = await fetch(`${terrosBase}/user/list`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (terrosSuccess(text)) {
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        terrosUsers = (parsed.users as Record<string, unknown>[] | undefined) ?? [];
-      }
-    }
-  } catch { /* best-effort */ }
+  const needsAccountResolve = rows.some((r) => !r.terrosAccountId);
+  const terrosAccounts = needsAccountResolve
+    ? await fetchAllTerrosAccounts(terrosBase, terrosKey)
+    : [];
+  const terrosMaps = buildTerrosLookupMaps(terrosAccounts);
+  const terrosUsers = await fetchTerrosUsers(terrosBase, terrosKey);
 
   function resolveTerrosOwner(email: string): string | null {
-    const needle   = email.trim().toLowerCase();
-    const stripped = needle.replace(/\+[^@]*(@)/, "$1");
-    const candidates = [needle, stripped].filter((e, i, arr) => e && arr.indexOf(e) === i);
-    const match = terrosUsers.find(u => {
-      if (typeof u.email !== "string") return false;
-      const uEmail    = u.email.trim().toLowerCase();
-      const uStripped = uEmail.replace(/\+[^@]*(@)/, "$1");
-      return candidates.includes(uEmail) || candidates.includes(uStripped);
-    });
-    return (match?.userId as string | undefined) ?? null;
+    return resolveTerrosUserIdFromList(email, terrosUsers);
   }
 
-  /** Fetch the full install/survey from Enerflo and extract project fields using the same paths as the webhook handler. */
-  async function fetchInstallCustomFields(installId: string, customerEnerfloId?: string): Promise<Record<string, unknown>> {
-    const cfs: Record<string, unknown> = {};
-    const add = (cfId: string | undefined, val: unknown) => {
-      if (cfId?.trim() && val !== undefined && val !== null && val !== "") cfs[cfId.trim()] = val;
-    };
-    const addNum = (cfId: string | undefined, val: unknown) => {
-      if (!cfId?.trim()) return;
-      const n = typeof val === "number" ? val : typeof val === "string" ? parseFloat(val) : NaN;
-      if (Number.isFinite(n)) add(cfId, n);
-    };
-
-    const enerfloGet = async (url: string): Promise<Record<string, unknown> | null> => {
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-        });
-        if (!res.ok) return null;
-        const parsed = JSON.parse(await res.text()) as Record<string, unknown>;
-        const record = (parsed.install ?? parsed.survey ?? parsed.data ?? parsed) as Record<string, unknown>;
-        return record && typeof record === "object" && Object.keys(record).length > 1 ? record : null;
-      } catch { return null; }
-    };
-
-    // Fetch the survey record for a customer — surveys contain system size, finance product, etc.
-    const fetchSurveyForCustomer = async (): Promise<Record<string, unknown> | null> => {
-      if (!customerEnerfloId) return null;
-      try {
-        // Try GET with customer_uuid filter
-        const getRes = await fetch(
-          `${enerfloBase}/api/v3/surveys?customer_uuid=${encodeURIComponent(customerEnerfloId)}&pageSize=1&page=1`,
-          { method: "GET", headers: { "api-key": enerfloKey, "Content-Type": "application/json" } },
-        );
-        if (getRes.ok) {
-          const parsed = JSON.parse(await getRes.text()) as Record<string, unknown>;
-          const list = (parsed.surveys ?? parsed.data ?? parsed.results ?? parsed.items) as unknown[] | undefined;
-          if (Array.isArray(list) && list.length > 0) {
-            const rec = list[list.length - 1] as Record<string, unknown>;
-            console.log("[SurveyCF] GET survey keys:", Object.keys(rec).join(", "));
-            console.log("[SurveyCF] GET survey record:", JSON.stringify(rec, null, 2).slice(0, 4000));
-            return rec;
-          }
-        }
-        // Fall back: POST /api/v3/surveys with customer_uuid body
-        const postRes = await fetch(`${enerfloBase}/api/v3/surveys`, {
-          method: "POST",
-          headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ customer_uuid: customerEnerfloId, pageSize: 50, page: 1 }),
-        });
-        if (postRes.ok) {
-          const parsed = JSON.parse(await postRes.text()) as Record<string, unknown>;
-          const list = (parsed.surveys ?? parsed.data ?? parsed.results ?? parsed.items) as unknown[] | undefined;
-          if (Array.isArray(list) && list.length > 0) {
-            const rec = list[list.length - 1] as Record<string, unknown>;
-            console.log("[SurveyCF] POST survey keys:", Object.keys(rec).join(", "));
-            console.log("[SurveyCF] POST survey record:", JSON.stringify(rec, null, 2).slice(0, 4000));
-            return rec;
-          }
-        }
-      } catch { /* best-effort */ }
-      return null;
-    };
-
+  async function mergeExistingCustomFields(
+    accountId: string,
+    customFields: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    let mergedCfs = { ...customFields };
     try {
-      // Fetch the install pricing record (has ppw_gross, ppw_net, system_cost_gross, panel, inverter)
-      const install = await enerfloGet(`${enerfloBase}/api/v3/installs/${encodeURIComponent(installId)}`);
-
-      // Debug: log one install record from the customer's install LIST to see what fields are available
-      if (customerEnerfloId) {
-        try {
-          const listRes = await fetch(
-            `${enerfloBase}/api/v3/installs?customer_uuid=${encodeURIComponent(customerEnerfloId)}&pageSize=1&page=1`,
-            { method: "GET", headers: { "api-key": enerfloKey, "Content-Type": "application/json" } },
-          );
-          if (listRes.ok) {
-            const listParsed = JSON.parse(await listRes.text()) as Record<string, unknown>;
-            const listItems = (listParsed.installs ?? listParsed.data ?? listParsed.results ?? listParsed.items) as unknown[] | undefined;
-            if (Array.isArray(listItems) && listItems.length > 0) {
-              const sample = listItems[0] as Record<string, unknown>;
-              console.log("[InstallList] keys:", Object.keys(sample).join(", "));
-              console.log("[InstallList] record:", JSON.stringify(sample, null, 2).slice(0, 5000));
-            }
-          }
-        } catch { /* debug only */ }
-      }
-
-      // Fetch the survey record for this customer (has kw, finance_product, panel_count, first_year_production, etc.)
-      const surveyRecord = await fetchSurveyForCustomer();
-
-      // Use whichever record we got; survey is preferred for fields it has, install fills in pricing
-      const primary = surveyRecord ?? install;
-      if (!primary) return cfs;
-
-      // ── Fields from the survey record (system-level data) ────────────────────
-      if (surveyRecord) {
-        const sp = surveyRecord as Record<string, unknown>;
-        add(env.terrosCfEnerfloDealId,    String(sp.id ?? sp.deal_id ?? installId));
-        add(env.terrosCfEnerfloShortCode, sp.shortCode ?? sp.short_code);
-        add(env.terrosCfProposalId,       String(sp.proposalId ?? sp.proposal_id ?? sp.id ?? ""));
-
-        const kw = sp.kw ?? sp.systemSizeKw ?? sp.system_size_kw ?? sp.system_size ?? sp.system_size_kw;
-        const watts = sp.system_size_watts ?? sp.systemSizeWatts;
-        if (kw) addNum(env.terrosCfSystemSizeKw, kw);
-        else if (watts) addNum(env.terrosCfSystemSizeKw, Number(watts) / 1000);
-
-        addNum(env.terrosCfFirstYearProductionKwh, sp.firstYearProduction ?? sp.first_year_production ?? sp.annual_production);
-        addNum(env.terrosCfPanelCount,   sp.panelCount  ?? sp.panel_count  ?? sp.moduleCount ?? sp.module_count ?? sp.number_of_panels);
-        addNum(env.terrosCfBatteryCount, sp.batteryCount ?? sp.battery_count ?? sp.batteries);
-
-        const fpName = (sp.financeProduct as Record<string,unknown> | undefined)?.name
-          ?? sp.finance_product ?? sp.loanProduct ?? sp.loan_product
-          ?? sp.financeProductName ?? sp.finance_product_name ?? sp.loan_type;
-        add(env.terrosCfFinanceProduct, fpName);
-
-        add(env.terrosCfUtilityCompany,
-          (sp.utility as Record<string,unknown> | undefined)?.name ?? sp.utility_company ?? sp.utilityCompany ?? sp.utility);
-        addNum(env.terrosCfAnnualConsumption, sp.annualConsumption ?? sp.annual_consumption ?? sp.annual_usage);
-        addNum(env.terrosCfAvgMonthlyBill,    sp.avgMonthlyBill ?? sp.avg_monthly_bill ?? sp.average_monthly_bill);
-
-        const offsetRaw = sp.offset ?? sp.solarOffset ?? sp.solar_offset ?? sp.solar_coverage;
-        if (typeof offsetRaw === "number" && Number.isFinite(offsetRaw)) {
-          add(env.terrosCfSolarOffset, String(Math.round(offsetRaw * 10000) / 100));
+      const { ok, text } = await postTerros(terrosBase, terrosKey, "/account/get", { accountId });
+      if (ok) {
+        const getParsed = JSON.parse(text) as Record<string, unknown>;
+        const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
+        const existingCfs = acc.customFields as Record<string, unknown> | undefined;
+        if (existingCfs && typeof existingCfs === "object") {
+          mergedCfs = { ...existingCfs, ...customFields };
         }
-
-        add(env.terrosCfMountingType, sp.mountingType ?? sp.mounting_type ?? sp.mount_type);
-        add(env.terrosCfFinancingStatus, sp.financingStatus ?? sp.financing_status
-          ?? (sp.state as Record<string,unknown> | undefined)?.financingStatus);
-      } else {
-        // No survey — use install ID as deal ID fallback
-        add(env.terrosCfEnerfloDealId, installId);
       }
-
-      // ── Fields from the install pricing record (ppw_gross, ppw_net, system_cost_*, panel, inverter) ──
-      if (install) {
-        const ip = install as Record<string, unknown>;
-        // Pricing — Enerflo install endpoint uses snake_case flat fields
-        addNum(env.terrosCfGrossPpw,  ip.ppw_gross ?? ip.grossPpw  ?? ip.gross_ppw);
-        addNum(env.terrosCfNetPpw,    ip.ppw_net   ?? ip.netPpw    ?? ip.net_ppw);
-        addNum(env.terrosCfGrossCost, ip.system_cost_gross ?? ip.grossCost ?? ip.gross_cost);
-        // Net cost = base + adders (before dealer fee)
-        addNum(env.terrosCfNetCost,   ip.system_cost_base_adders ?? ip.netCost ?? ip.net_cost ?? ip.system_cost_net);
-        addNum(env.terrosCfDealerFee, ip.dealer_fees ?? ip.dealerFee ?? ip.dealer_fee ?? ip.dealer_fee_percent);
-        addNum(env.terrosCfDownPayment,   ip.downPayment ?? ip.down_payment);
-        addNum(env.terrosCfFederalRebate, ip.federalRebate ?? ip.federal_rebate ?? ip.federal_rebate_total);
-
-        // Equipment — install endpoint has flat `panel` and `inverter` objects
-        const panel    = ip.panel    as Record<string, unknown> | undefined;
-        const inverter = ip.inverter as Record<string, unknown> | undefined;
-        add(env.terrosCfPanelModel,    panel?.name    ?? panel?.model    ?? ip.panelModel    ?? ip.panel_model);
-        addNum(env.terrosCfPanelWattage, panel?.watts ?? panel?.capacity ?? ip.panelWattage  ?? ip.panel_wattage);
-        add(env.terrosCfInverterModel, inverter?.name ?? inverter?.model ?? ip.inverterModel ?? ip.inverter_model);
-      }
-    } catch { /* best-effort */ }
-
-    return cfs;
+    } catch { /* proceed with customFields only */ }
+    return mergedCfs;
   }
 
-  function buildBaseCounterFields(installCount: number): Record<string, unknown> {
-    const cfs: Record<string, unknown> = {};
-    if (netDealsCfId) cfs[netDealsCfId] = installCount;
-    if (installsCfId) cfs[installsCfId] = installCount;
-    return cfs;
+  async function updateTerrosAccount(
+    accountId: string,
+    row: InstallsRow,
+    customFields: Record<string, unknown>,
+    ownerId: string | null,
+    stageId: string,
+  ): Promise<{ ok: boolean; text: string }> {
+    const mergedCfs = await mergeExistingCustomFields(accountId, customFields);
+    const phone = row.phone ? row.phone.replace(/\D/g, "").slice(-10) : "";
+    const { firstName: fn, lastName: ln } = splitName(row.name);
+    const updateBody: Record<string, unknown> = {
+      accountId,
+      id: accountId,
+      ...(workflowId ? { workflowId } : {}),
+      ...(stageId ? { workflowStageId: stageId } : {}),
+      ...(ownerId ? { ownerId, assignedUserId: ownerId, closerId: ownerId } : {}),
+      ...(Object.keys(mergedCfs).length > 0 ? { customFields: mergedCfs } : {}),
+      resident: {
+        name: row.name || `${fn} ${ln}`.trim(),
+        firstName: fn,
+        lastName: ln,
+        ...(row.email ? { email: row.email } : {}),
+        ...(phone ? { phone } : {}),
+      },
+    };
+
+    const { ok, text } = await postTerros(terrosBase, terrosKey, "/account/update", { account: updateBody });
+    return { ok, text };
   }
 
   const results: ExecuteResultRow[] = [];
   const stageId = closedStageId || knockStageId;
+  const searchCache = createTerrosSearchCache();
 
-  for (const row of rows) {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex]!;
     try {
-      // Fetch full project details from the first install ID, then merge counters on top
-      const projectCfs = row.installIds.length > 0
-        ? await fetchInstallCustomFields(row.installIds[0]!, row.enerfloId)
-        : {};
-      const customFields = { ...projectCfs, ...buildBaseCounterFields(row.installCount) };
+      const customerIdForFetch = row.enerfloNumericId ?? row.enerfloId;
+      const v3Customer = await fetchEnerfloCustomerV3(enerfloBase, enerfloKey, customerIdForFetch);
 
-      if (row.action === "update" && row.terrosAccountId) {
-        // ── Update existing Terros account ────────────────────────────────────
-        // Read existing CFs first so we don't wipe unrelated fields
-        let mergedCfs = { ...customFields };
-        try {
-          const getRes = await fetch(`${terrosBase}/account/get`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-            body: JSON.stringify({ accountId: row.terrosAccountId }),
-          });
-          if (getRes.ok) {
-            const getRaw = await getRes.text();
-            if (terrosSuccess(getRaw)) {
-              const getParsed = JSON.parse(getRaw) as Record<string, unknown>;
-              const acc = (getParsed.account ?? getParsed) as Record<string, unknown>;
-              const existingCfs = acc.customFields as Record<string, unknown> | undefined;
-              if (existingCfs && typeof existingCfs === "object") {
-                mergedCfs = { ...existingCfs, ...customFields };
-              }
-            }
-          }
-        } catch { /* proceed with customFields only */ }
+      const uuid = row.enerfloUuid ?? String(v3Customer?.uuid ?? "").trim();
+      const numericId = row.enerfloNumericId ?? String(v3Customer?.id ?? "").trim();
+      const customerRecord = v3Customer ?? {};
 
-        const phone = row.phone ? row.phone.replace(/\D/g, "").slice(-10) : "";
-        const { firstName: fn, lastName: ln } = splitName(row.name);
-        const terrosOwnerIdForUpdate = row.salesRepEmail ? resolveTerrosOwner(row.salesRepEmail) : null;
-        const updateBody: Record<string, unknown> = {
-          accountId: row.terrosAccountId,
-          id: row.terrosAccountId,
-          ...(stageId ? { workflowStageId: stageId } : {}),
-          ...(terrosOwnerIdForUpdate ? { ownerId: terrosOwnerIdForUpdate, assignedUserId: terrosOwnerIdForUpdate } : {}),
-          ...(Object.keys(mergedCfs).length > 0 ? { customFields: mergedCfs } : {}),
-          resident: {
-            name: row.name || `${fn} ${ln}`.trim(),
-            firstName: fn,
-            lastName: ln,
-            ...(row.email ? { email: row.email } : {}),
-            ...(phone ? { phone } : {}),
-          },
-        };
-
-        const res = await fetch(`${terrosBase}/account/update`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: updateBody }),
+      let resolvedAccountId: string | null = row.terrosAccountId;
+      if (!resolvedAccountId) {
+        resolvedAccountId = await resolveTerrosAccountForInstalls({
+          customer: customerRecord,
+          uuid,
+          numericId,
+          email: row.email,
+          phone: row.phone,
+          name: row.name,
+          addressLine1: row.addressLine1,
+          city: row.city,
+          zip: row.zip,
+          maps: terrosMaps,
+          terrosBase,
+          terrosKey,
+          searchCache,
         });
-        const text = await res.text();
-        const ok = res.ok && terrosSuccess(text);
+      }
+
+      const projectCfs = row.installIds.length > 0
+        ? await fetchInstallProjectCustomFields(
+          enerfloBase,
+          enerfloKey,
+          row.installIds[0]!,
+          customerIdForFetch,
+        )
+        : {};
+      const customFields = { ...projectCfs, ...buildInstallCounterFields(row.installCount) };
+
+      let salesRepEmail = row.salesRepEmail;
+      if (!salesRepEmail && row.installIds[0]) {
+        salesRepEmail = await fetchSalesRepEmailFromInstall(
+          enerfloBase,
+          enerfloKey,
+          row.installIds[0]!,
+        );
+      }
+      const terrosOwnerId = salesRepEmail ? resolveTerrosOwner(salesRepEmail) : null;
+
+      if (resolvedAccountId) {
+        const { ok, text } = await updateTerrosAccount(
+          resolvedAccountId,
+          row,
+          customFields,
+          terrosOwnerId,
+          stageId,
+        );
 
         if (ok) {
-          results.push({ id: row.enerfloId, status: "created", targetId: row.terrosAccountId, installCount: row.installCount });
+          results.push({
+            id: row.enerfloId,
+            status: "created",
+            targetId: resolvedAccountId,
+            installCount: row.installCount,
+          });
         } else {
           results.push({ id: row.enerfloId, status: "error", error: text.slice(0, 300) });
         }
-      } else {
-        // ── Create new Terros account ─────────────────────────────────────────
-        const terrosOwnerId = row.salesRepEmail ? resolveTerrosOwner(row.salesRepEmail) : null;
-        const { firstName, lastName } = splitName(row.name);
+        continue;
+      }
 
-        const accountFields: Record<string, unknown> = {
-          name:           row.name || "Unknown",
-          externalLeadId: row.enerfloId,
-          externalId:     row.enerfloId,
-          sourceStatus:   "Project Submitted",
-          ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
-          ...(workflowId ? { workflowId } : {}),
-          ...(stageId    ? { workflowStageId: stageId } : {}),
-          ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
-          location: {
-            line1: row.addressLine1 || "Unknown",
-            ...(row.city      ? { locality:    row.city }      : {}),
-            ...(row.stateCode ? { countrySubd: row.stateCode } : {}),
-            ...(row.zip       ? { postal1:     row.zip }       : {}),
-          },
-          resident: {
-            name: row.name || "Unknown",
-            firstName,
-            lastName,
-            ...(row.email ? { email: row.email } : {}),
-            ...(row.phone ? { phone: row.phone } : {}),
-          },
-        };
+      // ── Create new Terros account ─────────────────────────────────────────
+      const { firstName, lastName } = splitName(row.name);
+      const externalLeadId = uuid || numericId || row.enerfloId;
 
-        // Use account/upsert — handles both new accounts and existing ones (matched by externalLeadId or email).
-        // Then force Closed stage + CFs via account/update since upsert ignores workflowStageId on updates.
-        const upsertRes = await fetch(`${terrosBase}/account/upsert`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: accountFields }),
-        });
-        const upsertText = await upsertRes.text();
-        const upsertOk = upsertRes.ok && terrosSuccess(upsertText);
+      const accountFields: Record<string, unknown> = {
+        name:           row.name || "Unknown",
+        externalLeadId,
+        externalId:     externalLeadId,
+        sourceStatus:   "Project Submitted",
+        ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
+        ...(workflowId ? { workflowId } : {}),
+        ...(stageId    ? { workflowStageId: stageId } : {}),
+        ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
+        location: {
+          line1: row.addressLine1 || "Unknown",
+          ...(row.city      ? { locality:    row.city }      : {}),
+          ...(row.stateCode ? { countrySubd: row.stateCode } : {}),
+          ...(row.zip       ? { postal1:     row.zip }       : {}),
+        },
+        resident: {
+          name: row.name || "Unknown",
+          firstName,
+          lastName,
+          ...(row.email ? { email: row.email } : {}),
+          ...(row.phone ? { phone: row.phone } : {}),
+        },
+      };
 
-        if (upsertOk) {
-          let parsed: Record<string, unknown> | undefined;
-          try { parsed = JSON.parse(upsertText) as Record<string, unknown>; } catch { /* ignore */ }
-          const acc = parsed?.account as Record<string, unknown> | undefined;
-          const newAccountId = String(acc?.accountId ?? "");
+      const upsertRes = await postTerros(terrosBase, terrosKey, "/account/upsert", { account: accountFields });
+      const upsertText = upsertRes.text;
+      const upsertOk = upsertRes.ok;
 
-          // Force Closed stage + CFs via a separate account/update.
-          // Upsert ignores workflowStageId on existing accounts.
-          if (newAccountId && stageId) {
-            // Step 1: read existing CFs (best-effort — don't let failure block the stage update)
-            let mergedCfs = { ...customFields };
-            try {
-              const getRes = await fetch(`${terrosBase}/account/get`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-                body: JSON.stringify({ accountId: newAccountId }),
-              });
-              if (getRes.ok) {
-                const getRaw = await getRes.text();
-                if (terrosSuccess(getRaw)) {
-                  const existing = ((JSON.parse(getRaw) as Record<string,unknown>).account as Record<string,unknown> | undefined)
-                    ?.customFields as Record<string,unknown> | undefined;
-                  if (existing) mergedCfs = { ...existing, ...customFields };
-                }
-              }
-            } catch { /* proceed with customFields only */ }
+      if (upsertOk) {
+        let parsed: Record<string, unknown> | undefined;
+        try { parsed = JSON.parse(upsertText) as Record<string, unknown>; } catch { /* ignore */ }
+        const acc = parsed?.account as Record<string, unknown> | undefined;
+        const newAccountId = String(acc?.accountId ?? "");
 
-            // Step 2: force stage + owner + CFs — this must run regardless of step 1
-            const phone = row.phone ? row.phone.replace(/\D/g, "").slice(-10) : "";
-            const { firstName, lastName } = splitName(row.name);
-            const updateRes = await fetch(`${terrosBase}/account/update`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-              body: JSON.stringify({
-                account: {
-                  accountId: newAccountId, id: newAccountId,
-                  workflowStageId: stageId,
-                  ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
-                  ...(Object.keys(mergedCfs).length > 0 ? { customFields: mergedCfs } : {}),
-                  resident: {
-                    name: row.name || `${firstName} ${lastName}`.trim(),
-                    firstName,
-                    lastName,
-                    ...(row.email ? { email: row.email } : {}),
-                    ...(phone ? { phone } : {}),
-                  },
-                },
-              }),
+        if (newAccountId && stageId) {
+          const { ok, text } = await updateTerrosAccount(
+            newAccountId,
+            row,
+            customFields,
+            terrosOwnerId,
+            stageId,
+          );
+          if (!ok) {
+            results.push({
+              id: row.enerfloId,
+              status: "error",
+              targetId: newAccountId,
+              error: `upsert OK but stage update failed: ${text.slice(0, 250)}`,
             });
-            const updateText = await updateRes.text();
-            if (!updateRes.ok || !terrosSuccess(updateText)) {
-              // Stage update failed — report it so the user can see the real error
-              results.push({ id: row.enerfloId, status: "error", targetId: newAccountId, error: `upsert OK but stage update failed: ${updateText.slice(0, 250)}` });
-              continue;
-            }
+            continue;
           }
-
-          // Back-link Enerflo customer → Terros account ID (numeric Enerflo IDs only)
-          if (newAccountId && enerfloKey && !row.enerfloId.includes("-")) {
-            try {
-              await fetch(`${enerfloBase}/api/v3/customers/${row.enerfloId}`, {
-                method: "PUT",
-                headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-                body: JSON.stringify({ integration_record_id: newAccountId }),
-              });
-            } catch { /* best-effort */ }
-          }
-
-          results.push({ id: row.enerfloId, status: "created", targetId: newAccountId, installCount: row.installCount });
-        } else {
-          results.push({ id: row.enerfloId, status: "error", error: upsertText.slice(0, 300) });
         }
+
+        const backLinkId = numericId || (row.enerfloId.includes("-") ? "" : row.enerfloId);
+        if (newAccountId && enerfloKey && backLinkId) {
+          try {
+            await fetch(`${enerfloBase}/api/v3/customers/${backLinkId}`, {
+              method: "PUT",
+              headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+              body: JSON.stringify({ integration_record_id: newAccountId }),
+            });
+          } catch { /* best-effort */ }
+        }
+
+        results.push({
+          id: row.enerfloId,
+          status: "created",
+          targetId: newAccountId,
+          installCount: row.installCount,
+        });
+      } else {
+        results.push({ id: row.enerfloId, status: "error", error: upsertText.slice(0, 300) });
       }
     } catch (e) {
       results.push({ id: row.enerfloId, status: "error", error: e instanceof Error ? e.message : String(e) });

@@ -1,4 +1,15 @@
 import { env } from "@/lib/env";
+import {
+  getEnerfloCustomerUuid,
+  getEnerfloIntegrationRecordId,
+  resolveTerrosAccountForInstalls,
+} from "@/lib/sync/account-matcher";
+import { fetchEnerfloCustomerV3 } from "@/lib/sync/project-fields";
+import {
+  buildTerrosLookupMaps,
+  createTerrosSearchCache,
+  fetchAllTerrosAccounts,
+} from "@/lib/sync/terros-accounts";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,6 +45,10 @@ export interface T2ERow {
 /** A customer with submitted projects — always synced to Closed stage with full counters. */
 export interface InstallsRow {
   enerfloId: string;
+  /** Numeric Enerflo customer id for v3 API calls. */
+  enerfloNumericId?: string;
+  /** Enerflo customer UUID when available. */
+  enerfloUuid?: string;
   name: string;
   email: string;
   phone: string;
@@ -92,8 +107,20 @@ function extractList(parsed: unknown, keys: string[]): Record<string, unknown>[]
   return [];
 }
 
-interface TerrosSummary {
-  accountId: string;
+function extractSalesRepEmail(record: Record<string, unknown>): string | null {
+  const ownerObj = (record.owner ?? record.agent ?? record.leadOwner) as Record<string, unknown> | undefined;
+  const agentUser = record.agent_user as Record<string, unknown> | undefined;
+  const setterUser = record.setter_user as Record<string, unknown> | undefined;
+  for (const candidate of [ownerObj?.email, agentUser?.email, setterUser?.email]) {
+    const email = String(candidate ?? "").trim().toLowerCase();
+    if (email) return email;
+  }
+  return null;
+}
+
+function extractCustomerFields(c: Record<string, unknown>): {
+  uuid: string;
+  numericId: string;
   name: string;
   email: string;
   phone: string;
@@ -102,172 +129,132 @@ interface TerrosSummary {
   stateCode: string;
   zip: string;
   addressFull: string;
-  ownerEmail: string;
-  externalLeadId: string;
+  salesRepEmail: string | null;
+} {
+  const uuid = getEnerfloCustomerUuid(c) ?? String(c.uuid ?? c.external_id ?? "").trim();
+  const numericId = String(c.id ?? c.customer_id ?? c.customerId ?? "").trim();
+  const firstName = String(c.first_name ?? c.firstName ?? "").trim();
+  const lastName = String(c.last_name ?? c.lastName ?? "").trim();
+  const name =
+    [firstName, lastName].filter(Boolean).join(" ") ||
+    String(c.name ?? "").trim() ||
+    "Unknown";
+  const email = String(c.email ?? "").toLowerCase().trim();
+  const phone = String(c.mobile ?? c.phone ?? "").trim();
+  const addressLine1 = String(c.address ?? c.address_line1 ?? "").trim();
+  const city = String(c.city ?? "").trim();
+  const stateCode = String(c.state ?? "").trim();
+  const zip = String(c.zip ?? "").trim();
+  const addressFull = [addressLine1, city, stateCode, zip].filter(Boolean).join(", ");
+  const salesRepEmail = extractSalesRepEmail(c);
+
+  return {
+    uuid,
+    numericId,
+    name,
+    email,
+    phone,
+    addressLine1,
+    city,
+    stateCode,
+    zip,
+    addressFull,
+    salesRepEmail,
+  };
 }
 
-async function fetchAllTerrosAccounts(base: string, key: string): Promise<TerrosSummary[]> {
-  const seen = new Map<string, TerrosSummary>();
+type SyncApiConfig = {
+  terrosBase: string;
+  terrosKey: string;
+  enerfloBase: string;
+  enerfloKey: string;
+};
 
+function getSyncApiConfig(): SyncApiConfig | { error: string } {
+  const terrosKey = env.terrosApiKey ?? "";
+  const enerfloKey = env.enerfloV1ApiKey ?? "";
+  if (!terrosKey || !enerfloKey) {
+    return { error: "Missing API keys (TERROS_API_KEY or ENERFLO_V1_API_KEY)" };
+  }
+  return {
+    terrosBase: (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, ""),
+    terrosKey,
+    enerfloBase: (env.enerfloV1BaseUrl ?? "https://enerflo.io").replace(/\/$/, ""),
+    enerfloKey,
+  };
+}
+
+async function fetchEnerfloV1Customers(
+  enerfloBase: string,
+  enerfloKey: string,
+): Promise<{ customers: Record<string, unknown>[]; errs: string[] }> {
+  const allCustomers: Record<string, unknown>[] = [];
+  const errs: string[] = [];
   for (let page = 1; page <= 200; page++) {
     try {
-      const res = await fetch(`${base}/account/list`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${key}` },
-        body: JSON.stringify({ page, pageSize: 100 }),
+      const res = await fetch(`${enerfloBase}/api/v1/customers?page=${page}&pageSize=100`, {
+        method: "GET",
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
       });
-      if (!res.ok) break;
-      const text = await res.text();
-      if (!terrosSuccess(text)) break;
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      const rows = extractList(parsed, ["accounts", "data", "results"]);
-      if (rows.length === 0) break;
-
-        const sizeBefore = seen.size;
-        for (const acc of rows) {
-          const accountId = String(acc.accountId ?? acc.id ?? "").trim();
-          if (!accountId || seen.has(accountId)) continue;
-          const resident = acc.resident as Record<string, unknown> | undefined;
-          const loc = (acc.location ?? acc.address) as Record<string, unknown> | undefined;
-          const owner = acc.owner as Record<string, unknown> | undefined;
-          const line1   = String(loc?.line1       ?? "").trim();
-          const city    = String(loc?.locality    ?? "").trim();
-          const state   = String(loc?.countrySubd ?? "").trim();
-          const zip     = String(loc?.postal1     ?? "").trim();
-          const oneLine = String(
-            loc?.oneLine ?? [line1, city, state, zip].filter(Boolean).join(", ")
-          ).trim();
-          // Terros stores the full name under resident.name, resident.firstName+lastName, or acc.name
-          const firstName  = String(resident?.firstName ?? "").trim();
-          const lastName   = String(resident?.lastName  ?? "").trim();
-          const resName    = String(resident?.name      ?? "").trim();
-          const fullName   =
-            resName ||
-            (firstName || lastName ? [firstName, lastName].filter(Boolean).join(" ") : "") ||
-            String(acc.name ?? "").trim();
-          seen.set(accountId, {
-            accountId,
-            name:           fullName,
-          email:          String(resident?.email ?? "").toLowerCase().trim(),
-          phone:          String(resident?.phone ?? "").trim(),
-          addressLine1:   line1,
-          city,
-          stateCode:      state,
-          zip,
-          addressFull:    oneLine,
-          ownerEmail:     String(owner?.email ?? "").trim(),
-          externalLeadId: String(acc.externalLeadId ?? "").trim(),
-        });
-      }
-
-      // If no new unique accounts were added this page, the API is looping — stop.
-      if (seen.size === sizeBefore) break;
-      if (rows.length < 100) break;
-    } catch {
+      if (!res.ok) { errs.push(`Enerflo page ${page}: HTTP ${res.status}`); break; }
+      const parsed = JSON.parse(await res.text()) as Record<string, unknown>;
+      const customers = extractList(parsed, ["data", "customers", "results", "items"]);
+      if (customers.length === 0) break;
+      allCustomers.push(...customers);
+      if (customers.length < 100) break;
+    } catch (e) {
+      errs.push(`Enerflo page ${page}: ${e instanceof Error ? e.message : String(e)}`);
       break;
     }
   }
-
-  return [...seen.values()];
+  return { customers: allCustomers, errs };
 }
 
-function getEnerfloIntegrationRecordId(c: Record<string, unknown>): string | null {
-  const partnerLead = ((c.integrations as Record<string, unknown> | undefined)
-    ?.Partner as Record<string, unknown> | undefined)
-    ?.Lead as Record<string, unknown> | undefined;
-  const val =
-    partnerLead?.integration_record_id ??
-    c.integration_record_id ??
-    c.integrationRecordId;
-  if (val != null && String(val).trim()) return String(val).trim();
-  return null;
-}
-
-// ── Main export ────────────────────────────────────────────────────────────
-
-export async function buildSyncPreview(): Promise<SyncPreviewResult> {
-  const errors: string[] = [];
-  const terrosBase  = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
-  const terrosKey   = env.terrosApiKey      ?? "";
-  const enerfloBase = (env.enerfloV1BaseUrl ?? "https://enerflo.io").replace(/\/$/, "");
-  const enerfloKey  = env.enerfloV1ApiKey   ?? "";
-
-  if (!terrosKey || !enerfloKey) {
-    return {
-      enerfloToTerros: [],
-      terrosToEnerflo: [],
-      installsResync: [],
-      errors: ["Missing API keys (TERROS_API_KEY or ENERFLO_V1_API_KEY)"],
-    };
+async function fetchEnerfloInstalls(
+  enerfloBase: string,
+  enerfloKey: string,
+): Promise<Record<string, unknown>[]> {
+  const perPage = 100;
+  const allInstalls: Record<string, unknown>[] = [];
+  for (let page = 1; page <= 200; page++) {
+    try {
+      const res = await fetch(
+        `${enerfloBase}/api/v3/installs?page=${page}&per_page=${perPage}`,
+        { method: "GET", headers: { "api-key": enerfloKey, "Content-Type": "application/json" } },
+      );
+      if (!res.ok) break;
+      const parsed = JSON.parse(await res.text()) as Record<string, unknown>;
+      const batch = extractList(parsed, ["results", "installs", "data", "items"]);
+      if (batch.length === 0) break;
+      allInstalls.push(...batch);
+      const total = typeof parsed.total === "number" ? parsed.total : null;
+      if (batch.length < perPage) break;
+      if (total != null && allInstalls.length >= total) break;
+    } catch { break; }
   }
+  return allInstalls;
+}
 
-  // Fetch Terros accounts, Enerflo customers, and Enerflo installs in parallel.
-  const [terrosAccounts, enerfloResult, enerfloInstalls] = await Promise.all([
-    fetchAllTerrosAccounts(terrosBase, terrosKey),
-    (async () => {
-      const allCustomers: Record<string, unknown>[] = [];
-      const errs: string[] = [];
-      for (let page = 1; page <= 200; page++) {
-        try {
-          const res = await fetch(`${enerfloBase}/api/v1/customers?page=${page}&pageSize=100`, {
-            method: "GET",
-            headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-          });
-          if (!res.ok) { errs.push(`Enerflo page ${page}: HTTP ${res.status}`); break; }
-          const parsed = JSON.parse(await res.text()) as Record<string, unknown>;
-          const customers = extractList(parsed, ["data", "customers", "results", "items"]);
-          if (customers.length === 0) break;
-          allCustomers.push(...customers);
-          if (customers.length < 100) break;
-        } catch (e) {
-          errs.push(`Enerflo page ${page}: ${e instanceof Error ? e.message : String(e)}`);
-          break;
-        }
-      }
-      return { customers: allCustomers, errs };
-    })(),
-    // Fetch all installs once — used to build customer → installCount + project detail map.
-    // Try GET first; fall back to POST /all if GET returns nothing.
-    (async () => {
-      const tryFetch = async (method: "GET" | "POST", url: string, body?: object) => {
-        const allInstalls: Record<string, unknown>[] = [];
-        for (let page = 1; page <= 200; page++) {
-          try {
-            const pageUrl = method === "GET" ? `${url}?page=${page}&pageSize=100` : url;
-            const res = await fetch(pageUrl, {
-              method,
-              headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-              ...(method === "POST" ? { body: JSON.stringify({ ...body, page, pageSize: 100 }) } : {}),
-            });
-            if (!res.ok) break;
-            const parsed = JSON.parse(await res.text()) as Record<string, unknown>;
-            const batch = extractList(parsed, ["installs", "data", "results", "items"]);
-            if (batch.length === 0) break;
-            allInstalls.push(...batch);
-            if (batch.length < 100) break;
-          } catch { break; }
-        }
-        return allInstalls;
-      };
-
-      const installs = await tryFetch("GET", `${enerfloBase}/api/v3/installs`);
-      if (installs.length > 0) return installs;
-      // Fallback: POST /api/v3/installs/all
-      return tryFetch("POST", `${enerfloBase}/api/v3/installs/all`, {});
-    })(),
-  ]);
-
-  errors.push(...enerfloResult.errs);
-
-  // Build: customer identifier → { count, installIds[] }
-  // Enerflo install records may reference customers by UUID or numeric ID via several field paths.
-  const installsByCustomer = new Map<string, { count: number; installIds: string[] }>();
-  function addInstall(key: string, installId: string) {
+function buildInstallsByCustomerMap(
+  enerfloInstalls: Record<string, unknown>[],
+): Map<string, { count: number; installIds: string[]; salesRepEmail: string | null }> {
+  const installsByCustomer = new Map<string, { count: number; installIds: string[]; salesRepEmail: string | null }>();
+  function addInstall(key: string, installId: string, inst: Record<string, unknown>) {
     const k = key.trim();
     if (!k) return;
+    const repEmail = extractSalesRepEmail(inst);
     const existing = installsByCustomer.get(k);
-    if (existing) { existing.count += 1; if (installId && !existing.installIds.includes(installId)) existing.installIds.push(installId); }
-    else installsByCustomer.set(k, { count: 1, installIds: installId ? [installId] : [] });
+    if (existing) {
+      existing.count += 1;
+      if (installId && !existing.installIds.includes(installId)) existing.installIds.push(installId);
+      if (!existing.salesRepEmail && repEmail) existing.salesRepEmail = repEmail;
+    } else {
+      installsByCustomer.set(k, {
+        count: 1,
+        installIds: installId ? [installId] : [],
+        salesRepEmail: repEmail,
+      });
+    }
   }
   for (const inst of enerfloInstalls) {
     const installId = String(inst.id ?? inst.installId ?? inst.install_id ?? "").trim();
@@ -281,51 +268,181 @@ export async function buildSyncPreview(): Promise<SyncPreviewResult> {
     for (const c of candidates) {
       if (seen.has(c)) continue;
       seen.add(c);
-      addInstall(c, installId);
+      addInstall(c, installId, inst);
+    }
+  }
+  return installsByCustomer;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]!, index);
     }
   }
 
-  // Build Terros lookup maps for installs resync
-  const terrosEmailToAccount = new Map<string, TerrosSummary>();
-  const terrosPhoneToAccount = new Map<string, TerrosSummary>();
-  const terrosExternalLeadIdToAccount = new Map<string, TerrosSummary>();
-  for (const acc of terrosAccounts) {
-    if (acc.email) terrosEmailToAccount.set(acc.email, acc);
-    if (acc.externalLeadId) terrosExternalLeadIdToAccount.set(acc.externalLeadId, acc);
-    // Normalise phone to digits-only for reliable matching
-    const normPhone = acc.phone.replace(/\D/g, "");
-    if (normPhone.length >= 7) terrosPhoneToAccount.set(normPhone, acc);
+  const workers = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
+export async function buildInstallsPreview(): Promise<{ rows: InstallsRow[]; errors: string[] }> {
+  const cfg = getSyncApiConfig();
+  if ("error" in cfg) return { rows: [], errors: [cfg.error] };
+
+  const { terrosBase, terrosKey, enerfloBase, enerfloKey } = cfg;
+  const errors: string[] = [];
+
+  const [terrosAccounts, enerfloInstalls] = await Promise.all([
+    fetchAllTerrosAccounts(terrosBase, terrosKey),
+    fetchEnerfloInstalls(enerfloBase, enerfloKey),
+  ]);
+
+  const installsByCustomer = buildInstallsByCustomerMap(enerfloInstalls);
+  const terrosMaps = buildTerrosLookupMaps(terrosAccounts);
+
+  const installCustomerKeys = [...installsByCustomer.keys()];
+  const v3FetchIds = new Set<string>();
+  for (const key of installCustomerKeys) {
+    if (/^\d+$/.test(key)) v3FetchIds.add(key);
+  }
+  for (const inst of enerfloInstalls) {
+    const cust = inst.customer as Record<string, unknown> | undefined;
+    const numericId = String(cust?.id ?? inst.customer_id ?? inst.customerId ?? "").trim();
+    if (numericId && /^\d+$/.test(numericId)) v3FetchIds.add(numericId);
   }
 
-  const terrosEmailSet = new Set(terrosAccounts.map(a => a.email).filter(Boolean));
-  const enerfloEmailSet = new Set(
-    enerfloResult.customers.map(c => String(c.email ?? "").toLowerCase().trim()).filter(Boolean)
-  );
+  const v3Customers = new Map<string, Record<string, unknown>>();
+  const v3Ids = [...v3FetchIds];
+  await mapWithConcurrency(v3Ids, 20, async (id) => {
+    const customer = await fetchEnerfloCustomerV3(enerfloBase, enerfloKey, id);
+    if (customer) {
+      v3Customers.set(id, customer);
+      const uuid = getEnerfloCustomerUuid(customer);
+      if (uuid) v3Customers.set(uuid, customer);
+    }
+  });
 
-  // E2T: Enerflo customers not already linked or email-matched in Terros.
-  // Deal status is skipped here to keep preview fast — resolved during execute.
-  const enerfloToTerros: E2TRow[] = [];
+  type InstallCustomerWork = {
+    key: string;
+    entry: { count: number; installIds: string[]; salesRepEmail: string | null };
+    customerRecord: Record<string, unknown>;
+    fields: ReturnType<typeof extractCustomerFields>;
+    uuid: string;
+    numericId: string;
+    enerfloId: string;
+  };
+
+  const workItems: InstallCustomerWork[] = [];
+  const seenInstallCustomers = new Set<string>();
+
+  for (const key of installCustomerKeys) {
+    const entry = installsByCustomer.get(key);
+    if (!entry || entry.count === 0) continue;
+
+    const customerRecord = v3Customers.get(key);
+    if (!customerRecord) continue;
+
+    const fields = extractCustomerFields(customerRecord);
+    const uuid = fields.uuid || (key.includes("-") ? key : "");
+    const numericId = fields.numericId || (/^\d+$/.test(key) ? key : "");
+    const dedupeKey = uuid || numericId || key;
+    if (seenInstallCustomers.has(dedupeKey)) continue;
+    seenInstallCustomers.add(dedupeKey);
+
+    const enerfloId = uuid || numericId || key;
+    if (!enerfloId) continue;
+
+    workItems.push({ key, entry, customerRecord, fields, uuid, numericId, enerfloId });
+  }
+
+  const searchCache = createTerrosSearchCache();
+  const resolvedItems = await mapWithConcurrency(workItems, 8, async (item) => {
+    const terrosAccountId = await resolveTerrosAccountForInstalls({
+      customer: item.customerRecord,
+      uuid: item.uuid,
+      numericId: item.numericId,
+      email: item.fields.email,
+      phone: item.fields.phone,
+      name: item.fields.name,
+      addressLine1: item.fields.addressLine1,
+      city: item.fields.city,
+      zip: item.fields.zip,
+      maps: terrosMaps,
+      terrosBase,
+      terrosKey,
+      searchCache,
+    });
+    return { ...item, terrosAccountId };
+  });
+
+  const rows: InstallsRow[] = resolvedItems.map((item) => ({
+    enerfloId: item.enerfloId,
+    enerfloNumericId: item.numericId || undefined,
+    enerfloUuid: item.uuid || undefined,
+    name: item.fields.name,
+    email: item.fields.email,
+    phone: item.fields.phone,
+    addressLine1: item.fields.addressLine1,
+    city: item.fields.city,
+    stateCode: item.fields.stateCode,
+    zip: item.fields.zip,
+    addressFull: item.fields.addressFull,
+    salesRepEmail: item.fields.salesRepEmail ?? item.entry.salesRepEmail,
+    installCount: item.entry.count,
+    installIds: item.entry.installIds,
+    terrosAccountId: item.terrosAccountId,
+    action: item.terrosAccountId ? "update" : "create",
+  }));
+
+  return { rows, errors };
+}
+
+export async function buildE2TPreview(): Promise<{ rows: E2TRow[]; errors: string[] }> {
+  const cfg = getSyncApiConfig();
+  if ("error" in cfg) return { rows: [], errors: [cfg.error] };
+
+  const { terrosBase, terrosKey, enerfloBase, enerfloKey } = cfg;
+  const [terrosAccounts, enerfloResult] = await Promise.all([
+    fetchAllTerrosAccounts(terrosBase, terrosKey),
+    fetchEnerfloV1Customers(enerfloBase, enerfloKey),
+  ]);
+
+  const terrosEmailSet = new Set(terrosAccounts.map(a => a.email).filter(Boolean));
+  const rows: E2TRow[] = [];
+
   for (const c of enerfloResult.customers) {
     if (getEnerfloIntegrationRecordId(c)) continue;
     const email = String(c.email ?? "").toLowerCase().trim();
     if (email && terrosEmailSet.has(email)) continue;
 
-    const uuid         = String(c.uuid ?? "").trim();
-    const numericId    = String(c.id   ?? "").trim();
-    const enerfloId    = uuid || numericId;
-    const firstName    = String(c.first_name ?? "").trim();
-    const lastName     = String(c.last_name  ?? "").trim();
-    const name         = [firstName, lastName].filter(Boolean).join(" ") || "Unknown";
-    const phone        = String(c.mobile ?? c.phone ?? "").trim();
+    const uuid = String(c.uuid ?? "").trim();
+    const numericId = String(c.id ?? "").trim();
+    const enerfloId = uuid || numericId;
+    const firstName = String(c.first_name ?? "").trim();
+    const lastName = String(c.last_name ?? "").trim();
+    const name = [firstName, lastName].filter(Boolean).join(" ") || "Unknown";
+    const phone = String(c.mobile ?? c.phone ?? "").trim();
     const addressLine1 = String(c.address ?? "").trim();
-    const city         = String(c.city    ?? "").trim();
-    const stateCode    = String(c.state   ?? "").trim();
-    const zip          = String(c.zip     ?? "").trim();
-    const addressFull  = [addressLine1, city, stateCode, zip].filter(Boolean).join(", ");
-    const ownerObj     = c.owner as Record<string, unknown> | undefined;
+    const city = String(c.city ?? "").trim();
+    const stateCode = String(c.state ?? "").trim();
+    const zip = String(c.zip ?? "").trim();
+    const addressFull = [addressLine1, city, stateCode, zip].filter(Boolean).join(", ");
+    const ownerObj = c.owner as Record<string, unknown> | undefined;
     const salesRepEmail = String(ownerObj?.email ?? "").trim() || null;
 
-    enerfloToTerros.push({
+    rows.push({
       enerfloId, name, email, phone,
       addressLine1, city, stateCode, zip, addressFull,
       salesRepEmail,
@@ -333,8 +450,24 @@ export async function buildSyncPreview(): Promise<SyncPreviewResult> {
     });
   }
 
-  // T2E: Terros accounts not already linked and not email-matched in Enerflo.
-  const terrosToEnerflo: T2ERow[] = terrosAccounts
+  return { rows, errors: enerfloResult.errs };
+}
+
+export async function buildT2EPreview(): Promise<{ rows: T2ERow[]; errors: string[] }> {
+  const cfg = getSyncApiConfig();
+  if ("error" in cfg) return { rows: [], errors: [cfg.error] };
+
+  const { terrosBase, terrosKey, enerfloBase, enerfloKey } = cfg;
+  const [terrosAccounts, enerfloResult] = await Promise.all([
+    fetchAllTerrosAccounts(terrosBase, terrosKey),
+    fetchEnerfloV1Customers(enerfloBase, enerfloKey),
+  ]);
+
+  const enerfloEmailSet = new Set(
+    enerfloResult.customers.map(c => String(c.email ?? "").toLowerCase().trim()).filter(Boolean),
+  );
+
+  const rows: T2ERow[] = terrosAccounts
     .filter(a => {
       if (a.externalLeadId) return false;
       if (!a.email) return false;
@@ -342,72 +475,34 @@ export async function buildSyncPreview(): Promise<SyncPreviewResult> {
     })
     .map(acc => ({
       terrosAccountId: acc.accountId,
-      name:         acc.name,
-      email:        acc.email,
-      phone:        acc.phone,
+      name: acc.name,
+      email: acc.email,
+      phone: acc.phone,
       addressLine1: acc.addressLine1,
-      city:         acc.city,
-      stateCode:    acc.stateCode,
-      zip:          acc.zip,
-      addressFull:  acc.addressFull,
-      ownerEmail:   acc.ownerEmail || null,
+      city: acc.city,
+      stateCode: acc.stateCode,
+      zip: acc.zip,
+      addressFull: acc.addressFull,
+      ownerEmail: acc.ownerEmail || null,
     }));
 
-  // Installs Resync: all Enerflo customers with ≥1 submitted project.
-  // If already linked/email-matched in Terros → update to Closed stage + set counters.
-  // If not in Terros → create with Closed stage + counters.
-  const installsResync: InstallsRow[] = [];
-  for (const c of enerfloResult.customers) {
-    const uuid      = String(c.uuid ?? "").trim();
-    const numericId = String(c.id   ?? "").trim();
-    const enerfloId = uuid || numericId;
-    if (!enerfloId) continue;
+  return { rows, errors: enerfloResult.errs };
+}
 
-    const entry = (uuid ? installsByCustomer.get(uuid) : undefined) ?? (numericId ? installsByCustomer.get(numericId) : undefined);
-    if (!entry || entry.count === 0) continue;
+// ── Combined preview (legacy) ───────────────────────────────────────────────
 
-    const email       = String(c.email ?? "").toLowerCase().trim();
-    const firstName   = String(c.first_name ?? "").trim();
-    const lastName    = String(c.last_name  ?? "").trim();
-    const name        = [firstName, lastName].filter(Boolean).join(" ") || "Unknown";
-    const phone       = String(c.mobile ?? c.phone ?? "").trim();
-    const addressLine1= String(c.address ?? "").trim();
-    const city        = String(c.city    ?? "").trim();
-    const stateCode   = String(c.state   ?? "").trim();
-    const zip         = String(c.zip     ?? "").trim();
-    const addressFull = [addressLine1, city, stateCode, zip].filter(Boolean).join(", ");
-    const ownerObj    = c.owner as Record<string, unknown> | undefined;
-    const salesRepEmail = String(ownerObj?.email ?? "").trim() || null;
-
-    // Find existing Terros account: prefer integration_record_id → email → phone
-    const linkedTerrosId = getEnerfloIntegrationRecordId(c);
-    let terrosAccountId: string | null = null;
-    if (linkedTerrosId) {
-      const acc = terrosExternalLeadIdToAccount.get(linkedTerrosId)
-        ?? terrosAccounts.find(a => a.accountId === linkedTerrosId);
-      terrosAccountId = acc?.accountId ?? linkedTerrosId;
-    } else if (email) {
-      terrosAccountId = terrosEmailToAccount.get(email)?.accountId ?? null;
-    }
-    if (!terrosAccountId && phone) {
-      const normPhone = phone.replace(/\D/g, "");
-      if (normPhone.length >= 7) {
-        terrosAccountId = terrosPhoneToAccount.get(normPhone)?.accountId ?? null;
-      }
-    }
-
-    installsResync.push({
-      enerfloId, name, email, phone,
-      addressLine1, city, stateCode, zip, addressFull,
-      salesRepEmail,
-      installCount: entry.count,
-      installIds: entry.installIds,
-      terrosAccountId,
-      action: terrosAccountId ? "update" : "create",
-    });
-  }
-
-  return { enerfloToTerros, terrosToEnerflo, installsResync, errors };
+export async function buildSyncPreview(): Promise<SyncPreviewResult> {
+  const [installs, e2t, t2e] = await Promise.all([
+    buildInstallsPreview(),
+    buildE2TPreview(),
+    buildT2EPreview(),
+  ]);
+  return {
+    enerfloToTerros: e2t.rows,
+    terrosToEnerflo: t2e.rows,
+    installsResync: installs.rows,
+    errors: [...installs.errors, ...e2t.errors, ...t2e.errors],
+  };
 }
 
 // ── Users preview ──────────────────────────────────────────────────────────
