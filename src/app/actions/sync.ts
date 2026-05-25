@@ -3,12 +3,15 @@
 import {
   buildSyncPreview,
   buildInstallsPreview,
+  buildInstallsPreviewWithFields,
   buildE2TPreview,
   buildT2EPreview,
   buildUsersPreview,
 } from "@/lib/sync/preview";
+import { buildCoperniqToEnerfloPreview, executeCoperniqToEnerflo } from "@/lib/sync/coperniq-enerflo";
 import { executeE2T, executeT2E, executeInstallsResync } from "@/lib/sync/execute";
 import type { SyncPreviewResult, E2TRow, T2ERow, InstallsRow, UsersPreviewResult } from "@/lib/sync/preview";
+import type { CoperniqToEnerfloRow } from "@/lib/sync/coperniq-enerflo";
 import type { ExecuteResult } from "@/lib/sync/execute";
 
 type PreviewResult<T> = { rows: T[]; errors: string[]; fetchError?: string };
@@ -32,6 +35,56 @@ export async function previewSyncInstalls(): Promise<PreviewResult<InstallsRow>>
     return await buildInstallsPreview();
   } catch (e) {
     return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function previewSyncInstallsWithFields(): Promise<
+  PreviewResult<InstallsRow> & { unconfiguredFields?: string[] }
+> {
+  try {
+    const result = await buildInstallsPreviewWithFields();
+    return {
+      rows: result.rows,
+      errors: result.errors,
+      unconfiguredFields: result.unconfiguredFields,
+    };
+  } catch (e) {
+    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function previewSyncCoperniqToEnerflo(): Promise<
+  PreviewResult<CoperniqToEnerfloRow> & { missingConfig?: string[] }
+> {
+  try {
+    const result = await buildCoperniqToEnerfloPreview();
+    return {
+      rows: result.rows,
+      errors: result.errors,
+      missingConfig: result.missingConfig,
+    };
+  } catch (e) {
+    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function executeSyncCoperniqToEnerflo(
+  rows: CoperniqToEnerfloRow[],
+): Promise<ExecuteResult & { fetchError?: string }> {
+  try {
+    const results = await executeCoperniqToEnerflo(rows);
+    return {
+      created: results.filter(r => r.status === "created").length,
+      errors: results.filter(r => r.status === "error").length,
+      results: results.map(r => ({
+        id: r.id,
+        status: r.status === "created" ? "created" : r.status === "skipped" ? "created" : "error",
+        targetId: r.targetId,
+        error: r.error,
+      })),
+    };
+  } catch (e) {
+    return { created: 0, errors: 1, results: [], fetchError: e instanceof Error ? e.message : String(e) };
   }
 }
 

@@ -6,11 +6,20 @@ import MiddlewarePanel from "@/components/middleware/MiddlewarePanel";
 import SyncTab from "@/components/tabs/SyncTab";
 import UsersTab from "@/components/tabs/UsersTab";
 import MigrationTab from "@/components/tabs/MigrationTab";
+import WelcomeEmailTab from "@/components/tabs/WelcomeEmailTab";
 import { fetchStoredLogs } from "@/app/actions/enerflo";
 import { getIntegrationEnvStatus } from "@/app/actions/env-status";
 import type { ApiLog } from "@/lib/logger";
 
-type SectionId = "enerflo" | "sequifi" | "terros" | "middleware" | "sync" | "users" | "migration";
+type SectionId =
+  | "enerflo"
+  | "sequifi"
+  | "terros"
+  | "middleware"
+  | "sync"
+  | "users"
+  | "migration"
+  | "welcome-email";
 
 const VENDORS: { id: SectionId; label: string; color: string; dot: string; tagline: string }[] = [
   { id: "enerflo",    label: "Enerflo",    color: "text-orange-400", dot: "bg-orange-400", tagline: "CRM & Solar Sales" },
@@ -44,6 +53,7 @@ export default function Dashboard() {
     enerflo: boolean;
     terros: boolean;
     sequifi: boolean;
+    coperniq: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -175,6 +185,23 @@ export default function Dashboard() {
               <p className="text-[10px] text-gray-600 truncate">Export &amp; restore accounts</p>
             </div>
           </button>
+
+          <button
+            onClick={() => setSection("welcome-email")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "welcome-email"
+                ? "bg-rose-900/40 text-rose-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-rose-400">
+              ✉
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Welcome Email</p>
+              <p className="text-[10px] text-gray-600 truncate">Test Graph send from admin</p>
+            </div>
+          </button>
         </nav>
 
         {/* Footer — reflects server env (.env.local), not .env.local.example */}
@@ -193,12 +220,13 @@ export default function Dashboard() {
             <span className="block rounded-md bg-gray-800/80 px-3 py-2 text-center text-[11px] text-gray-500">
               Checking configuration…
             </span>
-          ) : envStatus.enerflo || envStatus.terros || envStatus.sequifi ? (
+          ) : envStatus.enerflo || envStatus.terros || envStatus.sequifi || envStatus.coperniq ? (
             <div className="space-y-1 rounded-md bg-emerald-950/40 border border-emerald-900/50 px-3 py-2 text-[10px] text-emerald-200/90 leading-snug">
               <p className="font-semibold text-emerald-300/95">API keys (server)</p>
               <p>Enerflo: {envStatus.enerflo ? "set" : "missing"}</p>
               <p>Terros: {envStatus.terros ? "set" : "missing"}</p>
               <p>Sequifi: {envStatus.sequifi ? "set" : "missing"}</p>
+              <p>Coperniq: {envStatus.coperniq ? "set" : "missing"}</p>
             </div>
           ) : (
             <span className="block rounded-md bg-yellow-500/10 px-3 py-2 text-center text-[11px] font-medium text-yellow-500 leading-snug">
@@ -236,6 +264,12 @@ export default function Dashboard() {
               <span className="text-amber-400">⬆</span>
               <h1 className="text-base font-semibold text-amber-300">Migration</h1>
               <span className="text-xs text-gray-600">Export Terros accounts to Supabase and restore after fix</span>
+            </>
+          ) : section === "welcome-email" ? (
+            <>
+              <span className="text-rose-400">✉</span>
+              <h1 className="text-base font-semibold text-rose-300">Welcome Email</h1>
+              <span className="text-xs text-gray-600">Test Axia onboarding email via Microsoft Graph</span>
             </>
           ) : activeVendor ? (
             <>
@@ -279,6 +313,11 @@ export default function Dashboard() {
           {section === "migration" && (
             <div className="flex-1 overflow-y-auto px-8 py-8">
               <MigrationTab />
+            </div>
+          )}
+          {section === "welcome-email" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <WelcomeEmailTab />
             </div>
           )}
         </div>

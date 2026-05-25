@@ -15,6 +15,13 @@ export const env = {
   enerfloOrgSlug: opt("ENERFLO_ORG_SLUG"),
   /** Default owner email used when no lead owner can be resolved (e.g. "xlead@noxpwr.com") */
   defaultOwnerEmail: opt("DEFAULT_OWNER_EMAIL"),
+  /** Coperniq REST API (Settings → Integrations → API key) */
+  coperniqApiKey: opt("COPERNIQ_API_KEY"),
+  coperniqApiBaseUrl: opt("COPERNIQ_API_BASE_URL", "https://api.coperniq.io"),
+  /** Enerflo deal template ID for POST /api/v1/lead-installs (from Enerflo Build Team) */
+  enerfloSurveyTypeId: opt("ENERFLO_SURVEY_TYPE_ID"),
+  /** Fallback assign_to_email when DEFAULT_OWNER_EMAIL is unset */
+  enerfloDefaultAssignEmail: opt("ENERFLO_DEFAULT_ASSIGN_EMAIL"),
   terrosApiBaseUrl: opt("TERROS_API_BASE_URL", "https://api.terros.com"),
   terrosApiKey: opt("TERROS_API_KEY"),
   /** If set, Terros webhooks must send the same value in `X-Terros-Webhook-Secret` or `X-Webhook-Secret`. */
@@ -72,4 +79,10 @@ export const env = {
   sequifiApiKey: opt("SEQUIFI_API_KEY"),
   supabaseUrl: opt("SUPABASE_URL"),
   supabaseServiceRoleKey: opt("SUPABASE_SERVICE_ROLE_KEY"),
+  /** Microsoft Entra / Graph — welcome email & onboarding */
+  azureTenantId: opt("AZURE_TENANT_ID"),
+  azureClientId: opt("AZURE_CLIENT_ID"),
+  azureClientSecret: opt("AZURE_CLIENT_SECRET"),
+  welcomeEmailFrom: opt("WELCOME_EMAIL_FROM"),
+  welcomeEmailTestTo: opt("WELCOME_EMAIL_TEST_TO"),
 };

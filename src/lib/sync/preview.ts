@@ -4,7 +4,17 @@ import {
   getEnerfloIntegrationRecordId,
   resolveTerrosAccountForInstalls,
 } from "@/lib/sync/account-matcher";
-import { fetchEnerfloCustomerV3 } from "@/lib/sync/project-fields";
+import {
+  extractFieldSummary,
+  formatProjectFieldsForPreview,
+  getUnconfiguredTerrosFieldEnvVars,
+  type ProjectFieldPreviewItem,
+} from "@/lib/sync/field-labels";
+import {
+  buildInstallCounterFields,
+  fetchEnerfloCustomerV3,
+  fetchInstallProjectCustomFields,
+} from "@/lib/sync/project-fields";
 import {
   buildTerrosLookupMaps,
   createTerrosSearchCache,
@@ -64,7 +74,15 @@ export interface InstallsRow {
   /** If set, this Terros account already exists and will be updated. If null, a new account is created. */
   terrosAccountId: string | null;
   action: "create" | "update";
+  /** First install used to resolve project custom fields (field preview tab). */
+  primaryInstallId?: string;
+  projectCustomFields?: Record<string, unknown>;
+  fieldPreview?: ProjectFieldPreviewItem[];
+  summary?: { systemSizeKw?: number | null; netPpw?: number | null; financeProduct?: string | null };
+  fieldFetchError?: string;
 }
+
+export type { ProjectFieldPreviewItem };
 
 export interface SyncPreviewResult {
   enerfloToTerros: E2TRow[];
@@ -408,6 +426,63 @@ export async function buildInstallsPreview(): Promise<{ rows: InstallsRow[]; err
 
   return { rows, errors };
 }
+
+export async function buildInstallsPreviewWithFields(): Promise<{
+  rows: InstallsRow[];
+  errors: string[];
+  unconfiguredFields: string[];
+}> {
+  const base = await buildInstallsPreview();
+  const cfg = getSyncApiConfig();
+  if ("error" in cfg) {
+    return { rows: base.rows, errors: [...base.errors, cfg.error], unconfiguredFields: getUnconfiguredTerrosFieldEnvVars() };
+  }
+
+  const { enerfloBase, enerfloKey } = cfg;
+  const enriched = await mapWithConcurrency(base.rows, 5, async (row) => {
+    const installId = row.installIds[0];
+    if (!installId) {
+      const fieldPreview = formatProjectFieldsForPreview(buildInstallCounterFields(row.installCount));
+      return {
+        ...row,
+        fieldPreview,
+        summary: extractFieldSummary(fieldPreview),
+        fieldFetchError: "No install ID on row",
+      };
+    }
+
+    try {
+      const projectCfs = await fetchInstallProjectCustomFields(enerfloBase, enerfloKey, installId);
+      const allCfs = { ...projectCfs, ...buildInstallCounterFields(row.installCount) };
+      const fieldPreview = formatProjectFieldsForPreview(allCfs);
+      return {
+        ...row,
+        primaryInstallId: installId,
+        projectCustomFields: allCfs,
+        fieldPreview,
+        summary: extractFieldSummary(fieldPreview),
+      };
+    } catch (e) {
+      const fieldPreview = formatProjectFieldsForPreview(buildInstallCounterFields(row.installCount));
+      return {
+        ...row,
+        primaryInstallId: installId,
+        fieldPreview,
+        summary: extractFieldSummary(fieldPreview),
+        fieldFetchError: e instanceof Error ? e.message : String(e),
+      };
+    }
+  });
+
+  return {
+    rows: enriched,
+    errors: base.errors,
+    unconfiguredFields: getUnconfiguredTerrosFieldEnvVars(),
+  };
+}
+
+export { buildCoperniqToEnerfloPreview } from "@/lib/sync/coperniq-enerflo";
+export type { CoperniqToEnerfloRow } from "@/lib/sync/coperniq-enerflo";
 
 export async function buildE2TPreview(): Promise<{ rows: E2TRow[]; errors: string[] }> {
   const cfg = getSyncApiConfig();

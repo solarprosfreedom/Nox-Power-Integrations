@@ -1,19 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
 import {
   previewSyncInstalls,
+  previewSyncCoperniqToEnerflo,
   previewSyncE2T,
   previewSyncT2E,
   executeSyncE2T,
   executeSyncT2E,
   executeSyncInstalls,
+  executeSyncCoperniqToEnerflo,
 } from "@/app/actions/sync";
 import type { E2TRow, T2ERow, InstallsRow } from "@/lib/sync/preview";
+import type { CoperniqToEnerfloRow } from "@/lib/sync/coperniq-enerflo";
 import type { ExecuteResultRow } from "@/lib/sync/execute";
 
 type RowStatus = "pending" | "syncing" | "created" | "error";
-type SyncSubTab = "installs" | "e2t" | "t2e";
+type SyncSubTab = "installs" | "coperniq" | "e2t" | "t2e";
 
 interface E2TUiRow extends E2TRow {
   rowStatus: RowStatus;
@@ -172,6 +175,112 @@ function T2ETable({ rows, onSyncAll, onSyncRow, syncing }: {
   );
 }
 
+interface CoperniqUiRow extends CoperniqToEnerfloRow {
+  rowStatus: RowStatus;
+  errorMsg?: string;
+  targetId?: string;
+}
+
+function fmtCell(value: number | string | null | undefined) {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+
+function CoperniqToEnerfloTable({ rows, onSyncAll, onSyncRow, syncing }: {
+  rows: CoperniqUiRow[];
+  onSyncAll: () => void;
+  onSyncRow: (idx: number) => void;
+  syncing: boolean;
+}) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const pending = rows.filter(r => r.action === "create" && r.rowStatus === "pending").length;
+
+  return (
+    <TableShell
+      title="Coperniq → Enerflo"
+      dot="bg-violet-400"
+      count={pending}
+      onSyncAll={onSyncAll}
+      syncing={syncing}
+      headers={["", "Project", "Address", "Email", "Size", "Price", "In Enerflo?", "Status", ""]}
+    >
+      {rows.map((row, i) => {
+        const rowKey = `${row.coperniqProjectId}-${i}`;
+        const isOpen = expanded[rowKey];
+        const canSync = row.action === "create" && row.rowStatus === "pending";
+
+        return (
+          <Fragment key={rowKey}>
+            <tr className="transition-colors hover:bg-gray-800/30">
+              <td className="px-2 py-2.5 whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => setExpanded(prev => ({ ...prev, [rowKey]: !prev[rowKey] }))}
+                  className="rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+                >
+                  {isOpen ? "▾" : "▸"}
+                </button>
+              </td>
+              <td className="px-4 py-2.5 text-gray-200 font-medium max-w-[160px] truncate" title={row.title}>
+                {row.title || row.name || "—"}
+              </td>
+              <td className="px-4 py-2.5 text-gray-400 max-w-[180px] truncate" title={row.addressFull}>
+                {row.addressFull || "—"}
+              </td>
+              <td className="px-4 py-2.5 text-gray-400 whitespace-nowrap">{row.email || "—"}</td>
+              <td className="px-4 py-2.5 text-gray-400 tabular-nums whitespace-nowrap">{fmtCell(row.systemSize)}</td>
+              <td className="px-4 py-2.5 text-gray-400 tabular-nums whitespace-nowrap">{fmtCell(row.systemPrice)}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap">
+                {row.action === "skip" ? (
+                  <span className="inline-block rounded-full bg-sky-900/60 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+                    Exists
+                  </span>
+                ) : (
+                  <span className="inline-block rounded-full bg-orange-900/60 px-2 py-0.5 text-[10px] font-medium text-orange-300">
+                    Create
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap">
+                <SyncBadge
+                  status={row.rowStatus}
+                  errorMsg={row.errorMsg}
+                  label={row.action === "skip" && row.rowStatus === "created" ? "In Enerflo" : "Synced"}
+                />
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap">
+                {canSync && (
+                  <button
+                    onClick={() => onSyncRow(i)}
+                    disabled={syncing}
+                    className="rounded bg-gray-700 px-2 py-1 text-[10px] font-medium text-gray-300 hover:bg-gray-600 disabled:opacity-40"
+                  >
+                    Sync
+                  </button>
+                )}
+              </td>
+            </tr>
+            {isOpen && (
+              <tr className="bg-gray-950/80">
+                <td colSpan={9} className="px-4 py-3">
+                  <p className="mb-2 text-[10px] text-gray-500 font-mono">
+                    Coperniq #{row.coperniqProjectId}
+                    {row.enerfloCustomerId ? ` · Enerflo customer ${row.enerfloCustomerId}` : ""}
+                    {row.trades.length ? ` · ${row.trades.join(", ")}` : ""}
+                  </p>
+                  <pre className="overflow-x-auto rounded-lg border border-gray-800 bg-gray-900 p-3 text-[11px] text-gray-300 font-mono">
+                    {JSON.stringify(row.enerfloPayload, null, 2)}
+                  </pre>
+                </td>
+              </tr>
+            )}
+          </Fragment>
+        );
+      })}
+    </TableShell>
+  );
+}
+
 function InstallsTable({ rows, onSyncAll, onSyncRow, syncing, hideTitle }: {
   rows: InstallsUiRow[]; onSyncAll: () => void;
   onSyncRow: (idx: number) => void; syncing: boolean;
@@ -238,6 +347,12 @@ const SUB_TABS: { id: SyncSubTab; label: string; dot: string; description: strin
     description: "Backfill closed installs — updates existing Terros accounts or creates new ones with project details.",
   },
   {
+    id: "coperniq",
+    label: "Coperniq → Enerflo",
+    dot: "bg-violet-400",
+    description: "Fetch all Coperniq projects and create matching customer/install records in Enerflo.",
+  },
+  {
     id: "e2t",
     label: "Enerflo → Terros",
     dot: "bg-orange-400",
@@ -251,7 +366,9 @@ const SUB_TABS: { id: SyncSubTab; label: string; dot: string; description: strin
   },
 ];
 
-function PreviewEmpty({ onLoad, loading, loaded }: { onLoad: () => void; loading: boolean; loaded: boolean }) {
+function PreviewEmpty({ onLoad, loading, loaded, loadingHint }: {
+  onLoad: () => void; loading: boolean; loaded: boolean; loadingHint?: string;
+}) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-700 py-20 gap-3">
@@ -260,7 +377,9 @@ function PreviewEmpty({ onLoad, loading, loaded }: { onLoad: () => void; loading
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
         </svg>
         <p className="text-sm text-gray-500">Fetching records…</p>
-        <p className="text-xs text-gray-600">Loading Enerflo installs and matching Terros accounts — usually 30–60 seconds.</p>
+        <p className="text-xs text-gray-600 max-w-md text-center">
+          {loadingHint ?? "Loading Enerflo installs and matching Terros accounts — usually 30–60 seconds."}
+        </p>
       </div>
     );
   }
@@ -291,6 +410,13 @@ export default function SyncTab() {
   const [installsRows, setInstallsRows]           = useState<InstallsUiRow[]>([]);
   const [installsSyncing, setInstallsSyncing]       = useState(false);
 
+  const [coperniqLoaded, setCoperniqLoaded]         = useState(false);
+  const [coperniqLoading, setCoperniqLoading]       = useState(false);
+  const [coperniqErrors, setCoperniqErrors]         = useState<string[]>([]);
+  const [coperniqRows, setCoperniqRows]             = useState<CoperniqUiRow[]>([]);
+  const [coperniqSyncing, setCoperniqSyncing]       = useState(false);
+  const [coperniqMissingConfig, setCoperniqMissingConfig] = useState<string[]>([]);
+
   const [e2tLoaded, setE2tLoaded]                 = useState(false);
   const [e2tLoading, setE2tLoading]                 = useState(false);
   const [e2tErrors, setE2tErrors]                   = useState<string[]>([]);
@@ -317,6 +443,28 @@ export default function SyncTab() {
       }
     } finally {
       setInstallsLoading(false);
+    }
+  }
+
+  async function handleLoadCoperniqPreview() {
+    setCoperniqLoading(true);
+    setCoperniqErrors([]);
+    try {
+      const result = await previewSyncCoperniqToEnerflo();
+      if (result.fetchError) {
+        setCoperniqErrors([result.fetchError]);
+      } else {
+        setCoperniqErrors(result.errors ?? []);
+        setCoperniqMissingConfig(result.missingConfig ?? []);
+        setCoperniqRows(result.rows.map(r => ({
+          ...r,
+          rowStatus: (r.action === "skip" ? "created" : "pending") as RowStatus,
+          targetId: r.enerfloCustomerId ?? undefined,
+        })));
+        setCoperniqLoaded(true);
+      }
+    } finally {
+      setCoperniqLoading(false);
     }
   }
 
@@ -356,17 +504,35 @@ export default function SyncTab() {
 
   function handleLoadActivePreview() {
     if (activeTab === "installs") return handleLoadInstallsPreview();
+    if (activeTab === "coperniq") return handleLoadCoperniqPreview();
     if (activeTab === "e2t") return handleLoadE2TPreview();
     return handleLoadT2EPreview();
   }
 
   const activeMeta = SUB_TABS.find(t => t.id === activeTab)!;
-  const activeLoading = activeTab === "installs" ? installsLoading : activeTab === "e2t" ? e2tLoading : t2eLoading;
-  const activeLoaded = activeTab === "installs" ? installsLoaded : activeTab === "e2t" ? e2tLoaded : t2eLoaded;
-  const activeErrors = activeTab === "installs" ? installsErrors : activeTab === "e2t" ? e2tErrors : t2eErrors;
+  const activeLoading =
+    activeTab === "installs" ? installsLoading
+    : activeTab === "coperniq" ? coperniqLoading
+    : activeTab === "e2t" ? e2tLoading
+    : t2eLoading;
+  const activeLoaded =
+    activeTab === "installs" ? installsLoaded
+    : activeTab === "coperniq" ? coperniqLoaded
+    : activeTab === "e2t" ? e2tLoaded
+    : t2eLoaded;
+  const activeErrors =
+    activeTab === "installs" ? installsErrors
+    : activeTab === "coperniq" ? coperniqErrors
+    : activeTab === "e2t" ? e2tErrors
+    : t2eErrors;
 
   function pendingCount(tab: SyncSubTab): number | null {
     if (tab === "installs") return installsLoaded ? installsRows.filter(r => r.rowStatus === "pending").length : null;
+    if (tab === "coperniq") {
+      return coperniqLoaded
+        ? coperniqRows.filter(r => r.action === "create" && r.rowStatus === "pending").length
+        : null;
+    }
     if (tab === "e2t") return e2tLoaded ? e2tRows.filter(r => r.rowStatus === "pending").length : null;
     return t2eLoaded ? t2eRows.filter(r => r.rowStatus === "pending").length : null;
   }
@@ -445,17 +611,23 @@ export default function SyncTab() {
     }
   }
 
-  function applyInstallsResults(results: ExecuteResultRow[]) {
-    setInstallsRows(prev => {
-      const next = [...prev];
-      for (const r of results) {
-        const idx = next.findIndex(row => row.enerfloId === r.id);
-        if (idx === -1) continue;
-        next[idx] = { ...next[idx]!, rowStatus: r.status, targetId: r.targetId, errorMsg: r.error };
-      }
-      return next;
-    });
+  function applyInstallsResults(
+    setter: Dispatch<SetStateAction<InstallsUiRow[]>>,
+  ) {
+    return (results: ExecuteResultRow[]) => {
+      setter(prev => {
+        const next = [...prev];
+        for (const r of results) {
+          const idx = next.findIndex(row => row.enerfloId === r.id);
+          if (idx === -1) continue;
+          next[idx] = { ...next[idx]!, rowStatus: r.status, targetId: r.targetId, errorMsg: r.error };
+        }
+        return next;
+      });
+    };
   }
+
+  const applyInstallsRowsResults = applyInstallsResults(setInstallsRows);
 
   async function handleSyncAllInstalls() {
     const pending = installsRows.filter(r => r.rowStatus === "pending");
@@ -464,7 +636,7 @@ export default function SyncTab() {
     setInstallsRows(prev => prev.map(r => r.rowStatus === "pending" ? { ...r, rowStatus: "syncing" } : r));
     try {
       const result = await executeSyncInstalls(pending);
-      applyInstallsResults(result.results);
+      applyInstallsRowsResults(result.results);
     } finally { setInstallsSyncing(false); }
   }
 
@@ -474,9 +646,48 @@ export default function SyncTab() {
     setInstallsRows(prev => prev.map((r, i) => i === idx ? { ...r, rowStatus: "syncing" } : r));
     try {
       const result = await executeSyncInstalls([row]);
-      applyInstallsResults(result.results);
+      applyInstallsRowsResults(result.results);
     } catch (e) {
       setInstallsRows(prev => prev.map((r, i) =>
+        i === idx ? { ...r, rowStatus: "error", errorMsg: e instanceof Error ? e.message : String(e) } : r
+      ));
+    }
+  }
+
+  const applyCoperniqResults = (results: ExecuteResultRow[]) => {
+    setCoperniqRows(prev => {
+      const next = [...prev];
+      for (const r of results) {
+        const idx = next.findIndex(row => row.coperniqProjectId === r.id);
+        if (idx === -1) continue;
+        next[idx] = { ...next[idx]!, rowStatus: r.status, targetId: r.targetId, errorMsg: r.error };
+      }
+      return next;
+    });
+  };
+
+  async function handleSyncAllCoperniq() {
+    const pending = coperniqRows.filter(r => r.action === "create" && r.rowStatus === "pending");
+    if (!pending.length) return;
+    setCoperniqSyncing(true);
+    setCoperniqRows(prev => prev.map(r =>
+      r.action === "create" && r.rowStatus === "pending" ? { ...r, rowStatus: "syncing" } : r
+    ));
+    try {
+      const result = await executeSyncCoperniqToEnerflo(pending);
+      applyCoperniqResults(result.results);
+    } finally { setCoperniqSyncing(false); }
+  }
+
+  async function handleSyncRowCoperniq(idx: number) {
+    const row = coperniqRows[idx];
+    if (!row || row.action !== "create" || row.rowStatus !== "pending") return;
+    setCoperniqRows(prev => prev.map((r, i) => i === idx ? { ...r, rowStatus: "syncing" } : r));
+    try {
+      const result = await executeSyncCoperniqToEnerflo([row]);
+      applyCoperniqResults(result.results);
+    } catch (e) {
+      setCoperniqRows(prev => prev.map((r, i) =>
         i === idx ? { ...r, rowStatus: "error", errorMsg: e instanceof Error ? e.message : String(e) } : r
       ));
     }
@@ -539,6 +750,15 @@ export default function SyncTab() {
         </div>
       )}
 
+      {activeTab === "coperniq" && coperniqMissingConfig.length > 0 && (
+        <div className="rounded-lg border border-amber-800/50 bg-amber-950/30 px-4 py-3 text-xs text-amber-200">
+          <p className="font-semibold text-amber-100">Configuration notes</p>
+          <ul className="mt-1 list-disc pl-4 space-y-0.5 text-amber-300/90">
+            {coperniqMissingConfig.map(item => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+
       {activeTab === "installs" && (
         installsLoaded && !installsLoading ? (
           <InstallsTable
@@ -550,6 +770,24 @@ export default function SyncTab() {
           />
         ) : (
           <PreviewEmpty onLoad={handleLoadInstallsPreview} loading={installsLoading} loaded={installsLoaded} />
+        )
+      )}
+
+      {activeTab === "coperniq" && (
+        coperniqLoaded && !coperniqLoading ? (
+          <CoperniqToEnerfloTable
+            rows={coperniqRows}
+            onSyncAll={handleSyncAllCoperniq}
+            onSyncRow={handleSyncRowCoperniq}
+            syncing={coperniqSyncing}
+          />
+        ) : (
+          <PreviewEmpty
+            onLoad={handleLoadCoperniqPreview}
+            loading={coperniqLoading}
+            loaded={coperniqLoaded}
+            loadingHint="Fetching all projects from Coperniq and checking which are already in Enerflo."
+          />
         )
       )}
 

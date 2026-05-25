@@ -7,10 +7,12 @@ export async function getIntegrationEnvStatus(): Promise<{
   enerflo: boolean;
   terros: boolean;
   sequifi: boolean;
+  coperniq: boolean;
 }> {
   return {
     enerflo: Boolean(env.enerfloV1ApiKey?.trim()),
     terros: Boolean(env.terrosApiKey?.trim()),
     sequifi: Boolean(env.sequifiApiKey?.trim()),
+    coperniq: Boolean(env.coperniqApiKey?.trim()),
   };
 }
