@@ -14,6 +14,7 @@ import {
 } from "@/lib/sync/terros-accounts";
 import {
   fetchTerrosUsers,
+  resolveEmailFromUserList,
   resolveTerrosUserIdFromList,
 } from "@/lib/sync/terros-users";
 import { postTerros } from "@/lib/sync/terros-api";
@@ -108,21 +109,7 @@ export async function executeE2T(rows: E2TRow[]): Promise<ExecuteResultRow[]> {
   const installsCfId  = env.terrosCfInstalls              ?? "";
 
   // Fetch Terros users once for bulk owner resolution
-  let terrosUsers: Record<string, unknown>[] = [];
-  try {
-    const res = await fetch(`${terrosBase}/user/list`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (terrosSuccess(text)) {
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        terrosUsers = (parsed.users as Record<string, unknown>[] | undefined) ?? [];
-      }
-    }
-  } catch { /* best-effort */ }
+  const terrosUsers = await fetchTerrosUsers(terrosBase, terrosKey);
 
   const results: ExecuteResultRow[] = [];
 
@@ -131,16 +118,7 @@ export async function executeE2T(rows: E2TRow[]): Promise<ExecuteResultRow[]> {
       // Resolve Terros owner — strip +alias from both sides to handle mismatches
       let terrosOwnerId: string | null = null;
       if (row.salesRepEmail) {
-        const needle   = row.salesRepEmail.trim().toLowerCase();
-        const stripped = needle.replace(/\+[^@]*(@)/, "$1");
-        const candidates = [needle, stripped].filter((e, i, arr) => e && arr.indexOf(e) === i);
-        const match = terrosUsers.find(u => {
-          if (typeof u.email !== "string") return false;
-          const uEmail    = u.email.trim().toLowerCase();
-          const uStripped = uEmail.replace(/\+[^@]*(@)/, "$1");
-          return candidates.includes(uEmail) || candidates.includes(uStripped);
-        });
-        terrosOwnerId = (match?.userId as string | undefined) ?? null;
+        terrosOwnerId = resolveTerrosUserIdFromList(row.salesRepEmail, terrosUsers);
       }
 
       // Fetch real deal counts from Enerflo to backfill Net Deals + Installs
@@ -234,17 +212,7 @@ export async function executeT2E(rows: T2ERow[]): Promise<ExecuteResultRow[]> {
   } catch { /* best-effort */ }
 
   function findEnerfloOwnerEmail(rawEmail: string): string | undefined {
-    const needle   = rawEmail.trim().toLowerCase();
-    const stripped = needle.replace(/\+[^@]*(@)/, "$1");
-    const candidates = [needle, stripped].filter((e, i, arr) => e && arr.indexOf(e) === i);
-    const match = allEnerfloUsers.find(u => {
-      if (typeof u.email !== "string") return false;
-      const uEmail    = u.email.trim().toLowerCase();
-      const uStripped = uEmail.replace(/\+[^@]*(@)/, "$1");
-      return candidates.includes(uEmail) || candidates.includes(uStripped);
-    });
-    if (match?.email) return typeof match.email === "string" ? match.email.trim() : rawEmail;
-    return undefined;
+    return resolveEmailFromUserList(rawEmail, allEnerfloUsers) ?? undefined;
   }
 
   const results: ExecuteResultRow[] = [];

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
 import { writeApiLog, getEnerfloAppointmentIdByTerrosEventId } from "@/lib/logger";
+import { findUserByEmailInList } from "@/lib/sync/user-email-match";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -285,32 +286,7 @@ function parseEnerfloCreateCustomerId(responseText: string): string | null {
   return null;
 }
 
-// Known company domain aliases — noxpwr.com and solarpros.io belong to the same org,
-// so users may have different domains in Enerflo vs Terros.
-const DOMAIN_ALIASES: string[][] = [
-  ["noxpwr.com", "solarpros.io"],
-];
-
-function expandEmailCandidates(email: string): string[] {
-  const needle   = email.trim().toLowerCase();
-  const stripped = needle.replace(/\+[^@]*(@)/, "$1");
-  const set = new Set([needle, stripped].filter(Boolean));
-  for (const e of [...set]) {
-    const atIdx = e.lastIndexOf("@");
-    if (atIdx === -1) continue;
-    const local  = e.slice(0, atIdx);
-    const domain = e.slice(atIdx + 1);
-    for (const group of DOMAIN_ALIASES) {
-      if (group.includes(domain)) {
-        for (const alt of group) {
-          if (alt !== domain) set.add(`${local}@${alt}`);
-        }
-      }
-    }
-  }
-  return [...set];
-}
-
+// Cross-platform email matching (domain aliases, middle initial, env alias map).
 /** Collect all Enerflo users up to 3 pages of 100 (shared by email/id lookup helpers). */
 async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
   const allUsers: Record<string, unknown>[] = [];
@@ -335,19 +311,14 @@ async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
 
 /**
  * Find the full Enerflo user row matching rawEmail.
- * Tries both the raw email (e.g. "user+axia@domain.com") AND the alias-stripped
- * version, plus domain aliases (e.g. noxpwr.com ↔ solarpros.io).
  */
 async function findEnerfloUserRowByEmail(
   rawEmail: string
 ): Promise<Record<string, unknown> | undefined> {
-  const candidates = expandEmailCandidates(rawEmail);
   const allUsers = await fetchAllEnerfloUsers();
-  return allUsers.find((row) => {
-    if (typeof row.email !== "string") return false;
-    const rowCandidates = expandEmailCandidates(row.email);
-    return rowCandidates.some((re) => candidates.includes(re));
-  });
+  return findUserByEmailInList(rawEmail, allUsers, (row) =>
+    typeof row.email === "string" ? row.email : undefined,
+  );
 }
 
 /**

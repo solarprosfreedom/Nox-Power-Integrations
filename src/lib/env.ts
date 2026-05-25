@@ -15,6 +15,11 @@ export const env = {
   enerfloOrgSlug: opt("ENERFLO_ORG_SLUG"),
   /** Default owner email used when no lead owner can be resolved (e.g. "xlead@noxpwr.com") */
   defaultOwnerEmail: opt("DEFAULT_OWNER_EMAIL"),
+  /**
+   * JSON map of Enerflo email → Terros email (or vice versa) for reps whose local parts differ.
+   * Example: {"leightonmdimando@solarpros.io":"leightondimando@noxpwr.com"}
+   */
+  userEmailAliasesJson: opt("USER_EMAIL_ALIASES_JSON"),
   /** Coperniq REST API (Settings → Integrations → API key) */
   coperniqApiKey: opt("COPERNIQ_API_KEY"),
   coperniqApiBaseUrl: opt("COPERNIQ_API_BASE_URL", "https://api.coperniq.io"),

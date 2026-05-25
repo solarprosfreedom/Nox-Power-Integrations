@@ -42,21 +42,6 @@ function decodeJwtPayload(token: string): { roles?: string[] } {
 
 function assertMailSendPermission(token: string): void {
   const roles = decodeJwtPayload(token).roles ?? [];
-  // #region agent log
-  fetch("http://127.0.0.1:7264/ingest/a82f0243-aefe-466b-aacd-9b45cf8eb5d9", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "7c98bc" },
-    body: JSON.stringify({
-      sessionId: "7c98bc",
-      runId: "post-fix",
-      hypothesisId: "H1",
-      location: "graph-mail.ts:assertMailSendPermission",
-      message: "token application roles",
-      data: { roles, hasMailSend: roles.includes("Mail.Send") },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   if (!roles.includes("Mail.Send")) {
     throw new Error(
       "Mail.Send is missing from your Azure app token. In Azure Portal → App registrations → " +
@@ -110,28 +95,6 @@ async function getAccessToken(): Promise<string> {
     grant_type: "client_credentials",
   });
 
-  // #region agent log
-  fetch("http://127.0.0.1:7264/ingest/a82f0243-aefe-466b-aacd-9b45cf8eb5d9", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "7c98bc" },
-    body: JSON.stringify({
-      sessionId: "7c98bc",
-      runId: "pre-fix",
-      hypothesisId: "H1-H4",
-      location: "graph-mail.ts:getAccessToken",
-      message: "token request params",
-      data: {
-        tenantId,
-        clientId,
-        clientIdLen: clientId.length,
-        secretLen: clientSecret.length,
-        tokenUrl: url,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -146,25 +109,6 @@ async function getAccessToken(): Promise<string> {
   };
 
   if (!res.ok || !data.access_token) {
-    // #region agent log
-    fetch("http://127.0.0.1:7264/ingest/a82f0243-aefe-466b-aacd-9b45cf8eb5d9", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "7c98bc" },
-      body: JSON.stringify({
-        sessionId: "7c98bc",
-        runId: "pre-fix",
-        hypothesisId: "H1-H5",
-        location: "graph-mail.ts:getAccessToken:error",
-        message: "token request failed",
-        data: {
-          status: res.status,
-          error: data.error ?? null,
-          errorCode: data.error_description?.match(/AADSTS\d+/)?.[0] ?? null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
     throw new Error(formatAzureTokenError(data));
   }
 
