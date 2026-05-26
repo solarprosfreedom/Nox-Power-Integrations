@@ -109,7 +109,11 @@ export async function writeApiLog(
  * Returns true (won = proceed) when Supabase is unavailable so we don't
  * silently swallow events in environments without a DB.
  */
-async function acquireDedupLock(lockKey: string, operation: string): Promise<boolean> {
+async function acquireDedupLock(
+  lockKey: string,
+  operation: string,
+  windowMs = 10_000,
+): Promise<boolean> {
   // Wrap everything in try/catch — if Supabase is unavailable or throws for any
   // reason we must not crash the calling webhook handler. Returning true lets
   // event creation proceed so nothing is silently dropped.
@@ -142,9 +146,7 @@ async function acquireDedupLock(lockKey: string, operation: string): Promise<boo
     // Give concurrent requests 300 ms to write their own lock entries
     await new Promise<void>(resolve => setTimeout(resolve, 300));
 
-    // 10-second window: wide enough for concurrent fires (< 2 s apart),
-    // narrow enough that re-testing the same appointment after a few seconds works.
-    const cutoff = new Date(Date.now() - 10_000).toISOString();
+    const cutoff = new Date(Date.now() - windowMs).toISOString();
     const { data, error: queryError } = await supabase
       .from("api_logs")
       .select("id")
@@ -180,7 +182,8 @@ export async function acquireCalendarEventLock(
 export async function acquireTerrosEventCreateLock(terrosEventId: string): Promise<boolean> {
   const key = terrosEventId.trim();
   if (!key) return true;
-  return acquireDedupLock(key, "terros-event-create-lock");
+  // Terros retries Event add webhooks over 30+ seconds — keep lock window wide.
+  return acquireDedupLock(key, "terros-event-create-lock", 5 * 60_000);
 }
 
 /**

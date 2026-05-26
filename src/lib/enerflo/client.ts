@@ -8,7 +8,7 @@ export async function enerfloRequest(options: {
   pathParams?: Record<string, string>;
   query?: Record<string, string>;
   body?: Record<string, unknown>;
-}): Promise<ApiLog & { ok: boolean }> {
+}): Promise<ApiLog & { ok: boolean; rawResponseText: string }> {
   const base = (env.enerfloV1BaseUrl ?? "https://enerflo.io").replace(/\/$/, "");
 
   // Substitute path params e.g. /api/v3/customers/{id}/appointments/
@@ -36,6 +36,7 @@ export async function enerfloRequest(options: {
   let responsePreview = "";
   let fetchError: string | undefined;
   let ok = false;
+  let rawResponseText = "";
 
   try {
     const res = await fetch(url, {
@@ -49,7 +50,8 @@ export async function enerfloRequest(options: {
     status = res.status;
     statusText = res.statusText;
     ok = res.ok;
-    responsePreview = preview(await res.text());
+    rawResponseText = await res.text();
+    responsePreview = preview(rawResponseText);
   } catch (e) {
     fetchError = e instanceof Error ? e.message : String(e);
   }
@@ -67,7 +69,7 @@ export async function enerfloRequest(options: {
       responsePreview,
       fetchError,
     });
-    return { ...log, ok };
+    return { ...log, ok, rawResponseText };
   }
 
   // GET — skip writing to the activity log
@@ -84,6 +86,7 @@ export async function enerfloRequest(options: {
     ok,
     responsePreview,
     fetchError,
+    rawResponseText,
   };
 }
 
@@ -129,6 +132,7 @@ export async function enerfloRequestParsed<T = unknown>(options: {
   let ok = false;
   let data: T | null = null;
   let parseError: string | undefined;
+  let rawResponseText = "";
 
   try {
     const res = await fetch(url, {
@@ -142,11 +146,11 @@ export async function enerfloRequestParsed<T = unknown>(options: {
     status = res.status;
     statusText = res.statusText;
     ok = res.ok;
-    const text = await res.text();
-    responsePreview = preview(text);
-    if (text.trim()) {
+    rawResponseText = await res.text();
+    responsePreview = preview(rawResponseText);
+    if (rawResponseText.trim()) {
       try {
-        data = JSON.parse(text) as T;
+        data = JSON.parse(rawResponseText) as T;
       } catch (e) {
         parseError = e instanceof Error ? e.message : String(e);
       }
@@ -155,7 +159,7 @@ export async function enerfloRequestParsed<T = unknown>(options: {
     fetchError = e instanceof Error ? e.message : String(e);
   }
 
-  const stub: ApiLog & { ok: boolean } = {
+  const stub: ApiLog & { ok: boolean; rawResponseText: string } = {
     id: "",
     timestamp: new Date().toISOString(),
     operation: options.operation,
@@ -168,6 +172,7 @@ export async function enerfloRequestParsed<T = unknown>(options: {
     ok,
     responsePreview: parseError ? `${responsePreview}\n(parse: ${parseError})` : responsePreview,
     fetchError,
+    rawResponseText,
   };
 
   if (options.method !== "GET") {
@@ -183,7 +188,7 @@ export async function enerfloRequestParsed<T = unknown>(options: {
       responsePreview: parseError ? `${responsePreview}\n(parse: ${parseError})` : responsePreview,
       fetchError,
     });
-    return { ok, status, data, parseError, log: { ...log, ok } };
+    return { ok, status, data, parseError, log: { ...log, ok, rawResponseText } };
   }
 
   // GET — skip writing to the activity log

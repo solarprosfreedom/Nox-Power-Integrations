@@ -990,6 +990,29 @@ function extractEventNoteMarker(data: TerrosEventData): string {
  *   "xanderdavis@solarpros.io"          → "xanderdavis@noxpwr.com"
  *   "xanderdavis@noxpwr.com"            → "xanderdavis@noxpwr.com"  (unchanged)
  */
+/** Parse Enerflo POST /v1/appointments id — works even when log preview truncates JSON. */
+function parseEnerfloCreateAppointmentId(responseText: string): string | null {
+  if (!responseText) return null;
+  const aptId = responseText.match(/"enerflo_apt_id"\s*:\s*(\d+)/)?.[1];
+  if (aptId) return aptId;
+  try {
+    const j = JSON.parse(responseText) as Record<string, unknown>;
+    const appt = (j.appointment ?? j.data ?? j) as Record<string, unknown>;
+    const rawId =
+      appt.id ??
+      appt.appointment_id ??
+      appt.enerflo_apt_id ??
+      j.id ??
+      j.appointment_id ??
+      j.enerflo_apt_id;
+    if (rawId != null) return String(rawId);
+  } catch {
+    const idMatch = responseText.match(/"id"\s*:\s*(\d+)/);
+    if (idMatch?.[1]) return idMatch[1];
+  }
+  return null;
+}
+
 function cleanEmailForEnerflo(raw: string): string {
   if (!raw) return raw;
   // Strip +alias portion before @
@@ -1151,17 +1174,19 @@ async function handleEventAdd(
   if (terrosEventId) {
     const wonLock = await acquireTerrosEventCreateLock(terrosEventId);
     if (!wonLock) {
-      await new Promise<void>(resolve => setTimeout(resolve, 400));
-      const mappedId = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
-      if (mappedId != null) {
-        return NextResponse.json({
-          received: true,
-          action: "event-add",
-          skipped: true,
-          reason: "dedup:lock-lost-existing-map",
-          enerfloAppointmentId: mappedId,
-          terrosEventId,
-        });
+      for (let i = 0; i < 8; i++) {
+        await new Promise<void>(resolve => setTimeout(resolve, 500));
+        const mappedId = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
+        if (mappedId != null) {
+          return NextResponse.json({
+            received: true,
+            action: "event-add",
+            skipped: true,
+            reason: "dedup:lock-lost-existing-map",
+            enerfloAppointmentId: mappedId,
+            terrosEventId,
+          });
+        }
       }
       return NextResponse.json({
         received: true,
@@ -1204,15 +1229,9 @@ async function handleEventAdd(
   });
 
   // ── Step 5: parse appointment ID from response ───────────────────────────
-  let enerfloAppointmentId: string | null = null;
-  if (createLog.responsePreview) {
-    try {
-      const j    = JSON.parse(createLog.responsePreview) as Record<string, unknown>;
-      const appt = (j.appointment ?? j.data ?? j) as Record<string, unknown>;
-      const rawId = appt.id ?? appt.appointment_id ?? j.id ?? j.appointment_id;
-      if (rawId != null) enerfloAppointmentId = String(rawId);
-    } catch { /* ignore */ }
-  }
+  const enerfloAppointmentId = parseEnerfloCreateAppointmentId(
+    createLog.rawResponseText || createLog.responsePreview,
+  );
 
   if (createLog.ok && enerfloAppointmentId && terrosEventId) {
     const numericId = Number(enerfloAppointmentId);
