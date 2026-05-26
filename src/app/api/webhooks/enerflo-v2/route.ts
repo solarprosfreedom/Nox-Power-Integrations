@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId } from "@/lib/logger";
 import { env } from "@/lib/env";
+import { resolveEnerfloCustomerLeadOwner } from "@/lib/sync/enerflo-lead-owner";
 import { resolveTerrosUserIdByEmail } from "@/lib/sync/terros-users";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -499,18 +500,48 @@ async function handleProjectSubmitted(
   }
 
   // ── Step 1b [best-effort]: Resolve rep / owner email from Enerflo ─────────
-  // Webhook only includes UUIDs for salesRep / initiatedBy — not numeric company user id (e.g. 147073).
-  // Survey GET by deal id often exposes agent_user_id / creator_user_id for the real rep (e.g. Jonas).
+  // Priority: Lead Owner (v1 owner.email) → agent → setter; avoid initiatedBy (API user).
   let repEmail: string | null = null;
   let repResolvedFrom = "";
   let resolveStatus: number | null = null;
   let resolvePreview = "";
 
-  if (repLookupId.includes("@")) {
+  if (customerEmail && customerId && enerfloKey) {
+    const leadOwner = await resolveEnerfloCustomerLeadOwner({
+      enerfloBase,
+      enerfloKey,
+      customerEmail,
+      customerUuid: customerId,
+    });
+    if (leadOwner.ownerEmail) {
+      repEmail = leadOwner.ownerEmail;
+      repResolvedFrom = leadOwner.ownerResolvedFrom;
+      resolvePreview = JSON.stringify(leadOwner.debug).slice(0, 300);
+    }
+  }
+
+  if (!repEmail && repLookupId.includes("@")) {
     repEmail = repLookupId;
     repResolvedFrom = "email-inline";
-  } else {
-    if (dealId && enerfloKey) {
+  } else if (!repEmail) {
+    // customerAgentId from v3 customer fetch — often owner.user.email (Lead Owner)
+    const uuidCandidates = [customerAgentId, salesRepUuid].filter(
+      (id, i, arr) => id && arr.indexOf(id) === i,
+    );
+    for (const lookupId of uuidCandidates) {
+      const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, lookupId);
+      resolveStatus = r.lastStatus;
+      resolvePreview = r.lastPreview;
+      if (r.email) {
+        repEmail = r.email;
+        repResolvedFrom = lookupId.includes("@")
+          ? "customer:owner.email"
+          : `users-list:${lookupId.slice(0, 8)}…`;
+        break;
+      }
+    }
+
+    if (!repEmail && dealId && enerfloKey) {
       const surveyUrl = `${enerfloBase}/api/v3/surveys/${encodeURIComponent(dealId)}`;
       try {
         const res = await fetch(surveyUrl, {
@@ -525,8 +556,8 @@ async function handleProjectSubmitted(
           const s = (parsed.survey ?? parsed.data ?? parsed) as Record<string, unknown>;
           const agentNumeric =
             s.agent_user_id ??
-            s.creator_user_id ??
             s.setter_user_id ??
+            s.creator_user_id ??
             s.user_id ??
             s.agentUserId ??
             s.creatorUserId;
@@ -549,29 +580,18 @@ async function handleProjectSubmitted(
       } catch (e) {
         resolvePreview = e instanceof Error ? e.message : String(e);
       }
-
     }
 
-    // customerAgentId (from the full customer record) is the most reliable source —
-    // it's the Enerflo lead owner, not the API key user. Try it first.
-    // salesRepUuid and initiatedBy are secondary fallbacks (initiatedBy is the API
-    // key user for API-created leads, so it will often resolve to the wrong rep).
-    const uuidCandidates = [customerAgentId, salesRepUuid, initiatedBy].filter(
-      (id, i, arr) => id && arr.indexOf(id) === i
-    );
-    for (const lookupId of uuidCandidates) {
-      if (repEmail) break;
-      const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, lookupId);
+    // initiatedBy is the API key user — last resort only
+    if (!repEmail && initiatedBy) {
+      const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, initiatedBy);
       resolveStatus = r.lastStatus;
       resolvePreview = r.lastPreview;
       if (r.email) {
         repEmail = r.email;
-        repResolvedFrom = `users-list:${lookupId.slice(0, 8)}…`;
-        break;
+        repResolvedFrom = "initiatedBy:last-resort";
       }
     }
-
-    
   }
 
   steps.push({
@@ -1067,141 +1087,27 @@ async function handleCustomerCreated(
     location.latlng = { latitude: addr.lat, longitude: addr.lng };
   }
 
-  let ownerResolvedFrom = "";
-  let ownerEmail: string | null = null;
-  let agentEmailResolved: string | null = null;
-  let setterEmailResolved: string | null = null;
-  let _ownerDebug: Record<string, unknown> = {};
-  // The numeric Enerflo customer ID, resolved from v1 search.
-  // Used as externalLeadId so it matches what handleNewAppointment searches for.
-  let resolvedNumericId: string | null = null;
-
-  // GET /api/v3/customers/{uuid} returns 403 for this API key.
-  // Instead, use GET /api/v1/customers?search={email} which returns owner.email directly.
-  // The customer.created payload always includes customer.email.
-  if (customerEmail && enerfloKey) {
-    try {
-      const searchUrl = `${enerfloBase}/api/v1/customers?search=${encodeURIComponent(customerEmail)}&pageSize=20`;
-      const res = await fetch(searchUrl, {
-        method: "GET",
-        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-      });
-      _ownerDebug.searchStatus = res.status;
-      if (res.ok) {
-        const raw = JSON.parse(await res.text()) as Record<string, unknown>;
-        const rows = raw.data as Record<string, unknown>[] | undefined;
-        _ownerDebug.searchCount = raw.dataCount ?? 0;
-        if (Array.isArray(rows)) {
-          // Find the record whose integration UUID matches our customerId
-          let matchedRow = rows.find((r) => {
-            const integId = (
-              (r.integrations as Record<string, unknown> | undefined)
-                ?.["Enerflo V2"] as Record<string, unknown> | undefined
-            )?.EnerfloV2Customer as Record<string, unknown> | undefined;
-            return integId?.integration_record_id === customerId;
-          });
-          // UUID match often fails on newly-created customers (integration record not yet indexed).
-          // Fall back to the row with the highest numeric ID (most recently created customer with this email).
-          if (!matchedRow && rows.length > 0) {
-            matchedRow = rows.reduce((best, r) => {
-              const bId = typeof best?.id === "number" ? best.id : 0;
-              const rId = typeof r.id === "number" ? r.id : 0;
-              return rId > bId ? r : best;
-            }, rows[0]);
-          }
-          const matchedNumericId = matchedRow?.id != null ? String(matchedRow.id) : null;
-          _ownerDebug.matchedRowId = matchedNumericId;
-          if (matchedNumericId) resolvedNumericId = matchedNumericId;
-
-          // Fetch v3 to get agent_user_id (sales rep) and setter_user_id.
-          // owner  = agent / sales rep (fall back to setter if no agent)
-          // closer = setter
-          if (matchedNumericId && enerfloKey) {
-            try {
-              const v3Res = await fetch(
-                `${enerfloBase}/api/v3/customers/${encodeURIComponent(matchedNumericId)}`,
-                { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
-              );
-              if (v3Res.ok) {
-                const v3Data = JSON.parse(await v3Res.text()) as Record<string, unknown>;
-                const agentId  = v3Data.agent_user_id  != null ? String(v3Data.agent_user_id)  : null;
-                const setterId = v3Data.setter_user_id != null ? String(v3Data.setter_user_id) : null;
-                _ownerDebug.agentUserId  = agentId;
-                _ownerDebug.setterUserId = setterId;
-
-                // Resolve both via user list in one pass (fetch pages once, match both IDs)
-                const idsToFind = [agentId, setterId].filter(Boolean) as string[];
-                if (idsToFind.length > 0) {
-                  const resolved: Record<string, string> = {};
-                  outer: for (let page = 1; page <= 5; page++) {
-                    try {
-                      const ur = await fetch(
-                        `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
-                        { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
-                      );
-                      if (!ur.ok) break;
-                      const ud = JSON.parse(await ur.text()) as Record<string, unknown>;
-                      const urows = (ud.results ?? ud.items ?? ud.users ?? ud.data) as Record<string, unknown>[] | undefined;
-                      if (!Array.isArray(urows) || urows.length === 0) break;
-                      for (const u of urows) {
-                        const uid = String(u.id ?? u.user_id ?? "");
-                        const uemail = (u.email ?? u.user_email) as string | undefined;
-                        if (uid && uemail && idsToFind.includes(uid)) resolved[uid] = uemail;
-                      }
-                      if (Object.keys(resolved).length >= idsToFind.length) break outer;
-                      if (urows.length < 100) break;
-                    } catch { break; }
-                  }
-                  if (agentId  && resolved[agentId])  agentEmailResolved  = resolved[agentId];
-                  if (setterId && resolved[setterId]) setterEmailResolved = resolved[setterId];
-                }
-
-                _ownerDebug.agentEmail  = agentEmailResolved;
-                _ownerDebug.setterEmail = setterEmailResolved;
-
-                // owner = agent / sales rep (fall back to setter); closer = setter
-                if (agentEmailResolved || setterEmailResolved) {
-                  ownerEmail = (agentEmailResolved || setterEmailResolved)!.trim();
-                  ownerResolvedFrom = agentEmailResolved
-                    ? "v3:agent_user_id→user-list"
-                    : "v3:setter_user_id→user-list";
-                }
-              }
-            } catch { /* best-effort */ }
-          }
-
-          // Fall back to v1 owner.email if v3 lookup failed
-          if (!ownerEmail) {
-            const ownerObj = matchedRow?.owner as Record<string, unknown> | undefined;
-            const foundEmail = ownerObj?.email as string | undefined;
-            _ownerDebug.foundOwnerEmail = foundEmail ?? null;
-            if (foundEmail && foundEmail.includes("@")) {
-              ownerEmail = foundEmail.trim();
-              ownerResolvedFrom = "v1-search:owner.email";
-            }
-          }
-        }
-      }
-    } catch (e) {
-      _ownerDebug.searchError = e instanceof Error ? e.message : String(e);
-    }
+  const payloadRoot = payload as unknown as Record<string, unknown>;
+  const leadRefs = extractCustomerCreatedLeadOwnerRefs(c, payloadRoot);
+  let payloadLeadOwnerEmail = leadRefs.email ?? null;
+  if (!payloadLeadOwnerEmail && leadRefs.id && enerfloKey) {
+    const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, leadRefs.id);
+    if (r.email) payloadLeadOwnerEmail = r.email;
   }
 
-  // Fallback: check payload-level leadOwner fields
-  if (!ownerEmail) {
-    const payloadRoot = payload as unknown as Record<string, unknown>;
-    const leadRefs = extractCustomerCreatedLeadOwnerRefs(c, payloadRoot);
-    if (leadRefs.email) {
-      ownerEmail = leadRefs.email;
-      ownerResolvedFrom = leadRefs.source ?? "leadOwner.email";
-    } else if (leadRefs.id && enerfloKey) {
-      const r = await resolveEnerfloUserEmailByLookupId(enerfloBase, enerfloKey, leadRefs.id);
-      if (r.email) {
-        ownerEmail = r.email;
-        ownerResolvedFrom = `${leadRefs.source ?? "leadOwner"}.id→Enerflo`;
-      }
-    }
-  }
+  const ownerResolution = await resolveEnerfloCustomerLeadOwner({
+    enerfloBase,
+    enerfloKey,
+    customerEmail,
+    customerUuid: customerId,
+    payloadLeadOwnerEmail,
+  });
+
+  const ownerEmail = ownerResolution.ownerEmail;
+  const ownerResolvedFrom = ownerResolution.ownerResolvedFrom;
+  const setterEmailResolved = ownerResolution.setterEmail;
+  const resolvedNumericId = ownerResolution.matchedNumericId;
+  const _ownerDebug = ownerResolution.debug;
 
   let terrosOwnerId:  string | null = null;
   let terrosCloserId: string | null = null;
@@ -1285,7 +1191,7 @@ async function handleCustomerCreated(
       customerId,
       ownerEmail,
       ownerResolvedFrom: ownerResolvedFrom || null,
-      agentEmailResolved,
+      setterEmailResolved,
       terrosOwnerId,
       terrosCloserId,
       ..._ownerDebug,
@@ -1317,6 +1223,8 @@ async function handleCustomerCreated(
 async function handleCustomerUpdatedV2(
   payload: CustomerUpdatedV2Payload
 ): Promise<NextResponse> {
+  const enerfloBase = (env.enerfloV1BaseUrl ?? "https://enerflo.io").replace(/\/$/, "");
+  const enerfloKey  = env.enerfloV1ApiKey ?? "";
   const terrosBase  = (env.terrosApiBaseUrl ?? "https://api.terros.com").replace(/\/$/, "");
   const terrosKey   = env.terrosApiKey ?? "";
 
@@ -1325,6 +1233,28 @@ async function handleCustomerUpdatedV2(
   const customerName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
   const customerEmail = c.email?.trim() ?? "";
   const customerPhone = (c.mobile?.trim() || c.phone?.trim()) ?? "";
+
+  const ownerResolution = await resolveEnerfloCustomerLeadOwner({
+    enerfloBase,
+    enerfloKey,
+    customerEmail,
+    customerUuid: customerId,
+  });
+  const emailToResolve = ownerResolution.ownerEmail || env.defaultOwnerEmail || "";
+  let terrosOwnerId: string | null = null;
+  let terrosCloserId: string | null = null;
+  if (emailToResolve && terrosKey) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToResolve);
+    terrosOwnerId = u.userId;
+  }
+  if (
+    ownerResolution.setterEmail &&
+    ownerResolution.setterEmail !== ownerResolution.ownerEmail &&
+    terrosKey
+  ) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerResolution.setterEmail);
+    terrosCloserId = u.userId;
+  }
 
   const addr = c.address;
   const addrTrim = addr?.fullAddress?.trim() ??
@@ -1348,6 +1278,8 @@ async function handleCustomerUpdatedV2(
     // externalLeadId = customer UUID — used by account/upsert to find the existing account
     externalLeadId: customerId,
     ...(customerName ? { name: customerName } : {}),
+    ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
+    ...(terrosCloserId ? { closerId: terrosCloserId } : {}),
     ...(Object.keys(residentUpdate).length > 0 ? { resident: residentUpdate } : {}),
   };
 
@@ -1403,6 +1335,12 @@ async function handleCustomerUpdatedV2(
     event: "customer.updated.v2",
     customerId,
     fieldsChanged: Object.keys(changes),
+    owner: {
+      ownerEmail: ownerResolution.ownerEmail,
+      ownerResolvedFrom: ownerResolution.ownerResolvedFrom,
+      terrosOwnerId,
+      terrosCloserId,
+    },
     success: ok,
     status,
     data: ok ? parsedBody : undefined,
@@ -1549,6 +1487,15 @@ function terrosJsonBodyIndicatesSuccess(responseText: string): boolean {
     /* non-JSON body — treat as success if caller already got 2xx */
   }
   return true;
+}
+
+function terrosEventNoteText(evt: Record<string, unknown>): string {
+  const note = evt.note ?? evt.notes ?? "";
+  return typeof note === "string" ? note : String(note);
+}
+
+function terrosEventHasEnerfloMarker(evt: Record<string, unknown>, enerfloAppointmentId: number): boolean {
+  return terrosEventNoteText(evt).includes(`[Enerflo:${enerfloAppointmentId}]`);
 }
 
 function isWebhookRecord(v: unknown): v is Record<string, unknown> {
@@ -2296,14 +2243,13 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           step4ListPreview = raw.slice(0, 600);
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           const evts   = parsed.events as Record<string, unknown>[] | undefined;
-          const marker = `[Enerflo:${enerfloAppointmentId}]`;
           if (Array.isArray(evts) && evts.length > 0) {
-            // Strategy 2: notes marker
-            const byNotes = evts.find(e => typeof e.notes === "string" && (e.notes as string).includes(marker));
+            // Strategy 2: [Enerflo:ID] marker in note or notes
+            const byNotes = evts.find(e => terrosEventHasEnerfloMarker(e, enerfloAppointmentId));
             if (byNotes) {
               existingEventId = (byNotes.eventId ?? byNotes.id) as string;
             } else {
-              // Strategy 3: title only (date may have changed, so don't require date match)
+              // Strategy 3: title match (Enerflo "In-Home – Name" vs Terros "Consultation")
               const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
               const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
               const byTitle = evts.find(e =>
@@ -2311,6 +2257,19 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
               );
               if (byTitle) {
                 existingEventId = (byTitle.eventId ?? byTitle.id) as string;
+              } else {
+                // Strategy 3b: same start time (Terros often titles events "Consultation")
+                const byDate = evts.find(e => {
+                  const rawDate = e.eventDate ?? e.startDate;
+                  if (rawDate == null) return false;
+                  const evtMs =
+                    typeof rawDate === "number" ? rawDate : new Date(String(rawDate)).getTime();
+                  if (Number.isNaN(evtMs)) return false;
+                  return Math.abs(evtMs - startTimeMs) < 60_000;
+                });
+                if (byDate) {
+                  existingEventId = (byDate.eventId ?? byDate.id) as string;
+                }
               }
             }
           }
@@ -2382,7 +2341,19 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         step4Preview = JSON.stringify({ requestBody: updateBody, error: String(e) });
       }
     } else {
-      // 4c: no matching event found — create a new one
+      // 4c: no matching event found — create only when Terros truly has none
+      const mappedTerrosId = await getCalendarEventId(enerfloAppointmentId);
+      if (mappedTerrosId) {
+        step4Action = "skipped-already-mapped";
+        step4Ok = true;
+        calendarEventId = mappedTerrosId;
+        step4Preview = JSON.stringify({
+          enerfloAppointmentId,
+          accountId,
+          skipped: "calendar-event-id-map",
+          terrosEventId: mappedTerrosId,
+        }).slice(0, 1200);
+      } else {
       step4Action = "create";
       const createBody = { event: { accountId, ...eventFields } };
       try {
@@ -2411,6 +2382,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         }
       } catch (e) {
         step4Preview = JSON.stringify({ requestBody: createBody, error: String(e) });
+      }
       }
     }
 
@@ -2535,64 +2507,43 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     });
   }
 
-  // ── Step 2: resolve agent + setter numeric IDs → emails via /api/v3/users list ──
-  // Fetching /api/v3/users/{id} individually is unreliable — instead page through
-  // the user list and match by numeric id, which is the same approach used in the
-  // Terros webhook for user lookups.
+  // ── Step 2–3: Lead owner (sales rep / agent → setter fallback) → Terros IDs ──
+  const ownerResolution = await resolveEnerfloCustomerLeadOwner({
+    enerfloBase,
+    enerfloKey,
+    customerEmail,
+    customerUuid: customerUuid ?? undefined,
+    v3Customer: Object.keys(v3CustomerRaw).length > 0 ? v3CustomerRaw : null,
+    v1NumericId: numericId || null,
+  });
 
-  let salesRepEmail: string | null = null;
-  let setterEmail:   string | null = null;
-  let step2Ok = false;
-
-  async function fetchEnerfloUserEmailById(numId: string): Promise<string | null> {
-    if (!numId || !enerfloKey) return null;
-    const target = String(numId);
-    for (let page = 1; page <= 5; page++) {
-      try {
-        const r = await fetch(
-          `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
-          { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
-        );
-        if (!r.ok) break;
-        const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
-        const rows = (
-          (parsed.results ?? parsed.items ?? parsed.users ?? parsed.data) as Record<string, unknown>[] | undefined
-        );
-        if (!Array.isArray(rows) || rows.length === 0) break;
-        const match = rows.find(u => String(u.id ?? u.user_id) === target);
-        if (match) return (match.email ?? match.user_email) as string | null ?? null;
-        if (rows.length < 100) break;
-      } catch { break; }
-    }
-    return null;
-  }
-
-  if (enerfloKey) {
-    if (agentNumericId)  salesRepEmail = await fetchEnerfloUserEmailById(agentNumericId);
-    if (setterNumericId) setterEmail   = await fetchEnerfloUserEmailById(setterNumericId);
-    step2Ok = Boolean(salesRepEmail || setterEmail);
-  }
+  const salesRepEmail = ownerResolution.ownerEmail;
+  const setterEmail = ownerResolution.setterEmail;
+  const step2Ok = Boolean(salesRepEmail || setterEmail);
 
   await writeApiLog({
     operation: "webhook:enerflo-v2:update-customer:user-resolve",
     vendor:    "enerflo",
     method:    "GET",
-    url:       `${enerfloBase}/api/v3/users`,
+    url:       `${enerfloBase}/api/v3/customers`,
     hadApiKey: Boolean(enerfloKey),
     status:    step2Ok ? 200 : null,
     ok:        step2Ok,
-    responsePreview: JSON.stringify({ agentNumericId, setterNumericId, salesRepEmail, setterEmail }).slice(0, 300),
+    responsePreview: JSON.stringify({
+      agentNumericId,
+      setterNumericId,
+      salesRepEmail,
+      setterEmail,
+      ownerResolvedFrom: ownerResolution.ownerResolvedFrom,
+      ...ownerResolution.debug,
+    }).slice(0, 400),
   });
-
-  // ── Step 3: resolve emails → Terros user IDs ─────────────────────────────
-  // owner  = sales rep / agent (the person who owns and closes the deal)
-  // closer = setter (the person who set the appointment); fall back to sales rep if no setter
 
   let ownerId:  string | null = null;
   let closerId: string | null = null;
 
   if (terrosKey) {
-    const ownerEmailToUse = salesRepEmail || setterEmail || env.defaultOwnerEmail || "";
+    const ownerEmailToUse = salesRepEmail || env.defaultOwnerEmail || "";
     if (ownerEmailToUse) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmailToUse);
       ownerId = r.userId;
@@ -2607,7 +2558,7 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
         responsePreview: r.preview.slice(0, 400),
       });
     }
-    if (setterEmail) {
+    if (setterEmail && setterEmail !== salesRepEmail) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
       closerId = r.userId;
     }

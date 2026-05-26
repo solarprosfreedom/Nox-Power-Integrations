@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
-import { writeApiLog, getEnerfloAppointmentIdByTerrosEventId } from "@/lib/logger";
+import { writeApiLog, getEnerfloAppointmentIdByTerrosEventId, acquireTerrosEventCreateLock, saveCalendarEventMapping } from "@/lib/logger";
 import { findUserByEmailInList } from "@/lib/sync/user-email-match";
 
 const UUID_RE =
@@ -1059,6 +1059,37 @@ async function handleEventAdd(
     return NextResponse.json({ received: true, action: "event-add", skipped: true, reason: "dedup:enerflo-marker-in-note" });
   }
 
+  // Already created Enerflo appointment for this Terros event (prior webhook or round-trip).
+  if (terrosEventId) {
+    const mappedId = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
+    if (mappedId != null) {
+      await writeApiLog({
+        operation: "webhook:terros:received-event-add",
+        vendor: "terros",
+        method: "POST",
+        url: `/api/webhooks/terros`,
+        hadApiKey: Boolean(terrosKey),
+        status: 200,
+        ok: true,
+        responsePreview: JSON.stringify({
+          terrosEventId,
+          accountId,
+          skipped: true,
+          reason: "dedup:existing-terros-event-map",
+          enerfloAppointmentId: mappedId,
+        }).slice(0, 400),
+      });
+      return NextResponse.json({
+        received: true,
+        action: "event-add",
+        skipped: true,
+        reason: "dedup:existing-terros-event-map",
+        enerfloAppointmentId: mappedId,
+        terrosEventId,
+      });
+    }
+  }
+
   await writeApiLog({
     operation: "webhook:terros:received-event-add",
     vendor: "terros",
@@ -1116,7 +1147,44 @@ async function handleEventAdd(
     });
   }
 
-  // ── Step 2: POST /v1/appointments ────────────────────────────────────────
+  // ── Step 2: POST /v1/appointments (with lock — prevent concurrent duplicates) ──
+  if (terrosEventId) {
+    const wonLock = await acquireTerrosEventCreateLock(terrosEventId);
+    if (!wonLock) {
+      await new Promise<void>(resolve => setTimeout(resolve, 400));
+      const mappedId = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
+      if (mappedId != null) {
+        return NextResponse.json({
+          received: true,
+          action: "event-add",
+          skipped: true,
+          reason: "dedup:lock-lost-existing-map",
+          enerfloAppointmentId: mappedId,
+          terrosEventId,
+        });
+      }
+      return NextResponse.json({
+        received: true,
+        action: "event-add",
+        skipped: true,
+        reason: "dedup:lock-lost",
+        terrosEventId,
+      });
+    }
+
+    const mappedAfterLock = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
+    if (mappedAfterLock != null) {
+      return NextResponse.json({
+        received: true,
+        action: "event-add",
+        skipped: true,
+        reason: "dedup:existing-terros-event-map-after-lock",
+        enerfloAppointmentId: mappedAfterLock,
+        terrosEventId,
+      });
+    }
+  }
+
   // Required: customer, appointment_type, start, end
   // Optional: user (email of assigned closer), creator
   const cleanedAssigneeEmail = assigneeEmail ? cleanEmailForEnerflo(assigneeEmail) : "";
@@ -1144,6 +1212,13 @@ async function handleEventAdd(
       const rawId = appt.id ?? appt.appointment_id ?? j.id ?? j.appointment_id;
       if (rawId != null) enerfloAppointmentId = String(rawId);
     } catch { /* ignore */ }
+  }
+
+  if (createLog.ok && enerfloAppointmentId && terrosEventId) {
+    const numericId = Number(enerfloAppointmentId);
+    if (Number.isFinite(numericId)) {
+      await saveCalendarEventMapping(numericId, terrosEventId);
+    }
   }
 
   // ── Step 6: stamp [Enerflo:ID] back onto the Terros event ───────────────

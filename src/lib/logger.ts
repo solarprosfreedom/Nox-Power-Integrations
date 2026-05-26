@@ -109,9 +109,7 @@ export async function writeApiLog(
  * Returns true (won = proceed) when Supabase is unavailable so we don't
  * silently swallow events in environments without a DB.
  */
-export async function acquireCalendarEventLock(
-  enerfloAppointmentId: number
-): Promise<boolean> {
+async function acquireDedupLock(lockKey: string, operation: string): Promise<boolean> {
   // Wrap everything in try/catch — if Supabase is unavailable or throws for any
   // reason we must not crash the calling webhook handler. Returning true lets
   // event creation proceed so nothing is silently dropped.
@@ -125,7 +123,7 @@ export async function acquireCalendarEventLock(
     const { error: insertError } = await supabase.from("api_logs").insert({
       id:               lockId,
       timestamp:        lockTimestamp,
-      operation:        "calendar-event-lock",
+      operation:        operation,
       vendor:           "terros",
       method:           "POST",
       url:              "",
@@ -133,7 +131,7 @@ export async function acquireCalendarEventLock(
       status:           null,
       status_text:      null,
       ok:               false,
-      response_preview: String(enerfloAppointmentId),
+      response_preview: lockKey,
       fetch_error:      null,
     });
     if (insertError) {
@@ -150,8 +148,8 @@ export async function acquireCalendarEventLock(
     const { data, error: queryError } = await supabase
       .from("api_logs")
       .select("id")
-      .eq("operation", "calendar-event-lock")
-      .eq("response_preview", String(enerfloAppointmentId))
+      .eq("operation", operation)
+      .eq("response_preview", lockKey)
       .gte("timestamp", cutoff)
       .order("timestamp", { ascending: true })
       .limit(1);
@@ -166,6 +164,23 @@ export async function acquireCalendarEventLock(
     console.error("[LOCK] unexpected error:", err);
     return true; // allow on any unexpected error
   }
+}
+
+/** Lock for Enerflo → Terros calendar event creation (concurrent update_appointment). */
+export async function acquireCalendarEventLock(
+  enerfloAppointmentId: number
+): Promise<boolean> {
+  return acquireDedupLock(String(enerfloAppointmentId), "calendar-event-lock");
+}
+
+/**
+ * Lock for Terros → Enerflo appointment creation (concurrent Event add webhooks).
+ * Only one POST /api/v1/appointments per Terros eventId should win.
+ */
+export async function acquireTerrosEventCreateLock(terrosEventId: string): Promise<boolean> {
+  const key = terrosEventId.trim();
+  if (!key) return true;
+  return acquireDedupLock(key, "terros-event-create-lock");
 }
 
 /**
