@@ -344,34 +344,103 @@ async function findEnerfloUserIdByEmail(rawEmail: string): Promise<number | null
   return isNaN(numId) ? null : numId;
 }
 
-async function findEnerfloCustomerUuidByIntegrationSearch(
-  terrosAccountId: string
-): Promise<string | null> {
-  const { ok, data } = await enerfloRequestParsed<unknown>({
-    operation: "webhook:terros:search-customer-by-integration",
-    method: "GET",
-    path: "/api/v1/customers",
-    query: { search: terrosAccountId, page: "1", pageSize: "50" },
-  });
-  if (!ok || !data || typeof data !== "object") return null;
+function parseEnerfloCustomerRows(data: unknown): Record<string, unknown>[] {
+  if (!data || typeof data !== "object") return [];
   const o = data as Record<string, unknown>;
   const rows = (["results", "items", "customers", "data"] as const)
     .map((k) => o[k])
     .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
-  if (!Array.isArray(rows)) return null;
-  for (const row of rows) {
-    // Enerflo stores the Terros account ID at integrations.Partner.Lead.integration_record_id
-    const partnerLead = ((row.integrations as Record<string, unknown> | undefined)
-      ?.Partner as Record<string, unknown> | undefined)
-      ?.Lead as Record<string, unknown> | undefined;
-    const ext = partnerLead?.integration_record_id ??
-      row.integration_record_id ??
-      row.integrationRecordId ??
-      row.external_id ??
-      row.externalId;
-    if (typeof ext === "string" && ext === terrosAccountId) {
-      const id = row.id ?? row.uuid ?? row.customer_id;
-      if (id != null) return String(id);
+  return Array.isArray(rows) ? rows : [];
+}
+
+/** Terros account id from Partner.Lead.integration_record_id or Enerflo V2 integration_maps. */
+function getTerrosAccountIdFromCustomerRow(row: Record<string, unknown>): string | null {
+  const partnerLead = ((row.integrations as Record<string, unknown> | undefined)
+    ?.Partner as Record<string, unknown> | undefined)
+    ?.Lead as Record<string, unknown> | undefined;
+  const fromPartner = partnerLead?.integration_record_id;
+  if (typeof fromPartner === "string" && fromPartner.trim()) return fromPartner.trim();
+
+  for (const key of ["integration_record_id", "integrationRecordId", "external_id", "externalId"] as const) {
+    const raw = row[key];
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    const value = raw.trim();
+    if (value.startsWith("Account.")) return value.slice("Account.".length);
+    if (!UUID_RE.test(value)) return value;
+  }
+
+  const maps = row.integration_maps as Record<string, unknown>[] | undefined;
+  if (Array.isArray(maps)) {
+    for (const map of maps) {
+      const extId = map.external_id as string | undefined;
+      if (!extId?.trim()) continue;
+      const value = extId.trim();
+      if (value.startsWith("Account.")) return value.slice("Account.".length);
+      if (!UUID_RE.test(value)) return value;
+    }
+  }
+  return null;
+}
+
+function getEnerfloV2UuidFromCustomerRow(row: Record<string, unknown>): string | null {
+  for (const key of ["uuid", "external_id"] as const) {
+    const raw = row[key];
+    if (typeof raw === "string" && UUID_RE.test(raw.trim())) return raw.trim();
+  }
+  const maps = row.integration_maps as Record<string, unknown>[] | undefined;
+  if (Array.isArray(maps)) {
+    for (const map of maps) {
+      const extId = map.external_id as string | undefined;
+      if (extId && UUID_RE.test(extId.trim())) return extId.trim();
+    }
+  }
+  return null;
+}
+
+function getEnerfloNumericIdFromCustomerRow(row: Record<string, unknown>): string | null {
+  const id = row.id ?? row.customer_id;
+  return id != null ? String(id) : null;
+}
+
+function pickBestEnerfloCustomerRow(
+  rows: Record<string, unknown>[],
+  terrosAccountId: string,
+  customerUuidHint?: string | null
+): Record<string, unknown> | null {
+  const byTerros = rows.find((r) => getTerrosAccountIdFromCustomerRow(r) === terrosAccountId);
+  if (byTerros) return byTerros;
+
+  if (customerUuidHint && UUID_RE.test(customerUuidHint)) {
+    const byUuid = rows.find((r) => getEnerfloV2UuidFromCustomerRow(r) === customerUuidHint);
+    if (byUuid) return byUuid;
+  }
+
+  if (rows.length === 1) return rows[0] ?? null;
+
+  // Shared test emails: prefer the highest numeric id (usually the newest record).
+  const withNumeric = rows
+    .map((row) => ({ row, numeric: Number(getEnerfloNumericIdFromCustomerRow(row)) }))
+    .filter((entry) => Number.isFinite(entry.numeric));
+  if (withNumeric.length === 0) return null;
+  withNumeric.sort((a, b) => b.numeric - a.numeric);
+  return withNumeric[0]?.row ?? null;
+}
+
+async function findEnerfloCustomerUuidByIntegrationSearch(
+  terrosAccountId: string
+): Promise<string | null> {
+  for (const searchTerm of [terrosAccountId, `Account.${terrosAccountId}`]) {
+    const { ok, data } = await enerfloRequestParsed<unknown>({
+      operation: "webhook:terros:search-customer-by-integration",
+      method: "GET",
+      path: "/api/v1/customers",
+      query: { search: searchTerm, page: "1", pageSize: "50" },
+    });
+    if (!ok) continue;
+    const rows = parseEnerfloCustomerRows(data);
+    for (const row of rows) {
+      if (getTerrosAccountIdFromCustomerRow(row) !== terrosAccountId) continue;
+      return getEnerfloV2UuidFromCustomerRow(row) ?? getEnerfloNumericIdFromCustomerRow(row);
     }
   }
   return null;
@@ -386,7 +455,8 @@ async function findEnerfloCustomerUuidByIntegrationSearch(
  */
 async function findEnerfloCustomerIdByEmail(
   email: string,
-  terrosAccountId: string
+  terrosAccountId: string,
+  customerUuidHint?: string | null
 ): Promise<string | null> {
   if (!email || !email.includes("@")) return null;
   const { ok, data } = await enerfloRequestParsed<unknown>({
@@ -395,12 +465,8 @@ async function findEnerfloCustomerIdByEmail(
     path: "/api/v1/customers",
     query: { search: email, page: "1", pageSize: "50" },
   });
-  if (!ok || !data || typeof data !== "object") return null;
-  const o = data as Record<string, unknown>;
-  const rows = (["results", "items", "customers", "data"] as const)
-    .map((k) => o[k])
-    .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
-  if (!Array.isArray(rows)) return null;
+  if (!ok) return null;
+  const rows = parseEnerfloCustomerRows(data);
 
   const emailLower = email.trim().toLowerCase();
   const matched = rows.filter(
@@ -408,18 +474,47 @@ async function findEnerfloCustomerIdByEmail(
   );
   if (matched.length === 0) return null;
 
-  // Prefer the row whose integration_record_id matches the Terros account ID
-  const exact = matched.find((r) => {
-    const partnerIntegId = ((r.integrations as Record<string, unknown> | undefined)
-      ?.Partner as Record<string, unknown> | undefined)
-      ?.Lead as Record<string, unknown> | undefined;
-    return partnerIntegId?.integration_record_id === terrosAccountId;
-  });
+  const best = pickBestEnerfloCustomerRow(matched, terrosAccountId, customerUuidHint);
+  return best ? getEnerfloNumericIdFromCustomerRow(best) : null;
+}
 
-  const best = exact ?? (matched.length === 1 ? matched[0] : null);
-  if (!best) return null; // multiple matches, none linked — ambiguous
-  const id = best.id ?? best.customer_id;
-  return id != null ? String(id) : null;
+async function findEnerfloNumericIdByCustomerUuid(customerUuid: string): Promise<string | null> {
+  if (!UUID_RE.test(customerUuid)) return null;
+  const { ok, data } = await enerfloRequestParsed<unknown>({
+    operation: "webhook:terros:search-customer-by-uuid",
+    method: "GET",
+    path: "/api/v1/customers",
+    query: { search: customerUuid, page: "1", pageSize: "50" },
+  });
+  if (!ok) return null;
+  const rows = parseEnerfloCustomerRows(data);
+  const exact = rows.find((r) => getEnerfloV2UuidFromCustomerRow(r) === customerUuid);
+  if (exact) return getEnerfloNumericIdFromCustomerRow(exact);
+  if (rows.length === 1) return getEnerfloNumericIdFromCustomerRow(rows[0]!);
+  return null;
+}
+
+async function resolveEnerfloNumericCustomerId(
+  customerUuid: string,
+  terrosAccountId: string,
+  residentEmail: string
+): Promise<string | null> {
+  if (/^\d+$/.test(customerUuid)) return customerUuid;
+
+  if (residentEmail) {
+    const byEmail = await findEnerfloCustomerIdByEmail(residentEmail, terrosAccountId, customerUuid);
+    if (byEmail) return byEmail;
+  }
+
+  if (UUID_RE.test(customerUuid)) {
+    const byUuid = await findEnerfloNumericIdByCustomerUuid(customerUuid);
+    if (byUuid) return byUuid;
+  }
+
+  const byIntegration = await findEnerfloCustomerUuidByIntegrationSearch(terrosAccountId);
+  if (byIntegration && /^\d+$/.test(byIntegration)) return byIntegration;
+
+  return null;
 }
 
 function buildEnerfloPayloadFromTerros(
@@ -488,6 +583,7 @@ function buildEnerfloUpdatePayload(
     const { first_name, last_name } = splitName(fullName);
     body.first_name = first_name;
     body.last_name = last_name;
+    body.name = fullName;
   }
   if (email) body.email = email;
   if (phone) body.phone = phone;
@@ -801,13 +897,29 @@ async function handleUpdate(
   }
 
   if (!customerUuid) {
+    const skipReason =
+      "No Enerflo customer id found (externalLeadId on Terros, integration_record_id search, or email match). Ensure the customer exists in both systems with the same email.";
+    await writeApiLog({
+      operation: "webhook:terros:update-enerflo-customer-skipped",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosAccountId,
+        reason: "no-customer-id",
+        residentEmail,
+        externalLeadId: merged.externalLeadId ?? webhookData.externalLeadId ?? null,
+      }).slice(0, 400),
+    });
     return NextResponse.json({
       received: true,
       action: "update",
       terrosAccountId,
       skipped: true,
-      reason:
-        "No Enerflo customer id found (externalLeadId on Terros, integration_record_id search, or email match). Ensure the customer exists in both systems with the same email.",
+      reason: skipReason,
     });
   }
 
@@ -837,6 +949,20 @@ async function handleUpdate(
   }
   const updateBody = buildEnerfloUpdatePayload(merged, resolvedOwnerEmail);
   if (Object.keys(updateBody).length === 0) {
+    await writeApiLog({
+      operation: "webhook:terros:update-enerflo-customer-skipped",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosAccountId,
+        reason: "no-fields",
+        enerfloCustomerId: customerUuid,
+      }).slice(0, 400),
+    });
     return NextResponse.json({
       received: true,
       action: "update",
@@ -847,12 +973,37 @@ async function handleUpdate(
     });
   }
 
-  // v3 PUT only accepts numeric IDs — UUIDs return 403. If customerUuid is a UUID,
-  // resolve the numeric ID via email search before calling the update endpoint.
-  let enerfloNumericId: string = customerUuid;
-  if (UUID_RE.test(customerUuid) && residentEmail) {
-    const numericId = await findEnerfloCustomerIdByEmail(residentEmail, terrosAccountId);
-    if (numericId) enerfloNumericId = numericId;
+  // v3 PUT only accepts numeric IDs — UUIDs return 403.
+  const enerfloNumericId = await resolveEnerfloNumericCustomerId(
+    customerUuid,
+    terrosAccountId,
+    residentEmail
+  );
+  if (!enerfloNumericId) {
+    await writeApiLog({
+      operation: "webhook:terros:update-enerflo-customer-skipped",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosAccountId,
+        reason: "no-numeric-customer-id",
+        enerfloCustomerId: customerUuid,
+        residentEmail,
+      }).slice(0, 400),
+    });
+    return NextResponse.json({
+      received: true,
+      action: "update",
+      terrosAccountId,
+      enerfloCustomerId: customerUuid,
+      skipped: true,
+      reason:
+        "Found Enerflo customer reference but could not resolve numeric id for v3 PUT (email/integration/UUID search).",
+    });
   }
 
   const path = `/api/v3/customers/${encodeURIComponent(enerfloNumericId)}`;
