@@ -249,6 +249,103 @@ export async function getEnerfloAppointmentIdByTerrosEventId(
  * Look up the Terros calendar event ID previously saved for an Enerflo appointment.
  * Returns null if no mapping exists (event was never created via this system).
  */
+/** Normalize Terros account ids to `Account.{id}` for consistent map keys. */
+export function normalizeTerrosAccountId(accountId: string): string {
+  const trimmed = accountId.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.startsWith("Account.") ? trimmed : `Account.${trimmed}`;
+}
+
+/**
+ * Persist Terros account → Enerflo numeric customer id.
+ * Required for Enerflo→Terros customers that never appear in v1 search (empty email).
+ */
+export async function saveCustomerAccountMapping(
+  terrosAccountId: string,
+  enerfloNumericId: number
+): Promise<void> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase || !Number.isFinite(enerfloNumericId)) return;
+    const key = normalizeTerrosAccountId(terrosAccountId);
+    await supabase.from("api_logs").insert({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "customer-account-id-map",
+      vendor: "terros",
+      method: "POST",
+      url: "",
+      had_api_key: false,
+      status: null,
+      status_text: null,
+      ok: true,
+      response_preview: JSON.stringify({ terrosAccountId: key, enerfloNumericId }),
+      fetch_error: null,
+    });
+  } catch (err) {
+    console.error("[CUSTOMER MAP] save failed:", err);
+  }
+}
+
+export async function getEnerfloCustomerIdByTerrosAccountId(
+  terrosAccountId: string
+): Promise<number | null> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    const key = normalizeTerrosAccountId(terrosAccountId);
+    const { data } = await supabase
+      .from("api_logs")
+      .select("response_preview")
+      .eq("operation", "customer-account-id-map")
+      .ilike("response_preview", `%"terrosAccountId":"${key}"%`)
+      .order("timestamp", { ascending: false })
+      .limit(1);
+    if (!data?.[0]?.response_preview) return null;
+    const parsed = JSON.parse(data[0].response_preview) as { enerfloNumericId?: number };
+    return parsed.enerfloNumericId ?? null;
+  } catch (err) {
+    console.error("[CUSTOMER MAP] lookup failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Backfill mapping from prior enerflo-v2 v3-fetch logs when v1 search cannot find the customer.
+ */
+export async function findEnerfloCustomerIdFromHistoricalLogs(
+  terrosAccountId: string
+): Promise<number | null> {
+  const mapped = await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId);
+  if (mapped != null) return mapped;
+
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    const key = normalizeTerrosAccountId(terrosAccountId);
+    const { data } = await supabase
+      .from("api_logs")
+      .select("response_preview")
+      .eq("operation", "webhook:enerflo-v2:update-customer:v3-fetch")
+      .ilike("response_preview", `%${key}%`)
+      .order("timestamp", { ascending: false })
+      .limit(5);
+    for (const row of data ?? []) {
+      const preview = row.response_preview as string | undefined;
+      if (!preview?.includes(key)) continue;
+      const idMatch = preview.match(/"id"\s*:\s*(\d+)/);
+      if (!idMatch) continue;
+      const enerfloNumericId = Number(idMatch[1]);
+      if (!Number.isFinite(enerfloNumericId)) continue;
+      await saveCustomerAccountMapping(key, enerfloNumericId);
+      return enerfloNumericId;
+    }
+  } catch (err) {
+    console.error("[CUSTOMER MAP] historical lookup failed:", err);
+  }
+  return null;
+}
+
 export async function getCalendarEventId(
   enerfloAppointmentId: number
 ): Promise<string | null> {

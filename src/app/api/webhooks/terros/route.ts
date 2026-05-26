@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
-import { writeApiLog, getEnerfloAppointmentIdByTerrosEventId, acquireTerrosEventCreateLock, saveCalendarEventMapping } from "@/lib/logger";
+import {
+  writeApiLog,
+  getEnerfloAppointmentIdByTerrosEventId,
+  acquireTerrosEventCreateLock,
+  saveCalendarEventMapping,
+  saveCustomerAccountMapping,
+  getEnerfloCustomerIdByTerrosAccountId,
+  findEnerfloCustomerIdFromHistoricalLogs,
+  normalizeTerrosAccountId,
+} from "@/lib/logger";
 import { findUserByEmailInList } from "@/lib/sync/user-email-match";
 
 const UUID_RE =
@@ -402,12 +411,18 @@ function getEnerfloNumericIdFromCustomerRow(row: Record<string, unknown>): strin
   return id != null ? String(id) : null;
 }
 
+function terrosAccountIdsMatch(a: string, b: string): boolean {
+  return normalizeTerrosAccountId(a) === normalizeTerrosAccountId(b);
+}
+
 function pickBestEnerfloCustomerRow(
   rows: Record<string, unknown>[],
   terrosAccountId: string,
   customerUuidHint?: string | null
 ): Record<string, unknown> | null {
-  const byTerros = rows.find((r) => getTerrosAccountIdFromCustomerRow(r) === terrosAccountId);
+  const byTerros = rows.find((r) =>
+    terrosAccountIdsMatch(getTerrosAccountIdFromCustomerRow(r) ?? "", terrosAccountId)
+  );
   if (byTerros) return byTerros;
 
   if (customerUuidHint && UUID_RE.test(customerUuidHint)) {
@@ -439,7 +454,8 @@ async function findEnerfloCustomerUuidByIntegrationSearch(
     if (!ok) continue;
     const rows = parseEnerfloCustomerRows(data);
     for (const row of rows) {
-      if (getTerrosAccountIdFromCustomerRow(row) !== terrosAccountId) continue;
+      const linked = getTerrosAccountIdFromCustomerRow(row);
+      if (!linked || !terrosAccountIdsMatch(linked, terrosAccountId)) continue;
       return getEnerfloV2UuidFromCustomerRow(row) ?? getEnerfloNumericIdFromCustomerRow(row);
     }
   }
@@ -802,6 +818,13 @@ async function handleAdd(
     linked = await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, idToStore);
   }
 
+  if (log.ok && newId) {
+    const numericId = Number(newId);
+    if (Number.isFinite(numericId)) {
+      await saveCustomerAccountMapping(terrosAccountId, numericId);
+    }
+  }
+
   return NextResponse.json({
     received: true,
     action: "add",
@@ -867,12 +890,21 @@ async function handleUpdate(
       : {}),
   };
 
-  let customerUuid =
-    (merged.externalLeadId && UUID_RE.test(merged.externalLeadId) ? merged.externalLeadId : null) ??
-    (webhookData.externalLeadId && UUID_RE.test(webhookData.externalLeadId)
-      ? webhookData.externalLeadId
-      : null) ??
-    (full ? pickExternalLeadId(full) : null);
+  // Enerflo→Terros customers often have empty email and never appear in v1 search.
+  const mappedNumericId =
+    (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
+    (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
+
+  let customerUuid: string | null = mappedNumericId != null ? String(mappedNumericId) : null;
+
+  if (!customerUuid) {
+    customerUuid =
+      (merged.externalLeadId && UUID_RE.test(merged.externalLeadId) ? merged.externalLeadId : null) ??
+      (webhookData.externalLeadId && UUID_RE.test(webhookData.externalLeadId)
+        ? webhookData.externalLeadId
+        : null) ??
+      (full ? pickExternalLeadId(full) : null);
+  }
 
   if (!customerUuid) {
     customerUuid = await findEnerfloCustomerUuidByIntegrationSearch(terrosAccountId);
@@ -1015,12 +1047,20 @@ async function handleUpdate(
     body: updateBody,
   });
 
+  if (log.ok) {
+    const numericId = Number(enerfloNumericId);
+    if (Number.isFinite(numericId)) {
+      await saveCustomerAccountMapping(terrosAccountId, numericId);
+    }
+  }
+
   return NextResponse.json({
     received: true,
     action: "update",
     terrosAccountId,
     enerfloCustomerId: customerUuid,
     enerfloNumericId,
+    customerLookupSource: mappedNumericId != null ? "account-id-map" : "search",
     success: log.ok,
     enerfloStatus: log.status,
     fieldsSent: Object.keys(updateBody),

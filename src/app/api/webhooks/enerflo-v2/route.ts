@@ -15,7 +15,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId } from "@/lib/logger";
+import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping } from "@/lib/logger";
+import { getTerrosAccountIdFromIntegrationMaps } from "@/lib/sync/account-matcher";
 import { env } from "@/lib/env";
 import { resolveEnerfloCustomerLeadOwner } from "@/lib/sync/enerflo-lead-owner";
 import { resolveTerrosUserIdByEmail } from "@/lib/sync/terros-users";
@@ -2505,6 +2506,14 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
       ok: step1Ok,
       responsePreview: JSON.stringify(v3CustomerRaw).slice(0, 600),
     });
+
+    if (step1Ok && numericId) {
+      const terrosAccountFromMap = getTerrosAccountIdFromIntegrationMaps(v3CustomerRaw);
+      const parsedNumericId = Number(numericId);
+      if (terrosAccountFromMap && Number.isFinite(parsedNumericId)) {
+        await saveCustomerAccountMapping(terrosAccountFromMap, parsedNumericId);
+      }
+    }
   }
 
   // ── Step 2–3: Lead owner (sales rep / agent → setter fallback) → Terros IDs ──
