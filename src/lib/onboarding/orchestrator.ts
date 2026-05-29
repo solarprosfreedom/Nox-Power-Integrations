@@ -155,7 +155,7 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
         sequifiUserId,
         ok: false,
         skipped: true,
-        reason: "Could not create onboarding job",
+        reason: "Could not create onboarding job (check Supabase onboarding_jobs)",
         job: null,
       };
     }

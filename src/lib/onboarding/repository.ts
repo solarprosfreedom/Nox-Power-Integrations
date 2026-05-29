@@ -132,37 +132,48 @@ export async function insertJobFromSequifiUser(user: SequifiUserRecord): Promise
   const welcomeTo =
     String(user.raw.personal_email ?? user.raw.personalEmail ?? user.email).trim() || user.email;
 
-  const { data, error } = await db
-    .from("onboarding_jobs")
-    .insert({
-      sequifi_user_id: String(user.id),
-      sequifi_employee_id: user.employee_id,
-      email: user.email,
-      email_normalized: emailNorm,
-      first_name: user.first_name || null,
-      last_name: user.last_name || null,
-      phone: user.mobile_no || null,
-      role_label: user.position_name || user.office_name || null,
-      welcome_email_to: welcomeTo,
-      raw_sequifi_payload: user.raw,
-      status: "pending",
-    })
-    .select("*")
-    .single();
+  const row = {
+    sequifi_user_id: String(user.id),
+    sequifi_employee_id: user.employee_id,
+    email: user.email,
+    first_name: user.first_name || null,
+    last_name: user.last_name || null,
+    phone: user.mobile_no || null,
+    role_label: user.position_name || user.office_name || null,
+    welcome_email_to: welcomeTo,
+    raw_sequifi_payload: user.raw,
+    status: "pending" as const,
+  };
 
-  if (error) {
+  // Legacy DBs may still have a unique index on email_normalized (Gmail +tag aliases
+  // collide). Retry once with a sequifi-scoped suffix before failing.
+  const normalizedCandidates = [emailNorm, `${emailNorm}#${user.id}`];
+
+  for (let i = 0; i < normalizedCandidates.length; i++) {
+    const email_normalized = normalizedCandidates[i]!;
+    const { data, error } = await db
+      .from("onboarding_jobs")
+      .insert({ ...row, email_normalized })
+      .select("*")
+      .single();
+
+    if (!error) return rowToJob(data as Record<string, unknown>);
+
     if (error.code === "23505") {
       const existing = await getJobsBySequifiUserIds([String(user.id)]);
       const prior = existing.get(String(user.id));
       if (prior) return prior;
-      throw new Error(
-        `onboarding_jobs insert failed: duplicate key (${error.message}). ` +
-          "If personal emails differ only by a +tag, run supabase/migrations/002_onboarding_jobs_email_normalized_non_unique.sql",
-      );
+
+      const isEmailNormCollision =
+        error.message?.includes("email_normalized") ||
+        error.details?.includes("email_normalized");
+      if (isEmailNormCollision && i + 1 < normalizedCandidates.length) continue;
     }
+
     throw new Error(`onboarding_jobs insert failed: ${error.message}`);
   }
-  return rowToJob(data as Record<string, unknown>);
+
+  return null;
 }
 
 export async function markJobProcessing(id: string): Promise<void> {

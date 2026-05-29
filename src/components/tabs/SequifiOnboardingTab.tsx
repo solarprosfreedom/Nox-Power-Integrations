@@ -222,45 +222,48 @@ export default function SequifiOnboardingTab() {
   async function handleProvisionUser(sequifiUserId: number) {
     setProvisioningId(sequifiUserId);
     setMessage(null);
+    let resultMessage: string | null = null;
     try {
       const result = await provisionSequifiUser(sequifiUserId);
       if (result.skipped && result.reason) {
-        setMessage(`User ${sequifiUserId}: ${result.reason}`);
+        resultMessage = `User ${sequifiUserId}: ${result.reason}`;
       } else if (result.error) {
-        setMessage(`User ${sequifiUserId} failed: ${result.error}`);
+        resultMessage = `User ${sequifiUserId} failed: ${result.error}`;
       } else if (result.job) {
-        setMessage(`User ${sequifiUserId}: job ${result.job.status} (MS ${result.job.microsoft_status})`);
+        resultMessage = `User ${sequifiUserId}: job ${result.job.status} (MS ${result.job.microsoft_status}, EN ${result.job.enerflo_status})`;
       } else {
-        setMessage(`User ${sequifiUserId}: done`);
+        resultMessage = `User ${sequifiUserId}: done`;
       }
-      await refresh();
-      if (showMissingTable) await refreshMissingList();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
+      resultMessage = e instanceof Error ? e.message : String(e);
     } finally {
       setProvisioningId(null);
     }
+    setMessage(resultMessage);
+    await refresh();
+    if (showMissingTable) void refreshMissingList();
   }
 
   async function handleProvisionAllMissing() {
     if (!gapScan?.gapRows.length || bulkProvisioning) return;
     setBulkProvisioning(true);
     setMessage(null);
+    let resultMessage: string | null = null;
     try {
       const ids = gapScan.gapRows.map(r => r.sequifi_user_id);
       const result = await provisionSequifiUsersBulkAction(ids);
-      setMessage(
+      resultMessage =
         `Bulk: ${result.completed} completed, ${result.partial} partial, ${result.failed} failed, ${result.skipped} skipped` +
-          (result.dryRun ? " (dry run)" : "") +
-          (result.errors.length ? ` · ${result.errors.join("; ")}` : ""),
-      );
-      await refresh();
-      if (showMissingTable) await refreshMissingList();
+        (result.dryRun ? " (dry run)" : "") +
+        (result.errors.length ? ` · ${result.errors.join("; ")}` : "");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
+      resultMessage = e instanceof Error ? e.message : String(e);
     } finally {
       setBulkProvisioning(false);
     }
+    setMessage(resultMessage);
+    await refresh();
+    if (showMissingTable) void refreshMissingList();
   }
 
   const missingListReady = Boolean(gapScan && !gapScan.error && showMissingTable);
