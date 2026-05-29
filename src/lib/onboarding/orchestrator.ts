@@ -30,13 +30,12 @@ import {
 import { sendMailAsUser, isGraphMailConfigured } from "@/lib/microsoft/graph-mail";
 import { fetchAllSequifiUsers, filterUsersByGoLive } from "@/lib/sequifi/client";
 import {
-  getTestTabName,
-  isGoogleSheetsConfigured,
-} from "@/lib/google-sheets/client";
-import {
-  appendSequifiUserToRosterSheet,
+  appendSequifiUserToInstallerRosterSheets,
   sequifiUserFromOnboardingJob,
 } from "@/lib/google-sheets/sync-roster";
+import { isGoogleSheetsConfigured } from "@/lib/google-sheets/client";
+import { appendSequifiUserToInstallerSharePointRosters, isSharePointRosterConfigured } from "@/lib/sharepoint/sync-roster";
+import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import {
   getJobsBySequifiUserIds,
   getRetryCandidates,
@@ -258,7 +257,7 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
   const role = resolveRoleMapping(job.role_label, env.onboardingRoleMapJson);
   const upn = job.microsoft_upn ?? resolveUpnForUser(job.email, job.first_name ?? "", job.last_name ?? "");
   let tempPassword =
-    job.temp_password ?? (env.onboardingDefaultPassword?.trim() || "Solar123!");
+    job.temp_password ?? (env.onboardingDefaultPassword?.trim() || "Solar123");
 
   // Microsoft
   if (job.microsoft_status !== "success") {
@@ -304,6 +303,10 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
 
   job = (await loadJobById(jobId)) ?? job;
   const workEmail = job.microsoft_upn ?? upn;
+  const sequifiFields = parseSequifiFields(job.raw_sequifi_payload ?? {});
+  const platformEmail = sequifiFields.onboardAxia
+    ? auroraEmailFromName(job.first_name ?? "", job.last_name ?? "")
+    : workEmail;
 
   // Enerflo
   if (job.enerflo_status !== "success") {
@@ -311,7 +314,7 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
       if (dryRun) {
         await updateJobStep(job.id, { enerflo_status: "skipped" });
       } else {
-        const existing = await findEnerfloUserByEmail(workEmail);
+        const existing = await findEnerfloUserByEmail(platformEmail);
         if (existing) {
           await updateJobStep(job.id, {
             enerflo_status: "success",
@@ -319,12 +322,13 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
           });
         } else {
           const result = await createEnerfloUserForOnboarding({
-            email: workEmail,
+            email: platformEmail,
             first_name: job.first_name ?? "",
             last_name: job.last_name ?? "",
             phone: job.phone ?? undefined,
             roles: role.enerfloRoles,
             external_user_id: job.sequifi_employee_id,
+            password: tempPassword,
           });
           if (!result.ok) throw new Error(result.error ?? "Enerflo create failed");
           await updateJobStep(job.id, {
@@ -353,7 +357,7 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
       if (dryRun) {
         await updateJobStep(job.id, { terros_status: "skipped" });
       } else {
-        const existing = await findTerrosUserByEmail(workEmail);
+        const existing = await findTerrosUserByEmail(platformEmail);
         if (existing) {
           await updateJobStep(job.id, {
             terros_status: "success",
@@ -361,10 +365,13 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
           });
         } else {
           const result = await createTerrosUserForOnboarding({
-            email: workEmail,
+            email: platformEmail,
             firstName: job.first_name ?? "",
             lastName: job.last_name ?? "",
             phone: job.phone ?? undefined,
+            password: tempPassword,
+            roles: role.terrosRoles,
+            sendWelcomeEmail: true,
           });
           if (!result.ok) throw new Error(result.error ?? "Terros create failed");
           await updateJobStep(job.id, {
@@ -430,14 +437,18 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
 
   if (job && !dryRun && job.microsoft_status === "success") {
     const sheet = await appendJobToOnboardingRosterSheet(job);
-    if (sheet.error) {
-      await updateJobStep(job.id, {
-        step_errors: { ...job.step_errors, google_sheets: sheet.error },
-      });
-    } else if (sheet.appended) {
-      await updateJobStep(job.id, {
-        step_errors: { ...job.step_errors, google_sheets: "appended" },
-      });
+    const rosterErrors = { ...job.step_errors };
+    if (sheet.errors.length) {
+      rosterErrors.google_sheets = sheet.errors.join("; ");
+    } else if (sheet.appended > 0) {
+      rosterErrors.google_sheets = `appended:${sheet.appended}`;
+    } else if (sheet.skipped > 0) {
+      rosterErrors.google_sheets = "already in sheet";
+    } else if (!parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.length) {
+      rosterErrors.google_sheets = "no installer tabs";
+    }
+    if (Object.keys(rosterErrors).length) {
+      await updateJobStep(job.id, { step_errors: rosterErrors });
     }
     job = (await loadJobById(jobId)) ?? job;
   }
@@ -447,22 +458,66 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
 
 async function appendJobToOnboardingRosterSheet(
   job: OnboardingJob,
-): Promise<{ appended: boolean; reason?: string; error?: string }> {
+): Promise<{ appended: number; skipped: number; errors: string[] }> {
   if (env.onboardingDryRun || job.microsoft_status !== "success") {
-    return { appended: false, reason: "not eligible" };
+    return { appended: 0, skipped: 0, errors: [] };
   }
-  if (!isGoogleSheetsConfigured()) {
-    return { appended: false, reason: "google sheets not configured" };
+
+  const sequifiUser = sequifiUserFromOnboardingJob(job);
+  const parsed = parseSequifiFields(job.raw_sequifi_payload ?? {});
+  const installerTabs = parsed.installerTabs;
+
+  if (!installerTabs.length) {
+    return { appended: 0, skipped: 1, errors: [] };
   }
-  try {
-    const result = await appendSequifiUserToRosterSheet({
-      tabName: getTestTabName(),
-      user: sequifiUserFromOnboardingJob(job),
-    });
-    return { appended: result.appended, reason: result.reason };
-  } catch (e) {
-    return { appended: false, error: e instanceof Error ? e.message : String(e) };
+
+  const workEmail = job.microsoft_upn ?? "";
+  const platformEmail = parsed.onboardAxia
+    ? auroraEmailFromName(job.first_name ?? "", job.last_name ?? "")
+    : workEmail;
+  const ctx = { workEmail, noxEmail: platformEmail };
+
+  let appended = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  if (isGoogleSheetsConfigured()) {
+    try {
+      const sheetResults = await appendSequifiUserToInstallerRosterSheets({
+        tabNames: installerTabs,
+        user: sequifiUser,
+        ctx,
+      });
+      for (const r of sheetResults) {
+        if (r.appended) appended++;
+        else if (r.reason === "already in sheet") skipped++;
+        else if (r.reason) errors.push(`Google ${r.tabName}: ${r.reason}`);
+      }
+    } catch (e) {
+      errors.push(`Google Sheets: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
+
+  if (isSharePointRosterConfigured()) {
+    try {
+      const spResults = await appendSequifiUserToInstallerSharePointRosters({
+        tabNames: installerTabs,
+        user: sequifiUser,
+        ctx,
+      });
+      for (const r of spResults) {
+        if (r.appended) appended++;
+        else if (r.reason === "already in sheet") skipped++;
+        else if (r.reason && r.reason !== "sharepoint not configured") {
+          errors.push(`SharePoint ${r.worksheetName}: ${r.reason}`);
+        }
+      }
+    } catch (e) {
+      errors.push(`SharePoint: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return { appended, skipped, errors };
 }
 
 export async function runOnboardingCycle(options?: {
@@ -541,11 +596,12 @@ export async function runOnboardingCycle(options?: {
         else if (outcome === "partial") summary.partial++;
         else summary.skipped++;
 
-        if (result?.step_errors?.google_sheets === "appended") {
+        if (result?.step_errors?.google_sheets?.startsWith("appended:")) {
           summary.sheetsAppended++;
         } else if (
           result?.step_errors?.google_sheets &&
-          result.step_errors.google_sheets !== "already in sheet"
+          result.step_errors.google_sheets !== "already in sheet" &&
+          result.step_errors.google_sheets !== "no installer tabs"
         ) {
           summary.sheetsErrors.push(result.step_errors.google_sheets);
         } else if (result?.microsoft_status === "success") {

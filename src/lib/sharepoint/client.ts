@@ -173,6 +173,7 @@ export async function getNextAppendRow(worksheetName: string): Promise<number> {
 export async function appendRowsToWorksheet(
   worksheetName: string,
   rows: string[][],
+  appendRange?: string,
 ): Promise<number> {
   if (rows.length === 0) return 0;
 
@@ -180,7 +181,9 @@ export async function appendRowsToWorksheet(
   const escaped = escapeWorksheetName(worksheetName);
   const startRow = await getNextAppendRow(worksheetName);
   const endRow = startRow + rows.length - 1;
-  const address = `A${startRow}:S${endRow}`;
+  const range = appendRange ?? "A:S";
+  const [startCol, endCol] = range.includes(":") ? range.split(":") : ["A", "S"];
+  const address = `${startCol}${startRow}:${endCol}${endRow}`;
 
   await graphRequest(
     workbookPath(siteId, itemId, `/worksheets('${escaped}')/range(address='${address}')`),

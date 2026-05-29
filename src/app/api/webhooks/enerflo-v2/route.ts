@@ -27,45 +27,6 @@ import { resolveEnerfloCustomerLeadOwner } from "@/lib/sync/enerflo-lead-owner";
 import { createTerrosSearchCache } from "@/lib/sync/terros-accounts";
 import { resolveTerrosUserIdByEmail } from "@/lib/sync/terros-users";
 
-// #region agent log
-function debugApptLog(
-  location: string,
-  message: string,
-  data: Record<string, unknown>,
-  hypothesisId: string,
-): void {
-  fetch("http://127.0.0.1:7264/ingest/a82f0243-aefe-466b-aacd-9b45cf8eb5d9", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "7c98bc" },
-    body: JSON.stringify({
-      sessionId: "7c98bc",
-      location,
-      message,
-      data,
-      hypothesisId,
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-}
-
-function terrosAccountDebugSnapshot(acc: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!acc) return { hasAccount: false };
-  const resident = acc.resident as Record<string, unknown> | undefined;
-  const location = acc.location as Record<string, unknown> | undefined;
-  const residentName = typeof resident?.name === "string" ? resident.name : "";
-  const oneLine = typeof location?.oneLine === "string" ? location.oneLine : "";
-  return {
-    hasAccount: true,
-    accountId: acc.accountId ?? acc.id ?? null,
-    externalLeadId: acc.externalLeadId ?? null,
-    residentNameEmpty: !residentName || residentName === "Unknown Name",
-    locationEmpty: !oneLine || oneLine === "Unknown address",
-    hasResidentBlock: Boolean(resident && Object.keys(resident).length > 0),
-    hasLocationBlock: Boolean(location && Object.keys(location).length > 0),
-  };
-}
-// #endregion
-
 // ── Types ─────────────────────────────────────────────────────────────────
 
 interface ProjectAddress {
@@ -1947,18 +1908,6 @@ async function resolveTerrosAccountForAppointment(
         terrosWorkflowId,
       );
       if (accountFields) {
-        // #region agent log
-        debugApptLog(
-          "route.ts:resolveTerrosAccountForAppointment:create-upsert",
-          "creating account with full customer fields",
-          {
-            upsertKeys: Object.keys(accountFields),
-            hasResident: Boolean(accountFields.resident),
-            hasLocation: Boolean(accountFields.location),
-          },
-          "A",
-        );
-        // #endregion
         try {
           const r = await fetch(`${terrosBase}/account/upsert`, {
             method: "POST",
@@ -1982,34 +1931,9 @@ async function resolveTerrosAccountForAppointment(
       } else {
         step1Source = "skipped:no-customer-data";
         step1Preview = "No Terros account found and insufficient customer data to create one safely.";
-        // #region agent log
-        debugApptLog(
-          "route.ts:resolveTerrosAccountForAppointment:skipped",
-          "skipped account creation — no customer data",
-          { customerNumericId, hasEmail: Boolean(emailForSearch), hasName: Boolean(nameForSearch) },
-          "B",
-        );
-        // #endregion
       }
     }
   }
-
-  // #region agent log
-  debugApptLog(
-    "route.ts:resolveTerrosAccountForAppointment:complete",
-    "appointment account resolution finished",
-    {
-      step1Source: step1Source || "none",
-      accountFound: Boolean(accountId),
-      ...terrosAccountDebugSnapshot(
-        accountId
-          ? { accountId, ownerId: accountOwnerIdFromLookup, location: accountLocation ?? undefined }
-          : undefined,
-      ),
-    },
-    "A",
-  );
-  // #endregion
 
   return {
     accountId,
@@ -2042,25 +1966,6 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   const terrosKey    = env.terrosApiKey       ?? "";
   const terrosWorkflowId      = env.terrosWorkflowId                    ?? "";
   const appointmentStageId    = env.terrosWorkflowAppointmentStageId    ?? "";
-
-  // #region agent log
-  debugApptLog(
-    "route.ts:handleNewAppointment:entry",
-    "new_appointment received",
-    {
-      enerfloAppointmentId: payload.id,
-      customerNumericId: String(payload.customer?.id ?? ""),
-      hasCustomerEmail: Boolean(payload.customer?.email?.trim()),
-      hasCustomerFirstName: Boolean(payload.customer?.first_name?.trim()),
-      hasCustomerAddress: Boolean(
-        payload.customer?.address?.street ||
-        payload.customer?.address?.city ||
-        payload.customer?.address?.full_address,
-      ),
-    },
-    "B",
-  );
-  // #endregion
 
   const enerfloAppointmentId  = payload.id;
   const startTimeMs           = payload.times.unix.unix_time * 1000;
@@ -2262,25 +2167,6 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   const terrosKey    = env.terrosApiKey       ?? "";
   const terrosWorkflowId   = env.terrosWorkflowId ?? "";
   const appointmentStageId = env.terrosWorkflowAppointmentStageId ?? "";
-
-  // #region agent log
-  debugApptLog(
-    "route.ts:handleUpdateAppointment:entry",
-    "update_appointment received",
-    {
-      enerfloAppointmentId: payload.id,
-      customerNumericId: String(payload.customer?.id ?? ""),
-      hasCustomerEmail: Boolean(payload.customer?.email?.trim()),
-      hasCustomerFirstName: Boolean(payload.customer?.first_name?.trim()),
-      hasCustomerAddress: Boolean(
-        payload.customer?.address?.street ||
-        payload.customer?.address?.city ||
-        payload.customer?.address?.full_address,
-      ),
-    },
-    "B",
-  );
-  // #endregion
 
   const enerfloAppointmentId = payload.id;
   const startTimeMs          = payload.times.unix.unix_time * 1000;
@@ -2600,19 +2486,6 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       } else {
       step4Action = "create";
       const createBody = { event: { accountId, ...eventFields } };
-      // #region agent log
-      debugApptLog(
-        "route.ts:handleUpdateAppointment:calendar-create",
-        "creating calendar event",
-        {
-          accountId,
-          hasResolvedLocation: Boolean(resolvedLocation),
-          hasPayloadAddr,
-          eventFieldKeys: Object.keys(eventFields),
-        },
-        "D",
-      );
-      // #endregion
       try {
         const r = await fetch(`${terrosBase}/calendar/event/add`, {
           method: "POST",

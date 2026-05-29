@@ -52,6 +52,7 @@ export async function createEnerfloUserForOnboarding(payload: {
   phone?: string;
   roles: string[];
   external_user_id: string;
+  password?: string;
 }): Promise<{ id: string | null; ok: boolean; error?: string }> {
   const log = await enerfloV1({
     operation: "onboarding:enerflo:create",
@@ -64,7 +65,9 @@ export async function createEnerfloUserForOnboarding(payload: {
       phone: payload.phone,
       roles: payload.roles,
       external_user_id: payload.external_user_id,
-      notify_email: false,
+      password: payload.password,
+      notify_email: true,
+      allow_optimus: false,
       can_create_customers: true,
       can_reassign_leads: true,
       timezone: "America/Phoenix",

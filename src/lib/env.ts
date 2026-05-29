@@ -91,8 +91,8 @@ export const env = {
   /** When true, assign Microsoft 365 license after user create (default false for testing). */
   onboardingAssignMsLicense: opt("ONBOARDING_ASSIGN_MS_LICENSE", "false") === "true",
   /** Initial M365 password for new hires (included in welcome email). */
-  onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123!"),
-  /** JSON map: Sequifi role/position substring → { enerfloRoles, welcomeTemplate, terrosRole } */
+  onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123"),
+  /** JSON map: Sequifi role/position substring → { enerfloRoles, terrosRoles, welcomeTemplate } */
   onboardingRoleMapJson: opt("ONBOARDING_ROLE_MAP_JSON"),
   /** UPN domain for new Microsoft users (default noxpwr.com). */
   msDefaultDomain: opt("MS_DEFAULT_DOMAIN", "noxpwr.com"),

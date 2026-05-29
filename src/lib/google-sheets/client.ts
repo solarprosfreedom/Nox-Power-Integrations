@@ -2,33 +2,13 @@ import { google, type sheets_v4 } from "googleapis";
 import { env } from "@/lib/env";
 import {
   AXIA_LAYOUT,
-  EMPWR_LAYOUT,
-  EMPWR_ROSTER_HEADERS,
+  headerRangeForLayout,
   rosterLayoutFromTabName,
+  STANDARD_LAYOUT,
   type RosterTabLayout,
 } from "@/lib/google-sheets/tab-layout";
 
-export const ROSTER_HEADERS = [
-  "Rep Name",
-  "Phone Number",
-  "Personal Email",
-  "Work Email",
-  "Nox Email",
-  "Division",
-  "Region",
-  "Team",
-  "Role",
-  "Market",
-  "Redline",
-  "Overriding Entity 1",
-  "Overriding Entity 2",
-  "Overriding Entity 3",
-  "Addis",
-  "DOB",
-  "CA HIS",
-  "Issue Date",
-  "Exp Date",
-] as const;
+export { AXIA_HEADERS as ROSTER_HEADERS } from "@/lib/google-sheets/tab-layout";
 
 export function isGoogleSheetsConfigured(): boolean {
   return Boolean(
@@ -113,26 +93,14 @@ export async function ensureTabExists(tabName: string): Promise<void> {
 }
 
 export async function detectRosterTabLayout(tabName: string): Promise<RosterTabLayout> {
-  const byName = rosterLayoutFromTabName(tabName);
-  if (byName) return byName;
-
-  const sheets = await getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: getSpreadsheetId(),
-    range: `'${tabName.replace(/'/g, "''")}'!A1:B1`,
-  });
-  const a1 = String(res.data.values?.[0]?.[0] ?? "")
-    .trim()
-    .toLowerCase();
-  if (a1 === "rep id") return EMPWR_LAYOUT;
-  return AXIA_LAYOUT;
+  return rosterLayoutFromTabName(tabName) ?? STANDARD_LAYOUT;
 }
 
-export async function ensureRosterHeaders(tabName: string): Promise<void> {
+export async function ensureRosterHeaders(tabName: string, layout?: RosterTabLayout): Promise<RosterTabLayout> {
+  const resolved = layout ?? (await detectRosterTabLayout(tabName));
   const sheets = await getSheetsClient();
   const spreadsheetId = getSpreadsheetId();
-  const layout = await detectRosterTabLayout(tabName);
-  const headerRange = `'${tabName.replace(/'/g, "''")}'!${layout.hasRepIdColumn ? "A1:T1" : "B1:T1"}`;
+  const headerRange = headerRangeForLayout(tabName, resolved);
 
   const existing = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -141,17 +109,15 @@ export async function ensureRosterHeaders(tabName: string): Promise<void> {
 
   const firstRow = existing.data.values?.[0];
   if (firstRow?.length && firstRow.some(cell => String(cell ?? "").trim())) {
-    return;
+    return resolved;
   }
-
-  const headers = layout.hasRepIdColumn
-    ? Array.from(EMPWR_ROSTER_HEADERS)
-    : Array.from(ROSTER_HEADERS);
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: headerRange,
     valueInputOption: "RAW",
-    requestBody: { values: [headers] },
+    requestBody: { values: [Array.from(resolved.headers)] },
   });
+
+  return resolved;
 }

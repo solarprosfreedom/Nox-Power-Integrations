@@ -1,28 +1,62 @@
-import { buildWorkUpn } from "@/lib/onboarding/normalize";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
+import type { ManualRosterRow, RosterBuildContext } from "@/lib/google-sheets/roster-map";
+import { parseOfficeName } from "@/lib/google-sheets/roster-map";
+import { auroraEmailFromName, buildWorkUpn } from "@/lib/onboarding/normalize";
+import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import { env } from "@/lib/env";
 import {
-  LAZARUS_LAYOUT,
   rosterFieldsToSharePointRow,
+  sharePointLayoutFromWorksheet,
   type SharePointRosterLayout,
 } from "@/lib/sharepoint/tab-layout";
-import type { ManualRosterRow } from "@/lib/google-sheets/roster-map";
-import { parseOfficeName } from "@/lib/google-sheets/roster-map";
+import type { RosterFieldValues } from "@/lib/google-sheets/tab-layout";
 
-export type { ManualRosterRow };
+export type { ManualRosterRow, RosterBuildContext };
 
 function workDomain(): string {
   return env.msDefaultDomain?.trim() || "noxpwr.com";
 }
 
+function buildRosterFieldValues(
+  user: SequifiUserRecord,
+  ctx?: RosterBuildContext,
+): RosterFieldValues {
+  const raw = user.raw ?? {};
+  const parsed = parseSequifiFields(raw);
+  const office = parseOfficeName(user.office_name);
+  const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  const plainNox = buildWorkUpn(user.first_name, user.last_name, workDomain());
+  const axiaNox = auroraEmailFromName(user.first_name, user.last_name);
+
+  return {
+    repName,
+    phoneNumber: user.mobile_no?.trim() ?? "",
+    personalEmail: user.email.trim(),
+    workEmail: ctx?.workEmail?.trim() || "",
+    noxEmail: ctx?.noxEmail?.trim() || (parsed.onboardAxia ? axiaNox : plainNox),
+    division: office.division,
+    region: office.region,
+    team: office.team,
+    role: user.position_name?.trim() ?? "",
+    market: parsed.markets,
+    redline: "",
+    overridingEntity1: "",
+    overridingEntity2: "",
+    overridingEntity3: "",
+    addis: "",
+    dob: "",
+    caHis: parsed.caHis,
+    issueDate: parsed.hisIssueDate,
+    expDate: parsed.hisExpDate,
+  };
+}
+
 export function manualRosterRowToSharePointRow(
   row: ManualRosterRow,
-  layout: SharePointRosterLayout = LAZARUS_LAYOUT,
+  layout: SharePointRosterLayout,
 ): string[] {
   return rosterFieldsToSharePointRow(
     {
-      dealer: row.dealer,
-      repId: row.repId,
       repName: row.repName,
       phoneNumber: row.phoneNumber,
       personalEmail: row.personalEmail,
@@ -37,6 +71,7 @@ export function manualRosterRowToSharePointRow(
       overridingEntity1: row.overridingEntity1,
       overridingEntity2: row.overridingEntity2,
       overridingEntity3: row.overridingEntity3,
+      addis: row.addis,
       dob: row.dob,
       caHis: row.caHis,
       issueDate: row.issueDate,
@@ -48,35 +83,9 @@ export function manualRosterRowToSharePointRow(
 
 export function sequifiUserToSharePointRow(
   user: SequifiUserRecord,
-  layout: SharePointRosterLayout = LAZARUS_LAYOUT,
+  worksheetName: string,
+  ctx?: RosterBuildContext,
 ): string[] {
-  const office = parseOfficeName(user.office_name);
-  const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-  const noxEmail = buildWorkUpn(user.first_name, user.last_name, workDomain());
-
-  return rosterFieldsToSharePointRow(
-    {
-      dealer: "",
-      repId: user.employee_id.trim(),
-      repName,
-      phoneNumber: user.mobile_no?.trim() ?? "",
-      personalEmail: user.email.trim(),
-      workEmail: "",
-      noxEmail,
-      division: office.division,
-      region: office.region,
-      team: office.team,
-      role: user.position_name?.trim() ?? "",
-      market: "",
-      redline: "",
-      overridingEntity1: "",
-      overridingEntity2: "",
-      overridingEntity3: "",
-      dob: "",
-      caHis: "",
-      issueDate: "",
-      expDate: "",
-    },
-    layout,
-  );
+  const layout = sharePointLayoutFromWorksheet(worksheetName);
+  return rosterFieldsToSharePointRow(buildRosterFieldValues(user, ctx), layout);
 }

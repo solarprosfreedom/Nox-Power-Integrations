@@ -1,6 +1,14 @@
-import { buildWorkUpn } from "@/lib/onboarding/normalize";
+import { auroraEmailFromName, buildWorkUpn } from "@/lib/onboarding/normalize";
+import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 import { env } from "@/lib/env";
+import {
+  rosterFieldsToSheetRow,
+  type RosterFieldValues,
+  type RosterTabLayout,
+} from "@/lib/google-sheets/tab-layout";
+
+export type { RosterTabLayout };
 
 export interface ParsedOffice {
   division: string;
@@ -27,6 +35,47 @@ export function parseOfficeName(officeName: string | null | undefined): ParsedOf
 
 function workDomain(): string {
   return env.msDefaultDomain?.trim() || "noxpwr.com";
+}
+
+export interface RosterBuildContext {
+  workEmail?: string;
+  noxEmail?: string;
+}
+
+function buildRosterFieldValues(
+  user: SequifiUserRecord,
+  ctx?: RosterBuildContext,
+): RosterFieldValues {
+  const raw = user.raw ?? {};
+  const parsed = parseSequifiFields(raw);
+  const office = parseOfficeName(user.office_name);
+  const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  const plainNox = buildWorkUpn(user.first_name, user.last_name, workDomain());
+  const axiaNox = auroraEmailFromName(user.first_name, user.last_name);
+  const workEmail = ctx?.workEmail?.trim() || "";
+  const noxEmail = ctx?.noxEmail?.trim() || (parsed.onboardAxia ? axiaNox : plainNox);
+
+  return {
+    repName,
+    phoneNumber: user.mobile_no?.trim() ?? "",
+    personalEmail: user.email.trim(),
+    workEmail,
+    noxEmail,
+    division: office.division,
+    region: office.region,
+    team: office.team,
+    role: user.position_name?.trim() ?? "",
+    market: parsed.markets,
+    redline: "",
+    overridingEntity1: "",
+    overridingEntity2: "",
+    overridingEntity3: "",
+    addis: "",
+    dob: "",
+    caHis: parsed.caHis,
+    issueDate: parsed.hisIssueDate,
+    expDate: parsed.hisExpDate,
+  };
 }
 
 /** Manual row from the UI test form. */
@@ -107,15 +156,9 @@ export function normalizeManualRosterRow(row: Partial<ManualRosterRow>): ManualR
   return { ...EMPTY_MANUAL_ROSTER_ROW, ...row };
 }
 
-import {
-  rosterFieldsToSheetRow,
-  type RosterTabLayout,
-} from "@/lib/google-sheets/tab-layout";
-
 export function manualRosterRowToSheetRow(row: ManualRosterRow, layout: RosterTabLayout): string[] {
   return rosterFieldsToSheetRow(
     {
-      repId: row.repId,
       repName: row.repName,
       phoneNumber: row.phoneNumber,
       personalEmail: row.personalEmail,
@@ -140,34 +183,10 @@ export function manualRosterRowToSheetRow(row: ManualRosterRow, layout: RosterTa
   );
 }
 
-export function sequifiUserToRosterRow(user: SequifiUserRecord, layout: RosterTabLayout): string[] {
-  const office = parseOfficeName(user.office_name);
-  const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-  const workEmail = buildWorkUpn(user.first_name, user.last_name, workDomain());
-
-  return rosterFieldsToSheetRow(
-    {
-      repId: user.employee_id.trim(),
-      repName,
-      phoneNumber: user.mobile_no?.trim() ?? "",
-      personalEmail: user.email.trim(),
-      workEmail: "",
-      noxEmail: workEmail,
-      division: office.division,
-      region: office.region,
-      team: office.team,
-      role: user.position_name?.trim() ?? "",
-      market: "",
-      redline: "",
-      overridingEntity1: "",
-      overridingEntity2: "",
-      overridingEntity3: "",
-      addis: "",
-      dob: "",
-      caHis: "",
-      issueDate: "",
-      expDate: "",
-    },
-    layout,
-  );
+export function sequifiUserToRosterRow(
+  user: SequifiUserRecord,
+  layout: RosterTabLayout,
+  ctx?: RosterBuildContext,
+): string[] {
+  return rosterFieldsToSheetRow(buildRosterFieldValues(user, ctx), layout);
 }

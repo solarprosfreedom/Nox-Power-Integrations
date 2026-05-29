@@ -1,21 +1,24 @@
 import { normalizeEmail } from "@/lib/onboarding/normalize";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 import { fetchAllSequifiUsers, filterUsersByGoLive } from "@/lib/sequifi/client";
-import type { ManualRosterRow } from "@/lib/google-sheets/roster-map";
+import type { ManualRosterRow, RosterBuildContext } from "@/lib/google-sheets/roster-map";
 import {
   appendRowsToWorksheet,
   getSharePointTestWorksheetName,
+  isSharePointRosterConfigured,
   listWorkbookWorksheets,
   readWorksheetColumn,
   resolveWorkbook,
 } from "@/lib/sharepoint/client";
-import { LAZARUS_LAYOUT } from "@/lib/sharepoint/tab-layout";
+import { sharePointLayoutFromWorksheet } from "@/lib/sharepoint/tab-layout";
 import {
   manualRosterRowToSharePointRow,
   sequifiUserToSharePointRow,
 } from "@/lib/sharepoint/roster-map";
+import { destinationsForInstallerTabs } from "@/lib/onboarding/installer-registry";
+import type { RosterTabLayout } from "@/lib/google-sheets/tab-layout";
 
-export type { ManualRosterRow };
+export type { ManualRosterRow, RosterBuildContext };
 
 export interface SharePointRosterSyncResult {
   worksheetName: string;
@@ -30,15 +33,31 @@ export interface SharePointRosterSyncResult {
   error?: string;
 }
 
-async function readExistingPersonalEmails(worksheetName: string): Promise<Set<string>> {
-  const values = await readWorksheetColumn(worksheetName, LAZARUS_LAYOUT.personalEmailColumn);
+export interface SharePointSingleAppendResult {
+  worksheetName: string;
+  appended: boolean;
+  reason?: string;
+  dedupKey?: string;
+}
+
+async function readExistingDedupValues(
+  worksheetName: string,
+  layout: RosterTabLayout,
+): Promise<Set<string>> {
+  const values = await readWorksheetColumn(worksheetName, layout.dedupColumn);
   const seen = new Set<string>();
-  for (const email of values) {
-    if (email && email.toLowerCase() !== "personal email") {
-      seen.add(normalizeEmail(email));
-    }
+  for (const value of values) {
+    if (!value) continue;
+    const lower = value.toLowerCase();
+    if (lower === "personal email" || lower === "rep email") continue;
+    seen.add(normalizeEmail(value));
   }
   return seen;
+}
+
+function dedupKeyFromRow(row: string[], layout: RosterTabLayout): string {
+  const index = layout.dedupColumn.charCodeAt(0) - 65;
+  return normalizeEmail(String(row[index] ?? "").trim());
 }
 
 export async function syncSequifiUsersToSharePointRoster(options: {
@@ -57,13 +76,14 @@ export async function syncSequifiUsersToSharePointRoster(options: {
     );
   }
 
+  const layout = sharePointLayoutFromWorksheet(worksheetName);
   const allUsers = await fetchAllSequifiUsers();
   const goLiveFiltered = applyGoLiveFilter
     ? allUsers.length - filterUsersByGoLive(allUsers).length
     : 0;
   const users = applyGoLiveFilter ? filterUsersByGoLive(allUsers) : allUsers;
 
-  const existingEmails = await readExistingPersonalEmails(worksheetName);
+  const existingEmails = await readExistingDedupValues(worksheetName, layout);
   const rowsToAppend: string[][] = [];
   const sampleRows: SharePointRosterSyncResult["sampleRows"] = [];
   let alreadyInSheet = 0;
@@ -84,20 +104,20 @@ export async function syncSequifiUsersToSharePointRoster(options: {
       continue;
     }
 
-    const row = sequifiUserToSharePointRow(user);
+    const row = sequifiUserToSharePointRow(user, worksheetName);
     rowsToAppend.push(row);
-    existingEmails.add(normalized);
+    existingEmails.add(dedupKeyFromRow(row, layout));
 
     if (sampleRows.length < 5) {
       sampleRows.push({
         sequifiUserId: user.id,
-        repName: row[2] ?? "",
+        repName: row[0] ?? "",
         personalEmail,
       });
     }
   }
 
-  const appended = await appendRowsToWorksheet(worksheetName, rowsToAppend);
+  const appended = await appendRowsToWorksheet(worksheetName, rowsToAppend, layout.appendRange);
 
   return {
     worksheetName,
@@ -110,6 +130,58 @@ export async function syncSequifiUsersToSharePointRoster(options: {
     skippedEmpty,
     sampleRows,
   };
+}
+
+export async function appendSequifiUserToSharePointRoster(options: {
+  worksheetName: string;
+  user: SequifiUserRecord;
+  ctx?: RosterBuildContext;
+}): Promise<SharePointSingleAppendResult> {
+  if (!isSharePointRosterConfigured()) {
+    return { worksheetName: options.worksheetName, appended: false, reason: "sharepoint not configured" };
+  }
+
+  const { worksheetName, user, ctx } = options;
+  const worksheets = await listWorkbookWorksheets();
+  if (!worksheets.includes(worksheetName)) {
+    return { worksheetName, appended: false, reason: "worksheet not found" };
+  }
+
+  const layout = sharePointLayoutFromWorksheet(worksheetName);
+  const row = sequifiUserToSharePointRow(user, worksheetName, ctx);
+  const dedupKey = dedupKeyFromRow(row, layout);
+  if (!dedupKey) {
+    return { worksheetName, appended: false, reason: "empty dedup key" };
+  }
+
+  const existing = await readExistingDedupValues(worksheetName, layout);
+  if (existing.has(dedupKey)) {
+    return { worksheetName, appended: false, reason: "already in sheet", dedupKey };
+  }
+
+  await appendRowsToWorksheet(worksheetName, [row], layout.appendRange);
+  return { worksheetName, appended: true, dedupKey };
+}
+
+export async function appendSequifiUserToInstallerSharePointRosters(options: {
+  tabNames: string[];
+  user: SequifiUserRecord;
+  ctx?: RosterBuildContext;
+}): Promise<SharePointSingleAppendResult[]> {
+  const destinations = destinationsForInstallerTabs(options.tabNames);
+  const results: SharePointSingleAppendResult[] = [];
+
+  for (const dest of destinations) {
+    results.push(
+      await appendSequifiUserToSharePointRoster({
+        worksheetName: dest.tabName,
+        user: options.user,
+        ctx: options.ctx,
+      }),
+    );
+  }
+
+  return results;
 }
 
 export interface SharePointManualAppendResult {
@@ -136,9 +208,10 @@ export async function appendManualRosterRowToSharePoint(options: {
     throw new Error(`Worksheet "${worksheetName}" not found.`);
   }
 
-  const sheetRow = manualRosterRowToSharePointRow(row);
+  const layout = sharePointLayoutFromWorksheet(worksheetName);
+  const sheetRow = manualRosterRowToSharePointRow(row, layout);
   const { fileName, webUrl } = await resolveWorkbook();
-  const appended = await appendRowsToWorksheet(worksheetName, [sheetRow]);
+  const appended = await appendRowsToWorksheet(worksheetName, [sheetRow], layout.appendRange);
 
   return {
     worksheetName,
@@ -171,3 +244,5 @@ export async function testSharePointRosterAccess(worksheetName?: string): Promis
     worksheetExists: worksheets.includes(tab),
   };
 }
+
+export { isSharePointRosterConfigured };
