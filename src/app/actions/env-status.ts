@@ -12,7 +12,9 @@ export async function getIntegrationEnvStatus(): Promise<{
   return {
     enerflo: Boolean(env.enerfloV1ApiKey?.trim()),
     terros: Boolean(env.terrosApiKey?.trim()),
-    sequifi: Boolean(env.sequifiApiKey?.trim()),
+    sequifi: Boolean(
+      env.sequifiAccessToken?.trim() || env.sequifiApiKey?.trim(),
+    ),
     coperniq: Boolean(env.coperniqApiKey?.trim()),
   };
 }

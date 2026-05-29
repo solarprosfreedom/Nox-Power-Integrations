@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sequifi-onboarding",
+      "schedule": "30 12 * * *"
+    }
+  ]
+}

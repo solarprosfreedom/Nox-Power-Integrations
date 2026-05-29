@@ -80,8 +80,23 @@ export const env = {
   terrosCfNetDeals: opt("TERROS_CF_NET_DEALS"),
   terrosCfInstalls: opt("TERROS_CF_INSTALLS"),
   terrosCfAppointments: opt("TERROS_CF_APPOINTMENTS"),
-  sequifiApiBaseUrl: opt("SEQUIFI_API_BASE_URL"),
+  sequifiApiBaseUrl: opt("SEQUIFI_API_BASE_URL", "https://marketplace-api.sequifi.com"),
   sequifiApiKey: opt("SEQUIFI_API_KEY"),
+  sequifiAccessToken: opt("SEQUIFI_ACCESS_TOKEN"),
+  sequifiRefreshToken: opt("SEQUIFI_REFRESH_TOKEN"),
+  /** ISO date — only process Sequifi users created on/after this (avoids backfill). */
+  onboardingGoLiveAt: opt("ONBOARDING_GO_LIVE_AT"),
+  /** When true, log actions but do not create accounts or send email. */
+  onboardingDryRun: opt("ONBOARDING_DRY_RUN", "true") === "true",
+  /** When true, assign Microsoft 365 license after user create (default false for testing). */
+  onboardingAssignMsLicense: opt("ONBOARDING_ASSIGN_MS_LICENSE", "false") === "true",
+  /** Initial M365 password for new hires (included in welcome email). */
+  onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123!"),
+  /** JSON map: Sequifi role/position substring → { enerfloRoles, welcomeTemplate, terrosRole } */
+  onboardingRoleMapJson: opt("ONBOARDING_ROLE_MAP_JSON"),
+  /** UPN domain for new Microsoft users (default noxpwr.com). */
+  msDefaultDomain: opt("MS_DEFAULT_DOMAIN", "noxpwr.com"),
+  cronSecret: opt("CRON_SECRET"),
   supabaseUrl: opt("SUPABASE_URL"),
   supabaseServiceRoleKey: opt("SUPABASE_SERVICE_ROLE_KEY"),
   /** Microsoft Entra / Graph — welcome email & onboarding */
@@ -90,4 +105,19 @@ export const env = {
   azureClientSecret: opt("AZURE_CLIENT_SECRET"),
   welcomeEmailFrom: opt("WELCOME_EMAIL_FROM"),
   welcomeEmailTestTo: opt("WELCOME_EMAIL_TEST_TO"),
+  /** Google Sheets roster sync — spreadsheet ID from the URL */
+  googleSheetsSpreadsheetId: opt("GOOGLE_SHEETS_SPREADSHEET_ID"),
+  /** Production roster tab (e.g. Axia) */
+  googleSheetsTabName: opt("GOOGLE_SHEETS_TAB_NAME", "Axia"),
+  /** Isolated tab for sync testing (created automatically if missing) */
+  googleSheetsTestTabName: opt("GOOGLE_SHEETS_TEST_TAB_NAME", "Test Sync"),
+  googleServiceAccountEmail: opt("GOOGLE_SERVICE_ACCOUNT_EMAIL"),
+  /** PEM private key; use \\n for line breaks in .env */
+  googleServiceAccountPrivateKey: opt("GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY"),
+  /** SharePoint Excel roster — site URL (e.g. https://tenant.sharepoint.com/sites/SiteName) */
+  sharepointSiteUrl: opt("SHAREPOINT_SITE_URL"),
+  /** Path from site drive root, e.g. Shared Documents/Roster - 3rd Party Installers.xlsx */
+  sharepointExcelPath: opt("SHAREPOINT_EXCEL_PATH"),
+  /** Worksheet tab for sync testing (e.g. LAZARUS) */
+  sharepointTestWorksheetName: opt("SHAREPOINT_TEST_WORKSHEET_NAME", "LAZARUS"),
 };

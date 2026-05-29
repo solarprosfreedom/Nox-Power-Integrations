@@ -1,71 +1,65 @@
 # Sequifi — endpoints reference
 
-Product: [Sequifi](https://www.sequifi.com/)
+Product: [Sequifi](https://www.sequifi.com/) · Marketplace API: `https://marketplace-api.sequifi.com`
 
-**Important:** Sequifi does **not** publish an open REST catalog like Enerflo or Terros in this repo’s research. Endpoints below are **placeholders** for planning. Replace with URLs, headers, and payloads from **Sequifi solutions / API PDF / partner portal** once Management shares access.
-
-Internal checklist (also see [docs/SEQUIFI_INTEGRATION.md](../docs/SEQUIFI_INTEGRATION.md) if present): transport (REST vs CSV vs Zapier), auth scheme, sandbox base URL, idempotency, webhook signing.
+**Auth:** OAuth bearer token (`SEQUIFI_ACCESS_TOKEN`) from Sequifi marketplace login.
 
 ---
 
-## Onboarding (hire / docs / workflows)
+## Users (hired / active — onboarding trigger source)
 
 ```text
--- Start or update an onboarding case for a new rep (placeholder — replace with Sequifi-documented route)
-POST {SEQUIFI_API_BASE_URL}/v1/onboarding/cases
+-- List hired users with optional filters (used by integration-middleware cron + gap scan)
+GET {SEQUIFI_API_BASE_URL}/v1/users?page=1&per_page=100&status=active
+
+-- Get a single user by ID
+GET {SEQUIFI_API_BASE_URL}/v1/users/{id}
+
+-- Update employee personal & additional info
+POST {SEQUIFI_API_BASE_URL}/v1/users
+
+-- Toggle dismiss/enable an active employee
+POST {SEQUIFI_API_BASE_URL}/v1/users/termination
 ```
 
-Use-case: when Enerflo signals “new user / hired”, your middleware opens or updates onboarding in Sequifi.
-
-```text
--- Fetch onboarding status for a worker (placeholder)
-GET {SEQUIFI_API_BASE_URL}/v1/onboarding/cases/{caseId}
-```
-
-Use-case: poll or reconcile before marking complete in your DB.
+Use-case: **after hire**, active users appear in `/v1/users?status=active` (`status_id = 1`). Our middleware polls this list daily (8:30 PM PHT cron) and provisions Microsoft + Enerflo + Terros for reps missing a member `@noxpwr.com` account, then appends each new Microsoft account to the Google Sheets **EMPWR** roster tab. Inactive users are excluded.
 
 ---
 
-## Employees / contractors (1099 / W2 context)
+## Onboarding (pre-hire pipeline — not used as trigger)
 
 ```text
--- Create or sync employee profile (placeholder)
-POST {SEQUIFI_API_BASE_URL}/v1/employees
-PATCH {SEQUIFI_API_BASE_URL}/v1/employees/{employeeId}
+-- List onboarding employees with optional filters
+GET {SEQUIFI_API_BASE_URL}/v1/onboarding
+
+-- Create a new onboarding employee record
+POST {SEQUIFI_API_BASE_URL}/v1/onboarding
+
+-- Get a single onboarding employee by ID
+GET {SEQUIFI_API_BASE_URL}/v1/onboarding/{id}
+
+-- Promote an onboarding employee to an active/hired user
+PUT {SEQUIFI_API_BASE_URL}/v1/onboarding/hire
 ```
 
-Use-case: keep Sequifi HR records aligned with Enerflo “Users” or CRM owner fields.
+Use-case: reps in progress before hire. After `PUT /v1/onboarding/hire`, they move to `/v1/users`. We do **not** poll onboarding for provisioning today.
 
 ---
 
-## Payroll / commission (if exposed via API)
+## This repo’s behavior
 
-```text
--- Trigger or fetch a commission run (placeholder)
-GET {SEQUIFI_API_BASE_URL}/v1/commission-runs
-POST {SEQUIFI_API_BASE_URL}/v1/commission-runs
-```
-
-Use-case: after install milestones from Enerflo, confirm payout state in Sequifi (only if their API exposes it).
+| Component | Endpoint |
+|---|---|
+| Gap scan + cron | `GET /v1/users` |
+| Sequifi client | [`src/lib/sequifi/client.ts`](../../src/lib/sequifi/client.ts) |
+| Daily cron | `GET /api/cron/sequifi-onboarding` at `30 12 * * *` UTC (8:30 PM PHT) — provisions accounts + appends to Google Sheets **EMPWR** tab |
 
 ---
 
-## Inbound webhooks (Sequifi → your app)
+## Inbound webhooks (optional)
 
 ```text
--- Optional: Sequifi POSTs onboarding completion or payroll events (placeholder URL on your side)
 POST https://{your-domain}/api/webhooks/sequifi
 ```
 
-Use-case: receive “onboarding complete” or similar when Sequifi supports outbound webhooks—verify auth headers (`x-sequifi-token` / `x-sequifi-signature`) against `SEQUIFI_WEBHOOK_SECRET` in `.env.local`.
-
----
-
-## This repo’s current behavior (until real URLs exist)
-
-```text
--- No external HTTP: Sequifi adapter returns noop JSON until SEQUIFI_API_BASE_URL + SEQUIFI_API_KEY are set
-(see src/lib/integrations/sequifi-client.ts)
-```
-
-Use-case: safe skeleton so outbox jobs succeed while you wait for vendor documentation.
+Use-case: receive events from Sequifi if outbound webhooks are enabled — verify with `SEQUIFI_WEBHOOK_SECRET`.

@@ -16,10 +16,55 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping } from "@/lib/logger";
-import { getTerrosAccountIdFromIntegrationMaps } from "@/lib/sync/account-matcher";
+import {
+  getEnerfloCustomerUuid,
+  getEnerfloIntegrationExternalId,
+  getTerrosAccountIdFromIntegrationMaps,
+  resolveTerrosAccountForInstalls,
+} from "@/lib/sync/account-matcher";
 import { env } from "@/lib/env";
 import { resolveEnerfloCustomerLeadOwner } from "@/lib/sync/enerflo-lead-owner";
+import { createTerrosSearchCache } from "@/lib/sync/terros-accounts";
 import { resolveTerrosUserIdByEmail } from "@/lib/sync/terros-users";
+
+// #region agent log
+function debugApptLog(
+  location: string,
+  message: string,
+  data: Record<string, unknown>,
+  hypothesisId: string,
+): void {
+  fetch("http://127.0.0.1:7264/ingest/a82f0243-aefe-466b-aacd-9b45cf8eb5d9", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "7c98bc" },
+    body: JSON.stringify({
+      sessionId: "7c98bc",
+      location,
+      message,
+      data,
+      hypothesisId,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+}
+
+function terrosAccountDebugSnapshot(acc: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!acc) return { hasAccount: false };
+  const resident = acc.resident as Record<string, unknown> | undefined;
+  const location = acc.location as Record<string, unknown> | undefined;
+  const residentName = typeof resident?.name === "string" ? resident.name : "";
+  const oneLine = typeof location?.oneLine === "string" ? location.oneLine : "";
+  return {
+    hasAccount: true,
+    accountId: acc.accountId ?? acc.id ?? null,
+    externalLeadId: acc.externalLeadId ?? null,
+    residentNameEmpty: !residentName || residentName === "Unknown Name",
+    locationEmpty: !oneLine || oneLine === "Unknown address",
+    hasResidentBlock: Boolean(resident && Object.keys(resident).length > 0),
+    hasLocationBlock: Boolean(location && Object.keys(location).length > 0),
+  };
+}
+// #endregion
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -1661,15 +1706,334 @@ function repUserRecordMatchesLookup(u: EnerfloUser, repLookupId: string): boolea
   return candidates.some((c) => c != null && String(c).toLowerCase() === want);
 }
 
+interface AppointmentAccountResolution {
+  accountId: string | null;
+  accountOwnerIdFromLookup: string | null;
+  accountLocation: Record<string, unknown> | null;
+  customerUuid: string | null;
+  v3Customer: Record<string, unknown>;
+  enerfloSetterNumericId: string | null;
+  enerfloAgentNumericId: string | null;
+  step1Source: string;
+  step1Ok: boolean;
+  step1Status: number | null;
+  step1Preview: string;
+}
+
+async function fetchTerrosAccountRecord(
+  terrosBase: string,
+  terrosKey: string,
+  accountId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await fetch(`${terrosBase}/account/get`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({ accountId }),
+    });
+    const raw = await r.text();
+    if (!r.ok || !terrosJsonBodyIndicatesSuccess(raw)) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return (parsed.account ?? parsed) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+async function searchTerrosAccountByQuery(
+  terrosBase: string,
+  terrosKey: string,
+  query: string,
+): Promise<Record<string, unknown> | null> {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+  try {
+    const r = await fetch(`${terrosBase}/account/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({ size: 10, searchInput: { query: trimmed } }),
+    });
+    const raw = await r.text();
+    if (!r.ok || !terrosJsonBodyIndicatesSuccess(raw)) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const accounts = parsed.accounts as Record<string, unknown>[] | undefined;
+    return Array.isArray(accounts) && accounts.length > 0 ? accounts[0]! : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildLocationFromAppointmentCustomer(
+  payload: NewAppointmentPayload,
+  v3Customer: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const payloadAddr = payload.customer?.address;
+  const v3Addr = v3Customer.address as Record<string, unknown> | undefined;
+  const street = String(payloadAddr?.street ?? v3Addr?.street ?? v3Addr?.line1 ?? "").trim();
+  const city = String(payloadAddr?.city ?? v3Addr?.city ?? v3Addr?.locality ?? "").trim();
+  const state = String(payloadAddr?.state ?? v3Addr?.state ?? v3Addr?.countrySubd ?? "").trim();
+  const zip = String(payloadAddr?.zip ?? v3Addr?.zip ?? v3Addr?.postalCode ?? v3Addr?.postal1 ?? "").trim();
+  const fullAddress = String(payloadAddr?.full_address ?? v3Addr?.full_address ?? v3Addr?.oneLine ?? "").trim();
+  if (!street && !city && !fullAddress) return null;
+
+  const location: Record<string, unknown> = {
+    ...(street ? { line1: street } : {}),
+    ...(fullAddress ? { oneLine: fullAddress } : {}),
+    ...(city ? { locality: city } : {}),
+    ...(state ? { countrySubd: state } : {}),
+    ...(zip ? { postal1: zip } : {}),
+  };
+  const lat = payloadAddr?.latitude ?? v3Addr?.latitude;
+  const lng = payloadAddr?.longitude ?? v3Addr?.longitude;
+  if (lat && lng) {
+    location.latitude = parseFloat(String(lat));
+    location.longitude = parseFloat(String(lng));
+  }
+  return location;
+}
+
+function buildTerrosAccountFieldsFromAppointment(
+  payload: NewAppointmentPayload,
+  v3Customer: Record<string, unknown>,
+  customerUuid: string | null,
+  customerNumericId: string,
+  terrosWorkflowId: string,
+): Record<string, unknown> | null {
+  const firstName = String(payload.customer?.first_name ?? v3Customer.first_name ?? "").trim();
+  const lastName = String(payload.customer?.last_name ?? v3Customer.last_name ?? "").trim();
+  const customerName = `${firstName} ${lastName}`.trim();
+  const customerEmail = String(payload.customer?.email ?? v3Customer.email ?? "").trim();
+  const customerPhone = sanitizePhone(
+    String(payload.customer?.phone ?? v3Customer.phone ?? v3Customer.mobile ?? ""),
+  );
+  const location = buildLocationFromAppointmentCustomer(payload, v3Customer);
+
+  if (!customerName && !customerEmail && !customerPhone && !location) return null;
+
+  const externalLeadId = customerNumericId || customerUuid;
+  if (!externalLeadId) return null;
+
+  const resident: Record<string, string> = {};
+  if (customerName) resident.name = customerName;
+  if (firstName) resident.firstName = firstName;
+  if (lastName) resident.lastName = lastName;
+  if (customerEmail) resident.email = customerEmail;
+  if (customerPhone) resident.phone = customerPhone;
+
+  return {
+    externalLeadId,
+    ...(customerName ? { name: customerName } : {}),
+    ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
+    ...(Object.keys(resident).length > 0 ? { resident } : {}),
+    ...(location ? { location } : {}),
+  };
+}
+
+/**
+ * Find an existing Terros account without creating empty shells.
+ * Only upserts when no match is found AND we have enough customer data to populate resident/location.
+ */
+async function resolveTerrosAccountForAppointment(
+  payload: NewAppointmentPayload,
+  enerfloBase: string,
+  enerfloKey: string,
+  terrosBase: string,
+  terrosKey: string,
+  terrosWorkflowId: string,
+): Promise<AppointmentAccountResolution> {
+  const customerNumericId = String(payload.customer?.id ?? "");
+  const customerEmail = String(payload.customer?.email ?? "").trim();
+  const customerPhone = sanitizePhone(payload.customer?.phone ?? "") ?? "";
+  const customerName = `${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
+
+  let customerUuid: string | null = null;
+  let v3Customer: Record<string, unknown> = {};
+  let enerfloSetterNumericId: string | null = null;
+  let enerfloAgentNumericId: string | null = null;
+  let accountId: string | null = null;
+  let accountOwnerIdFromLookup: string | null = null;
+  let accountLocation: Record<string, unknown> | null = null;
+  let step1Source = "";
+  let step1Ok = false;
+  let step1Status: number | null = null;
+  let step1Preview = "";
+
+  if (customerNumericId && enerfloKey) {
+    try {
+      const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
+        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
+      });
+      if (r.ok) {
+        v3Customer = JSON.parse(await r.text()) as Record<string, unknown>;
+        customerUuid = getEnerfloCustomerUuid(v3Customer) ?? getEnerfloIntegrationExternalId(v3Customer);
+        if (v3Customer.setter_user_id) enerfloSetterNumericId = String(v3Customer.setter_user_id);
+        if (v3Customer.agent_user_id) enerfloAgentNumericId = String(v3Customer.agent_user_id);
+      }
+    } catch { /* best-effort */ }
+  }
+
+  const v3Email = String(v3Customer.email ?? "").trim();
+  const emailForSearch = customerEmail || v3Email;
+  const v3Phone = sanitizePhone(String(v3Customer.phone ?? v3Customer.mobile ?? "")) ?? "";
+  const phoneForSearch = customerPhone || v3Phone;
+  const v3Name = `${v3Customer.first_name ?? ""} ${v3Customer.last_name ?? ""}`.trim();
+  const nameForSearch = customerName || v3Name;
+
+  const applyAccountMatch = (acc: Record<string, unknown>, source: string) => {
+    accountId = String(acc.accountId ?? acc.id ?? "").trim() || null;
+    accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
+    if (acc.location && typeof acc.location === "object") {
+      accountLocation = acc.location as Record<string, unknown>;
+    }
+    step1Source = source;
+    step1Ok = Boolean(accountId);
+  };
+
+  if (terrosKey) {
+    const terrosAccountFromMap = getTerrosAccountIdFromIntegrationMaps(v3Customer);
+    if (terrosAccountFromMap) {
+      const acc = await fetchTerrosAccountRecord(terrosBase, terrosKey, terrosAccountFromMap);
+      if (acc) applyAccountMatch(acc, "get:integration-map");
+    }
+
+    if (!accountId && emailForSearch) {
+      const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, emailForSearch);
+      if (acc) applyAccountMatch(acc, "list:email");
+    }
+
+    if (!accountId && customerNumericId) {
+      const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, customerNumericId);
+      if (acc) applyAccountMatch(acc, "list:numeric-id");
+    }
+
+    if (!accountId && customerUuid) {
+      const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, customerUuid);
+      if (acc) applyAccountMatch(acc, "list:uuid");
+    }
+
+    if (!accountId) {
+      const resolvedId = await resolveTerrosAccountForInstalls({
+        customer: v3Customer,
+        uuid: customerUuid ?? "",
+        numericId: customerNumericId,
+        email: emailForSearch,
+        phone: phoneForSearch,
+        name: nameForSearch,
+        addressLine1: payload.customer?.address?.street,
+        city: payload.customer?.address?.city,
+        zip: payload.customer?.address?.zip,
+        maps: {
+          terrosExternalLeadIdToAccount: new Map(),
+          terrosEmailToAccount: new Map(),
+          terrosPhoneToAccount: new Map(),
+          terrosAccounts: [],
+        },
+        terrosBase,
+        terrosKey,
+        searchCache: createTerrosSearchCache(),
+      });
+      if (resolvedId) {
+        const acc = await fetchTerrosAccountRecord(terrosBase, terrosKey, resolvedId);
+        if (acc) applyAccountMatch(acc, "matcher:installs");
+      }
+    }
+
+    if (!accountId) {
+      const accountFields = buildTerrosAccountFieldsFromAppointment(
+        payload,
+        v3Customer,
+        customerUuid,
+        customerNumericId,
+        terrosWorkflowId,
+      );
+      if (accountFields) {
+        // #region agent log
+        debugApptLog(
+          "route.ts:resolveTerrosAccountForAppointment:create-upsert",
+          "creating account with full customer fields",
+          {
+            upsertKeys: Object.keys(accountFields),
+            hasResident: Boolean(accountFields.resident),
+            hasLocation: Boolean(accountFields.location),
+          },
+          "A",
+        );
+        // #endregion
+        try {
+          const r = await fetch(`${terrosBase}/account/upsert`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+            body: JSON.stringify({ account: accountFields }),
+          });
+          step1Status = r.status;
+          const raw = await r.text();
+          step1Preview = raw.slice(0, 300);
+          step1Ok = r.ok && terrosJsonBodyIndicatesSuccess(raw);
+          if (step1Ok) {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const acc = (parsed.account ?? parsed) as Record<string, unknown>;
+            if (acc?.accountId) {
+              applyAccountMatch(acc, "upsert:full-fields");
+            }
+          }
+        } catch (e) {
+          step1Preview = e instanceof Error ? e.message : String(e);
+        }
+      } else {
+        step1Source = "skipped:no-customer-data";
+        step1Preview = "No Terros account found and insufficient customer data to create one safely.";
+        // #region agent log
+        debugApptLog(
+          "route.ts:resolveTerrosAccountForAppointment:skipped",
+          "skipped account creation — no customer data",
+          { customerNumericId, hasEmail: Boolean(emailForSearch), hasName: Boolean(nameForSearch) },
+          "B",
+        );
+        // #endregion
+      }
+    }
+  }
+
+  // #region agent log
+  debugApptLog(
+    "route.ts:resolveTerrosAccountForAppointment:complete",
+    "appointment account resolution finished",
+    {
+      step1Source: step1Source || "none",
+      accountFound: Boolean(accountId),
+      ...terrosAccountDebugSnapshot(
+        accountId
+          ? { accountId, ownerId: accountOwnerIdFromLookup, location: accountLocation ?? undefined }
+          : undefined,
+      ),
+    },
+    "A",
+  );
+  // #endregion
+
+  return {
+    accountId,
+    accountOwnerIdFromLookup,
+    accountLocation,
+    customerUuid,
+    v3Customer,
+    enerfloSetterNumericId,
+    enerfloAgentNumericId,
+    step1Source,
+    step1Ok,
+    step1Status,
+    step1Preview,
+  };
+}
+
 // ── new_appointment ──────────────────────────────────────────────────────────
 /**
  * Flow:
- *  1 [best-effort] Fetch full Enerflo customer record to get the UUID stored as
- *    externalLeadId in Terros → account/upsert to retrieve accountId.
- *    Fallback: account/list query by customer email.
+ *  1 [best-effort] Find existing Terros account (search only); create with full
+ *    customer fields only when no match exists.
  *  2 [best-effort] Resolve assignee.email → Terros closerUserId via user/list.
  *  3 [best-effort] account/update — set Appointment stage + closerId.
- *  4 [required]    POST /calendar/event/add.
+ *  4 [skipped]     Calendar event handled by update_appointment.
  */
 async function handleNewAppointment(payload: NewAppointmentPayload): Promise<NextResponse> {
   const enerfloBase  = (env.enerfloV1BaseUrl  ?? "https://enerflo.io").replace(/\/$/, "");
@@ -1678,6 +2042,25 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   const terrosKey    = env.terrosApiKey       ?? "";
   const terrosWorkflowId      = env.terrosWorkflowId                    ?? "";
   const appointmentStageId    = env.terrosWorkflowAppointmentStageId    ?? "";
+
+  // #region agent log
+  debugApptLog(
+    "route.ts:handleNewAppointment:entry",
+    "new_appointment received",
+    {
+      enerfloAppointmentId: payload.id,
+      customerNumericId: String(payload.customer?.id ?? ""),
+      hasCustomerEmail: Boolean(payload.customer?.email?.trim()),
+      hasCustomerFirstName: Boolean(payload.customer?.first_name?.trim()),
+      hasCustomerAddress: Boolean(
+        payload.customer?.address?.street ||
+        payload.customer?.address?.city ||
+        payload.customer?.address?.full_address,
+      ),
+    },
+    "B",
+  );
+  // #endregion
 
   const enerfloAppointmentId  = payload.id;
   const startTimeMs           = payload.times.unix.unix_time * 1000;
@@ -1691,37 +2074,25 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
                                   .filter(Boolean).join("\n").trim();
   const notes                 = [`[Enerflo:${payload.id}]`, notesBase].filter(Boolean).join("\n");
 
-  // ── Step 1: find Terros account ──────────────────────────────────────────
+  // ── Step 1: find Terros account (search-first; no bare upsert) ───────────
 
-  let accountId: string | null = null;
-  let accountOwnerIdFromLookup: string | null = null;
-  let step1Source = "";
-  let step1Status: number | null = null;
-  let step1Ok     = false;
-  let step1Preview = "";
-
-  // 1a: always fetch v3 — gets UUID from integration_maps AND setter/agent for event Setter field
-  let customerUuid: string | null = null;
-  let enerfloSetterNumericId: string | null = null;
-  let enerfloAgentNumericId:  string | null = null;
-  if (customerNumericId && enerfloKey) {
-    try {
-      const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
-        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-      });
-      if (r.ok) {
-        const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
-        if (Array.isArray(parsed.integration_maps)) {
-          for (const map of parsed.integration_maps as Record<string, unknown>[]) {
-            const extId = map.external_id as string | undefined;
-            if (extId && /^[0-9a-f-]{36}$/i.test(extId)) { customerUuid = extId; break; }
-          }
-        }
-        if (parsed.setter_user_id) enerfloSetterNumericId = String(parsed.setter_user_id);
-        if (parsed.agent_user_id)  enerfloAgentNumericId  = String(parsed.agent_user_id);
-      }
-    } catch { /* fall through */ }
-  }
+  const accountResolution = await resolveTerrosAccountForAppointment(
+    payload,
+    enerfloBase,
+    enerfloKey,
+    terrosBase,
+    terrosKey,
+    terrosWorkflowId,
+  );
+  let accountId = accountResolution.accountId;
+  let accountOwnerIdFromLookup = accountResolution.accountOwnerIdFromLookup;
+  const step1Source = accountResolution.step1Source;
+  const step1Status = accountResolution.step1Status;
+  let step1Ok = accountResolution.step1Ok;
+  const step1Preview = accountResolution.step1Preview;
+  const customerUuid = accountResolution.customerUuid;
+  const enerfloSetterNumericId = accountResolution.enerfloSetterNumericId;
+  const enerfloAgentNumericId = accountResolution.enerfloAgentNumericId;
 
   // Resolve setter (or agent) → Terros ownerId for the calendar event "Setter" field
   let eventOwnerIdFromSetter: string | null = null;
@@ -1739,101 +2110,15 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     }
   }
 
-  // 1b: account/upsert by Terros UUID (from integration_maps — most reliable match)
-  if (customerUuid && terrosKey) {
-    try {
-      const r = await fetch(`${terrosBase}/account/upsert`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({
-          account: {
-            externalLeadId: customerUuid,
-            ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
-          },
-        }),
-      });
-      step1Status = r.status;
-      const raw   = await r.text();
-      step1Preview = raw.slice(0, 300);
-      step1Ok = r.ok && terrosJsonBodyIndicatesSuccess(raw);
-      if (step1Ok) {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const acc = (parsed.account ?? parsed) as Record<string, unknown>;
-        accountId          = (acc.accountId as string | undefined) ?? null;
-        accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
-        step1Source = "upsert-uuid";
-      }
-    } catch (e) {
-      step1Preview = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  // 1c: if no UUID match (e.g. brand-new account not yet in integration_maps),
-  //     search by customer email FIRST to find the account created by customer.created.
-  //     This prevents creating a duplicate account when the numeric-id doesn't match the
-  //     V2 UUID stored as externalLeadId by customer.created.
-  if (!accountId && customerEmail && terrosKey) {
-    try {
-      const r = await fetch(`${terrosBase}/account/list`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ size: 10, searchInput: { query: customerEmail } }),
-      });
-      step1Status = r.status;
-      const raw   = await r.text();
-      step1Preview = raw.slice(0, 300);
-      if (r.ok && terrosJsonBodyIndicatesSuccess(raw)) {
-        const parsed   = JSON.parse(raw) as Record<string, unknown>;
-        const accounts = parsed.accounts as Record<string, unknown>[] | undefined;
-        const match    = Array.isArray(accounts) ? accounts[0] : undefined;
-        accountId      = (match?.accountId as string | undefined) ?? null;
-        accountOwnerIdFromLookup = (match?.ownerId as string | undefined) ?? null;
-        step1Ok        = Boolean(accountId);
-        step1Source    = "list-email";
-      }
-    } catch (e) {
-      step1Preview = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  // 1d: last resort — upsert by numeric ID (may create account if truly not found by email either)
-  if (!accountId && customerNumericId && terrosKey) {
-    try {
-      const r = await fetch(`${terrosBase}/account/upsert`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({
-          account: {
-            externalLeadId: customerNumericId,
-            ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
-          },
-        }),
-      });
-      step1Status = r.status;
-      const raw   = await r.text();
-      step1Preview = raw.slice(0, 300);
-      step1Ok = r.ok && terrosJsonBodyIndicatesSuccess(raw);
-      if (step1Ok) {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const acc = (parsed.account ?? parsed) as Record<string, unknown>;
-        accountId          = (acc.accountId as string | undefined) ?? null;
-        accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
-        step1Source = "upsert-numericId-lastresort";
-      }
-    } catch (e) {
-      step1Preview = e instanceof Error ? e.message : String(e);
-    }
-  }
-
   await writeApiLog({
     operation: "webhook:enerflo-v2:new-appointment:find-terros-account",
     vendor: "terros",
     method: "POST",
-    url: `${terrosBase}/account/upsert`,
+    url: `${terrosBase}/account/get|list|upsert`,
     hadApiKey: Boolean(terrosKey),
     status: step1Status,
     ok: step1Ok,
-    responsePreview: step1Preview,
+    responsePreview: JSON.stringify({ step1Source, step1Preview }).slice(0, 400),
   });
 
   // ── Step 2: resolve assignee email → Terros closerUserId ─────────────────
@@ -1975,7 +2260,27 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   const enerfloKey   = env.enerfloV1ApiKey   ?? "";
   const terrosBase   = (env.terrosApiBaseUrl  ?? "https://api.terros.com").replace(/\/$/, "");
   const terrosKey    = env.terrosApiKey       ?? "";
+  const terrosWorkflowId   = env.terrosWorkflowId ?? "";
   const appointmentStageId = env.terrosWorkflowAppointmentStageId ?? "";
+
+  // #region agent log
+  debugApptLog(
+    "route.ts:handleUpdateAppointment:entry",
+    "update_appointment received",
+    {
+      enerfloAppointmentId: payload.id,
+      customerNumericId: String(payload.customer?.id ?? ""),
+      hasCustomerEmail: Boolean(payload.customer?.email?.trim()),
+      hasCustomerFirstName: Boolean(payload.customer?.first_name?.trim()),
+      hasCustomerAddress: Boolean(
+        payload.customer?.address?.street ||
+        payload.customer?.address?.city ||
+        payload.customer?.address?.full_address,
+      ),
+    },
+    "B",
+  );
+  // #endregion
 
   const enerfloAppointmentId = payload.id;
   const startTimeMs          = payload.times.unix.unix_time * 1000;
@@ -1988,34 +2293,23 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
                                  .filter(Boolean).join("\n").trim();
   const notes                = [`[Enerflo:${enerfloAppointmentId}]`, notesBase].filter(Boolean).join("\n");
 
-  // ── Step 1: find Terros account (same logic as new_appointment) ───────────
+  // ── Step 1: find Terros account (search-first; no bare upsert) ───────────
 
-  let accountId: string | null = null;
-  let accountOwnerIdFromLookup: string | null = null;
-  let step1Source = "";
-  let customerUuid: string | null = null;
-
-  // Always fetch v3 — gets UUID from integration_maps AND setter/agent for event Setter field
-  let enerfloSetterNumericId: string | null = null;
-  let enerfloAgentNumericId:  string | null = null;
-  if (customerNumericId && enerfloKey) {
-    try {
-      const r = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(customerNumericId)}`, {
-        headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
-      });
-      if (r.ok) {
-        const parsed = JSON.parse(await r.text()) as Record<string, unknown>;
-        if (Array.isArray(parsed.integration_maps)) {
-          for (const map of parsed.integration_maps as Record<string, unknown>[]) {
-            const extId = map.external_id as string | undefined;
-            if (extId && /^[0-9a-f-]{36}$/i.test(extId)) { customerUuid = extId; break; }
-          }
-        }
-        if (parsed.setter_user_id) enerfloSetterNumericId = String(parsed.setter_user_id);
-        if (parsed.agent_user_id)  enerfloAgentNumericId  = String(parsed.agent_user_id);
-      }
-    } catch { /* best-effort */ }
-  }
+  const accountResolution = await resolveTerrosAccountForAppointment(
+    payload,
+    enerfloBase,
+    enerfloKey,
+    terrosBase,
+    terrosKey,
+    terrosWorkflowId,
+  );
+  const accountId = accountResolution.accountId;
+  const accountOwnerIdFromLookup = accountResolution.accountOwnerIdFromLookup;
+  const step1Source = accountResolution.step1Source;
+  const customerUuid = accountResolution.customerUuid;
+  const accountLocation = accountResolution.accountLocation;
+  const enerfloSetterNumericId = accountResolution.enerfloSetterNumericId;
+  const enerfloAgentNumericId = accountResolution.enerfloAgentNumericId;
 
   // Resolve setter (or agent) → Terros ownerId for the calendar event "Setter" field
   let eventOwnerIdFromSetter: string | null = null;
@@ -2033,64 +2327,13 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     }
   }
 
-  // Fallback location if payload.customer.address is empty — read from Terros account
-  let accountLocation: Record<string, unknown> | null = null;
-
-  if (customerUuid && terrosKey) {
-    try {
-      const r = await fetch(`${terrosBase}/account/upsert`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ account: { externalLeadId: customerUuid } }),
-      });
-      if (r.ok) {
-        const raw  = await r.text();
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const acc    = (parsed.account ?? parsed) as Record<string, unknown>;
-        const aid    = acc.accountId as string | undefined;
-        if (aid) {
-          accountId = aid;
-          accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
-          step1Source = "upsert:uuid";
-          if (acc.location && typeof acc.location === "object") {
-            accountLocation = acc.location as Record<string, unknown>;
-          }
-        }
-      }
-    } catch { /* best-effort */ }
-  }
-
-  if (!accountId && customerEmail && terrosKey) {
-    try {
-      const r = await fetch(`${terrosBase}/account/list`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body: JSON.stringify({ size: 10, searchInput: { query: customerEmail } }),
-      });
-      if (r.ok) {
-        const raw    = await r.text();
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const accs   = parsed.accounts as Record<string, unknown>[] | undefined;
-        const match  = Array.isArray(accs) ? accs[0] : undefined;
-        const aid    = match?.accountId as string | undefined;
-        if (aid) {
-          accountId = aid;
-          accountOwnerIdFromLookup = (match?.ownerId as string | undefined) ?? null;
-          step1Source = "list:email";
-          if (match?.location && typeof match.location === "object") {
-            accountLocation = match.location as Record<string, unknown>;
-          }
-        }
-      }
-    } catch { /* best-effort */ }
-  }
-
   // ── Build location (shared by step 3b account update and step 4 event) ──
   // Prefer address from the Enerflo payload; fall back to the Terros account's
-  // existing location (captured from the account/upsert response above).
+  // existing location (captured from the account lookup above).
   const hasPayloadAddr = !!(customerAddr?.street || customerAddr?.city || customerAddr?.full_address);
+  const payloadLocation = buildLocationFromAppointmentCustomer(payload, accountResolution.v3Customer);
   const resolvedLocation: Record<string, unknown> | null = hasPayloadAddr
-    ? {
+    ? (payloadLocation ?? {
         ...(customerAddr!.street       ? { line1:       customerAddr!.street }      : {}),
         ...(customerAddr!.full_address ? { oneLine:     customerAddr!.full_address } : {}),
         ...(customerAddr!.city         ? { locality:    customerAddr!.city }         : {}),
@@ -2100,8 +2343,8 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           latitude:  parseFloat(customerAddr!.latitude),
           longitude: parseFloat(customerAddr!.longitude),
         } : {}),
-      }
-    : (accountLocation ?? null);
+      })
+    : (accountLocation ?? payloadLocation);
 
   // ── Step 2: resolve closer ────────────────────────────────────────────────
 
@@ -2357,6 +2600,19 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
       } else {
       step4Action = "create";
       const createBody = { event: { accountId, ...eventFields } };
+      // #region agent log
+      debugApptLog(
+        "route.ts:handleUpdateAppointment:calendar-create",
+        "creating calendar event",
+        {
+          accountId,
+          hasResolvedLocation: Boolean(resolvedLocation),
+          hasPayloadAddr,
+          eventFieldKeys: Object.keys(eventFields),
+        },
+        "D",
+      );
+      // #endregion
       try {
         const r = await fetch(`${terrosBase}/calendar/event/add`, {
           method: "POST",

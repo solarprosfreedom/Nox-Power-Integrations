@@ -7,6 +7,9 @@ import SyncTab from "@/components/tabs/SyncTab";
 import UsersTab from "@/components/tabs/UsersTab";
 import MigrationTab from "@/components/tabs/MigrationTab";
 import WelcomeEmailTab from "@/components/tabs/WelcomeEmailTab";
+import SequifiOnboardingTab from "@/components/tabs/SequifiOnboardingTab";
+import SheetsRosterTab from "@/components/tabs/SheetsRosterTab";
+import LeaderboardFixTab from "@/components/tabs/LeaderboardFixTab";
 import { fetchStoredLogs } from "@/app/actions/enerflo";
 import { getIntegrationEnvStatus } from "@/app/actions/env-status";
 import type { ApiLog } from "@/lib/logger";
@@ -19,7 +22,9 @@ type SectionId =
   | "sync"
   | "users"
   | "migration"
-  | "welcome-email";
+  | "welcome-email"
+  | "sheets-roster"
+  | "leaderboard-fix";
 
 const VENDORS: { id: SectionId; label: string; color: string; dot: string; tagline: string }[] = [
   { id: "enerflo",    label: "Enerflo",    color: "text-orange-400", dot: "bg-orange-400", tagline: "CRM & Solar Sales" },
@@ -202,6 +207,40 @@ export default function Dashboard() {
               <p className="text-[10px] text-gray-600 truncate">Test Graph send from admin</p>
             </div>
           </button>
+
+          <button
+            onClick={() => setSection("sheets-roster")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "sheets-roster"
+                ? "bg-green-900/40 text-green-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-green-400">
+              📋
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Sheets Roster</p>
+              <p className="text-[10px] text-gray-600 truncate">Sequifi → Google Sheets test</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => setSection("leaderboard-fix")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "leaderboard-fix"
+                ? "bg-sky-900/40 text-sky-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-sky-400">
+              📊
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Leaderboard Fix</p>
+              <p className="text-[10px] text-gray-600 truncate">CSV → fix workflowHistory credit</p>
+            </div>
+          </button>
         </nav>
 
         {/* Footer — reflects server env (.env.local), not .env.local.example */}
@@ -271,6 +310,18 @@ export default function Dashboard() {
               <h1 className="text-base font-semibold text-rose-300">Welcome Email</h1>
               <span className="text-xs text-gray-600">Test Axia onboarding email via Microsoft Graph</span>
             </>
+          ) : section === "sheets-roster" ? (
+            <>
+              <span className="text-green-400">📋</span>
+              <h1 className="text-base font-semibold text-green-300">Sheets Roster</h1>
+              <span className="text-xs text-gray-600">Append Sequifi hires to Google Sheets test tab</span>
+            </>
+          ) : section === "leaderboard-fix" ? (
+            <>
+              <span className="text-sky-400">📊</span>
+              <h1 className="text-base font-semibold text-sky-300">Leaderboard Fix</h1>
+              <span className="text-xs text-gray-600">Rewrite workflowHistory credit from CSV export</span>
+            </>
           ) : activeVendor ? (
             <>
               <span className={`h-3 w-3 rounded-full ${activeVendor.dot}`} />
@@ -286,8 +337,8 @@ export default function Dashboard() {
             <EnerfloPanel logs={logs} onLog={addLog} />
           )}
           {section === "sequifi" && (
-            <div className="flex-1 overflow-y-auto">
-              <ComingSoon id="sequifi" />
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <SequifiOnboardingTab />
             </div>
           )}
           {section === "terros" && (
@@ -318,6 +369,16 @@ export default function Dashboard() {
           {section === "welcome-email" && (
             <div className="flex-1 overflow-y-auto px-8 py-8">
               <WelcomeEmailTab />
+            </div>
+          )}
+          {section === "sheets-roster" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <SheetsRosterTab />
+            </div>
+          )}
+          {section === "leaderboard-fix" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <LeaderboardFixTab />
             </div>
           )}
         </div>
