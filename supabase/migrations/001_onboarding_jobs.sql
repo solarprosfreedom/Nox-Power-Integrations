@@ -49,8 +49,9 @@ CREATE INDEX IF NOT EXISTS onboarding_jobs_status_retry_idx
   ON onboarding_jobs (status, next_retry_at)
   WHERE status IN ('pending','partial','failed');
 
-CREATE UNIQUE INDEX IF NOT EXISTS onboarding_jobs_email_normalized_idx
+CREATE INDEX IF NOT EXISTS onboarding_jobs_email_normalized_idx
   ON onboarding_jobs (email_normalized);
 
 CREATE INDEX IF NOT EXISTS onboarding_jobs_sequifi_employee_id_idx
   ON onboarding_jobs (sequifi_employee_id);
+  

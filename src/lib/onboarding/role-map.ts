@@ -6,9 +6,13 @@ export interface RoleMapping {
   welcomeTemplate: WelcomeTemplateId;
 }
 
+/** Enerflo POST /api/v1/users rejects custom labels like "Self Gen & Closer". */
+const DEFAULT_ENERFLO_ROLES = ["Sales Rep"];
+const DEFAULT_TERROS_ROLES = ["Self Gen & Closer"];
+
 const DEFAULT_MAPPING: RoleMapping = {
-  enerfloRoles: ["Self Gen & Closer"],
-  terrosRoles: ["Self Gen & Closer"],
+  enerfloRoles: DEFAULT_ENERFLO_ROLES,
+  terrosRoles: DEFAULT_TERROS_ROLES,
   welcomeTemplate: "sales_rep",
 };
 
@@ -18,30 +22,30 @@ function isApptSetter(roleLabel: string): boolean {
 
 function resolveEnerfloRoles(roleLabel: string): string[] {
   const label = roleLabel.trim();
-  if (!label) return DEFAULT_MAPPING.enerfloRoles;
+  if (!label) return DEFAULT_ENERFLO_ROLES;
 
   if (/appt\s*setter/i.test(label) || /\bsetter\b/i.test(label)) {
     return ["Setter"];
   }
   if (/sales\s*rep\s*manager/i.test(label)) {
-    return ["Sales Rep Manager"];
+    return ["Manager"];
   }
   if (/divisional|regional/i.test(label)) {
-    return ["Sales Rep Manager"];
+    return ["Manager"];
   }
   if (/\bmanager\b/i.test(label)) {
-    return ["Sales Rep Manager"];
+    return ["Manager"];
   }
   if (/sales\s*rep/i.test(label)) {
     return ["Sales Rep"];
   }
 
-  return DEFAULT_MAPPING.enerfloRoles;
+  return DEFAULT_ENERFLO_ROLES;
 }
 
 function resolveTerrosRoles(roleLabel: string): string[] {
   if (isApptSetter(roleLabel)) return ["Setter"];
-  return DEFAULT_MAPPING.terrosRoles;
+  return DEFAULT_TERROS_ROLES;
 }
 
 function resolveWelcomeTemplate(roleLabel: string): WelcomeTemplateId {

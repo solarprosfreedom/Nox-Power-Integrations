@@ -151,7 +151,15 @@ export async function insertJobFromSequifiUser(user: SequifiUserRecord): Promise
     .single();
 
   if (error) {
-    if (error.code === "23505") return null;
+    if (error.code === "23505") {
+      const existing = await getJobsBySequifiUserIds([String(user.id)]);
+      const prior = existing.get(String(user.id));
+      if (prior) return prior;
+      throw new Error(
+        `onboarding_jobs insert failed: duplicate key (${error.message}). ` +
+          "If personal emails differ only by a +tag, run supabase/migrations/002_onboarding_jobs_email_normalized_non_unique.sql",
+      );
+    }
     throw new Error(`onboarding_jobs insert failed: ${error.message}`);
   }
   return rowToJob(data as Record<string, unknown>);
