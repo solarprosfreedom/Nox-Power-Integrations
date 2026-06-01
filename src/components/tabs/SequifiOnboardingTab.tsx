@@ -368,8 +368,10 @@ export default function SequifiOnboardingTab() {
         <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
           <strong>Dry run mode</strong> — queues jobs only, no account creation. Set{" "}
           <code className="text-amber-100">ONBOARDING_DRY_RUN=false</code> in .env.local to provision
-          for real. M365 users are created <strong>without a license</strong> until you assign one in
-          admin (or set <code className="text-amber-100">ONBOARDING_ASSIGN_MS_LICENSE=true</code> later).
+          for real. Set{" "}
+          <code className="text-amber-100">ONBOARDING_ASSIGN_MS_LICENSE=true</code> and{" "}
+          <code className="text-amber-100">MS_LICENSE_SKU_ID</code> to auto-assign Exchange
+          Online (Plan 1) after M365 create.
         </div>
       )}
 

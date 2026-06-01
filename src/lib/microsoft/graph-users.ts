@@ -137,6 +137,85 @@ export async function createGraphUser(options: {
   return { id: data.id, userPrincipalName: data.userPrincipalName };
 }
 
+function graphLicenseSkuId(): string | null {
+  const skuId = env.msLicenseSkuId?.trim();
+  return skuId && /^[0-9a-f-]{36}$/i.test(skuId) ? skuId : null;
+}
+
+export function isGraphLicenseAssignmentConfigured(): boolean {
+  return env.onboardingAssignMsLicense && Boolean(graphLicenseSkuId());
+}
+
+async function graphUserHasLicenseSku(userId: string, skuId: string): Promise<boolean> {
+  const res = await graphUserRequest(
+    `${GRAPH_BASE}/users/${encodeURIComponent(userId)}?$select=assignedLicenses`,
+  );
+  const text = await res.text();
+  if (!res.ok) return false;
+  try {
+    const data = JSON.parse(text) as {
+      assignedLicenses?: Array<{ skuId?: string }>;
+    };
+    const normalized = skuId.toLowerCase();
+    return (data.assignedLicenses ?? []).some(
+      license => String(license.skuId ?? "").toLowerCase() === normalized,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Assign Exchange / M365 license sku after user create (requires User.ReadWrite.All). */
+export async function assignGraphUserLicense(userId: string): Promise<{
+  assigned: boolean;
+  alreadyAssigned: boolean;
+}> {
+  const skuId = graphLicenseSkuId();
+  if (!skuId) {
+    throw new Error("MS_LICENSE_SKU_ID is not configured or invalid");
+  }
+
+  if (await graphUserHasLicenseSku(userId, skuId)) {
+    return { assigned: true, alreadyAssigned: true };
+  }
+
+  const token = await getGraphAccessToken();
+  const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(userId)}/assignLicense`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      addLicenses: [{ skuId, disabledPlans: [] }],
+      removeLicenses: [],
+    }),
+  });
+
+  const text = await res.text();
+  if (res.ok) {
+    return { assigned: true, alreadyAssigned: false };
+  }
+
+  if (text.toLowerCase().includes("already") && (await graphUserHasLicenseSku(userId, skuId))) {
+    return { assigned: true, alreadyAssigned: true };
+  }
+
+  throw new Error(`Graph assignLicense failed (${res.status}): ${text.slice(0, 300)}`);
+}
+
+export async function ensureGraphUserLicensed(userId: string): Promise<{
+  assigned: boolean;
+  alreadyAssigned: boolean;
+  skipped: boolean;
+}> {
+  if (!env.onboardingAssignMsLicense) {
+    return { assigned: false, alreadyAssigned: false, skipped: true };
+  }
+  const result = await assignGraphUserLicense(userId);
+  return { ...result, skipped: false };
+}
+
 export function resolveUpnForUser(
   email: string,
   firstName: string,

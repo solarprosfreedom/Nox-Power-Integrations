@@ -24,6 +24,7 @@ import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, Provisio
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
+  ensureGraphUserLicensed,
   findGraphUserByEmailOrUpn,
   findGraphUserByUpn,
   GraphUserPermissionError,
@@ -282,7 +283,35 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
   let tempPassword =
     job.temp_password ?? (env.onboardingDefaultPassword?.trim() || "Solar123");
 
+  async function applyMicrosoftLicense(userId: string): Promise<void> {
+    const license = await ensureGraphUserLicensed(userId);
+    if (license.skipped) return;
+    stepErrors.ms_license = license.alreadyAssigned ? "already_assigned" : "assigned";
+  }
+
   // Microsoft
+  if (job.microsoft_status === "success" && job.microsoft_user_id && env.onboardingAssignMsLicense) {
+    const licenseDone =
+      job.step_errors.ms_license === "assigned" ||
+      job.step_errors.ms_license === "already_assigned";
+    if (!licenseDone) {
+      try {
+        await applyMicrosoftLicense(job.microsoft_user_id);
+        await updateJobStep(job.id, { step_errors: stepErrors });
+        job = (await loadJobById(jobId)) ?? job;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        stepErrors.ms_license = msg;
+        stepErrors.microsoft = stepErrors.microsoft ?? `License assign failed: ${msg}`;
+        await updateJobStep(job.id, {
+          step_errors: stepErrors,
+          last_error: msg,
+        });
+        job = (await loadJobById(jobId)) ?? job;
+      }
+    }
+  }
+
   if (job.microsoft_status !== "success") {
     try {
       if (dryRun) {
@@ -290,11 +319,13 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
       } else {
         const existing = await findGraphUserByUpn(upn);
         if (existing) {
+          await applyMicrosoftLicense(existing.id);
           await updateJobStep(job.id, {
             microsoft_status: "success",
             microsoft_user_id: existing.id,
             microsoft_upn: existing.userPrincipalName,
             temp_password: tempPassword,
+            step_errors: stepErrors,
           });
         } else {
           const created = await createGraphUser({
@@ -304,11 +335,13 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
             displayName: [job.first_name, job.last_name].filter(Boolean).join(" ") || upn,
             password: tempPassword,
           });
+          await applyMicrosoftLicense(created.id);
           await updateJobStep(job.id, {
             microsoft_status: "success",
             microsoft_user_id: created.id,
             microsoft_upn: created.userPrincipalName,
             temp_password: tempPassword,
+            step_errors: stepErrors,
           });
         }
       }

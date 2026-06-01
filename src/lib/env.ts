@@ -90,6 +90,8 @@ export const env = {
   onboardingDryRun: opt("ONBOARDING_DRY_RUN", "true") === "true",
   /** When true, assign Microsoft 365 license after user create (default false for testing). */
   onboardingAssignMsLicense: opt("ONBOARDING_ASSIGN_MS_LICENSE", "false") === "true",
+  /** Graph subscribedSkus skuId — e.g. Exchange Online (Plan 1). */
+  msLicenseSkuId: opt("MS_LICENSE_SKU_ID"),
   /** Initial M365 password for new hires (included in welcome email). */
   onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123"),
   /** JSON map: Sequifi role/position substring → { enerfloRoles, terrosRoles, welcomeTemplate } */

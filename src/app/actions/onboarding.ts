@@ -56,6 +56,7 @@ export async function getOnboardingConfig() {
     dryRun: env.onboardingDryRun,
     goLiveAt: env.onboardingGoLiveAt ?? null,
     assignMsLicense: env.onboardingAssignMsLicense,
+    msLicenseSkuId: env.msLicenseSkuId ?? null,
     sequifiConfigured: Boolean(
       env.sequifiAccessToken?.trim() || env.sequifiApiKey?.trim(),
     ),
