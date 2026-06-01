@@ -72,6 +72,37 @@ export async function fetchAllSequifiUsers(): Promise<SequifiUserRecord[]> {
   return all;
 }
 
+export async function fetchSequifiUserById(id: number): Promise<SequifiUserRecord | null> {
+  const bearer = getSequifiBearer();
+  const url = `${baseUrl()}/v1/users/${id}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${bearer}`, Accept: "application/json" },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    throw new Error(`Sequifi GET /v1/users/${id} failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Sequifi /v1/users/${id} returned invalid JSON`);
+  }
+
+  const data = parsed.data as Record<string, unknown> | undefined;
+  const raw =
+    (data?.user as Record<string, unknown> | undefined) ??
+    (data as Record<string, unknown> | undefined) ??
+    parsed;
+  if (!raw || typeof raw !== "object") return null;
+
+  const rec = sequifiUserFromApi(raw);
+  if (!rec) return null;
+  return rec;
+}
+
 export function filterUsersByGoLive(users: SequifiUserRecord[]): SequifiUserRecord[] {
   const goLive = env.onboardingGoLiveAt?.trim();
   if (!goLive) return users;

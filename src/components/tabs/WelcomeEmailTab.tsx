@@ -23,6 +23,7 @@ export default function WelcomeEmailTab() {
   const [username, setUsername] = useState("newrep@noxpwr.com");
   const [password, setPassword] = useState("ChangeMe123!");
   const [auroraEmail, setAuroraEmail] = useState("firstnamelastname+axia@noxpwr.com");
+  const [onboardAxia, setOnboardAxia] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -31,12 +32,13 @@ export default function WelcomeEmailTab() {
       const { subject: sub, body: b } = renderWelcomeTemplate(id, {
         username,
         password,
-        auroraEmail,
+        onboardAxia,
+        ...(onboardAxia ? { auroraEmail } : {}),
       });
       setSubject(sub);
       setBody(b);
     },
-    [username, password, auroraEmail]
+    [username, password, auroraEmail, onboardAxia]
   );
 
   useEffect(() => {
@@ -168,7 +170,20 @@ export default function WelcomeEmailTab() {
                 className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col justify-end gap-1.5">
+              <label className="flex items-center gap-2 text-sm text-gray-400">
+                <input
+                  type="checkbox"
+                  checked={onboardAxia}
+                  onChange={(e) => setOnboardAxia(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-800"
+                />
+                Onboard to Axia
+              </label>
+            </div>
+          </div>
+          {onboardAxia && templateId === "sales_rep" && (
+            <div className="mt-4 flex flex-col gap-1.5 sm:max-w-md">
               <label className="text-sm text-gray-400">Aurora email (Sales Rep)</label>
               <input
                 value={auroraEmail}
@@ -176,7 +191,7 @@ export default function WelcomeEmailTab() {
                 className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
               />
             </div>
-          </div>
+          )}
         </section>
 
         <section className="space-y-4">

@@ -31,7 +31,7 @@ import {
   resolveUpnForUser,
 } from "@/lib/microsoft/graph-users";
 import { sendMailAsUser, isGraphMailConfigured } from "@/lib/microsoft/graph-mail";
-import { fetchAllSequifiUsers, filterUsersByGoLive } from "@/lib/sequifi/client";
+import { fetchAllSequifiUsers, fetchSequifiUserById, filterUsersByGoLive } from "@/lib/sequifi/client";
 import {
   appendSequifiUserToInstallerRosterSheets,
   sequifiUserFromOnboardingJob,
@@ -46,6 +46,7 @@ import {
   insertJobFromSequifiUser,
   isOnboardingRepositoryConfigured,
   listOnboardingJobsSafe,
+  refreshJobFromSequifiUser,
 } from "@/lib/onboarding/repository";
 
 function backoffMs(attempt: number): number {
@@ -204,7 +205,7 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
       };
     }
 
-    const updated = await runOnboardingJob(job.id);
+    const updated = await runOnboardingJob(job.id, user);
     const outcome = summarizeJobResult(updated);
     return {
       sequifiUserId,
@@ -269,9 +270,20 @@ export async function provisionSequifiUsersBulk(
   return summary;
 }
 
-export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | null> {
+export async function runOnboardingJob(
+  jobId: string,
+  sequifiUser?: SequifiUserRecord,
+): Promise<OnboardingJob | null> {
   let job = await loadJobById(jobId);
   if (!job || job.status === "completed" || job.status === "skipped") return job;
+
+  const freshUser =
+    sequifiUser ??
+    (await fetchSequifiUserById(Number(job.sequifi_user_id)).catch(() => null));
+  if (freshUser) {
+    await refreshJobFromSequifiUser(job.id, freshUser);
+    job = (await loadJobById(jobId)) ?? job;
+  }
 
   const dryRun = env.onboardingDryRun;
   await markJobProcessing(job.id);
@@ -527,7 +539,15 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
         const { subject, body } = renderWelcomeTemplate(role.welcomeTemplate, {
           username: workEmail,
           password,
-          auroraEmail: auroraEmailFromName(job.first_name ?? "", job.last_name ?? ""),
+          onboardAxia: sequifiFields.onboardAxia,
+          ...(sequifiFields.onboardAxia
+            ? {
+                auroraEmail: auroraEmailFromName(
+                  job.first_name ?? "",
+                  job.last_name ?? "",
+                ),
+              }
+            : {}),
         });
         await sendMailAsUser({ to, subject, body, contentType: "text" });
         await updateJobStep(job.id, { welcome_email_status: "success" });
@@ -684,6 +704,7 @@ export async function runOnboardingCycle(options?: {
           summary.skipped++;
         }
       } else if (prior.status !== "completed" && prior.status !== "skipped") {
+        await refreshJobFromSequifiUser(prior.id, user);
         toProcess.push(prior.id);
       } else {
         summary.skipped++;

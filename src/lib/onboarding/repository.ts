@@ -176,6 +176,23 @@ export async function insertJobFromSequifiUser(user: SequifiUserRecord): Promise
   return null;
 }
 
+export async function refreshJobFromSequifiUser(
+  jobId: string,
+  user: SequifiUserRecord,
+): Promise<void> {
+  const welcomeTo =
+    String(user.raw.personal_email ?? user.raw.personalEmail ?? user.email).trim() || user.email;
+
+  await updateJobStep(jobId, {
+    raw_sequifi_payload: user.raw,
+    first_name: user.first_name || null,
+    last_name: user.last_name || null,
+    phone: user.mobile_no || null,
+    role_label: user.position_name || user.office_name || null,
+    welcome_email_to: welcomeTo,
+  });
+}
+
 export async function markJobProcessing(id: string): Promise<void> {
   const db = getClient();
   if (!db) return;
@@ -203,6 +220,12 @@ export async function updateJobStep(
     attempt_count: number;
     next_retry_at: string | null;
     completed_at: string | null;
+    raw_sequifi_payload: Record<string, unknown>;
+    first_name: string | null;
+    last_name: string | null;
+    phone: string | null;
+    role_label: string | null;
+    welcome_email_to: string | null;
   }>,
 ): Promise<void> {
   const db = getClient();
