@@ -330,6 +330,11 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
     : workEmail;
 
   // Enerflo
+  if (job.enerflo_status === "success" && !job.enerflo_user_id?.trim()) {
+    await updateJobStep(job.id, { enerflo_status: "pending" });
+    job = (await loadJobById(jobId)) ?? job;
+  }
+
   if (job.enerflo_status !== "success") {
     try {
       if (dryRun) {
@@ -357,9 +362,21 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
             alternateEmails: [workEmail],
           });
           if (!result.ok) throw new Error(result.error ?? "Enerflo create failed");
+          const enerfloUserId =
+            result.id ??
+            (
+              await findEnerfloUserByEmail(
+                platformEmail,
+                [workEmail],
+                job.sequifi_employee_id,
+              )
+            )?.id;
+          if (!enerfloUserId) {
+            throw new Error(`Enerflo account was not created for ${platformEmail}`);
+          }
           await updateJobStep(job.id, {
             enerflo_status: "success",
-            enerflo_user_id: result.id ?? undefined,
+            enerflo_user_id: enerfloUserId,
           });
         }
       }

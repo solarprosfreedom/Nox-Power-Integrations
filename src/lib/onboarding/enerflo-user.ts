@@ -1,6 +1,6 @@
 import { env } from "@/lib/env";
 import { enerfloV1 } from "@/lib/enerflo/client";
-import { expandEmailCandidates, findUserByEmailInList } from "@/lib/sync/user-email-match";
+import { emailsMatch } from "@/lib/sync/user-email-match";
 
 function extractEnerfloUserList(parsed: unknown): Record<string, unknown>[] {
   if (!parsed || typeof parsed !== "object") return [];
@@ -112,19 +112,6 @@ export async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]>
   return targetCompanyId ? all.filter(u => getUserCompanyId(u) === targetCompanyId) : all;
 }
 
-function collectLookupEmails(primaryEmail: string, alternateEmails: string[] = []): string[] {
-  const set = new Set<string>();
-  for (const raw of [primaryEmail, ...alternateEmails]) {
-    const trimmed = raw.trim().toLowerCase();
-    if (!trimmed) continue;
-    set.add(trimmed);
-    for (const candidate of expandEmailCandidates(trimmed)) {
-      set.add(candidate);
-    }
-  }
-  return [...set];
-}
-
 function externalIdsForUser(user: Record<string, unknown>): string[] {
   const ids = new Set<string>();
   const push = (value: unknown) => {
@@ -149,34 +136,38 @@ function externalIdsForUser(user: Record<string, unknown>): string[] {
   return [...ids];
 }
 
+function emailMatchesOnboardingLookup(
+  userEmail: string,
+  primaryEmail: string,
+  alternateEmails: string[],
+): boolean {
+  if (!userEmail) return false;
+  const primary = primaryEmail.trim().toLowerCase();
+  if (userEmail === primary) return true;
+  if (emailsMatch(primary, userEmail)) return true;
+  return alternateEmails.some(alt => {
+    const normalized = alt.trim().toLowerCase();
+    return normalized && (userEmail === normalized || emailsMatch(normalized, userEmail));
+  });
+}
+
 function matchEnerfloUserRow(
   user: Record<string, unknown>,
-  lookupEmails: string[],
+  primaryEmail: string,
+  alternateEmails: string[],
   externalUserId?: string,
 ): { exactMatch: boolean } | null {
   const userEmail = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
-  if (userEmail && lookupEmails.includes(userEmail)) {
-    return { exactMatch: true };
+  const emailMatch = emailMatchesOnboardingLookup(userEmail, primaryEmail, alternateEmails);
+  if (!emailMatch) return null;
+
+  const exactMatch = userEmail === primaryEmail.trim().toLowerCase();
+  const externalNeedle = externalUserId?.trim().toLowerCase() ?? "";
+  if (externalNeedle && externalIdsForUser(user).includes(externalNeedle)) {
+    return { exactMatch: exactMatch || userEmail === primaryEmail.trim().toLowerCase() };
   }
 
-  if (userEmail) {
-    for (const lookupEmail of lookupEmails) {
-      if (findUserByEmailInList(lookupEmail, [user], u =>
-        typeof u.email === "string" ? u.email : undefined,
-      )) {
-        return { exactMatch: false };
-      }
-    }
-  }
-
-  if (externalUserId) {
-    const needle = externalUserId.trim().toLowerCase();
-    if (needle && externalIdsForUser(user).includes(needle)) {
-      return { exactMatch: false };
-    }
-  }
-
-  return null;
+  return { exactMatch };
 }
 
 export function isEnerfloEmailTakenError(responsePreview: string): boolean {
@@ -189,17 +180,23 @@ export function isEnerfloEmailTakenError(responsePreview: string): boolean {
   );
 }
 
+export function enerfloEmailTakenWithoutUserError(email: string): string {
+  return (
+    `Enerflo rejected ${email} as already taken, but no matching user appears in the Enerflo API user list (active or inactive). ` +
+    `The address may be reserved on a deleted account — contact Enerflo support to release it, or use a different test hire.`
+  );
+}
+
 export async function findEnerfloUserByEmail(
   email: string,
   alternateEmails: string[] = [],
   externalUserId?: string,
 ): Promise<{ id: string; email: string; exactMatch: boolean } | null> {
   const users = await fetchEnerfloUsersUnscoped();
-  const lookupEmails = collectLookupEmails(email, alternateEmails);
   const externalNeedle = externalUserId?.trim().toLowerCase() ?? "";
 
   for (const user of users) {
-    const match = matchEnerfloUserRow(user, lookupEmails, externalNeedle);
+    const match = matchEnerfloUserRow(user, email, alternateEmails, externalNeedle);
     if (!match) continue;
     const id = String(user.id ?? user.userId ?? "");
     const matchedEmail = typeof user.email === "string" ? user.email : email;
@@ -248,7 +245,7 @@ export async function createEnerfloUserForOnboarding(payload: {
         payload.external_user_id,
       );
       if (existing) return { id: existing.id, ok: true };
-      return { id: null, ok: true };
+      return { id: null, ok: false, error: enerfloEmailTakenWithoutUserError(payload.email) };
     }
     return { id: null, ok: false, error: responsePreview };
   }
@@ -257,8 +254,30 @@ export async function createEnerfloUserForOnboarding(payload: {
     const parsed = JSON.parse(log.responsePreview.replace(/\.\.\.$/, "")) as Record<string, unknown>;
     const user = (parsed.user ?? parsed.data ?? parsed) as Record<string, unknown>;
     const id = user?.id != null ? String(user.id) : null;
-    return { id, ok: true };
+    if (id) return { id, ok: true };
+
+    const existing = await findEnerfloUserByEmail(
+      payload.email,
+      payload.alternateEmails,
+      payload.external_user_id,
+    );
+    if (existing) return { id: existing.id, ok: true };
+    return {
+      id: null,
+      ok: false,
+      error: `Enerflo create returned OK but no user id for ${payload.email}`,
+    };
   } catch {
-    return { id: null, ok: true };
+    const existing = await findEnerfloUserByEmail(
+      payload.email,
+      payload.alternateEmails,
+      payload.external_user_id,
+    );
+    if (existing) return { id: existing.id, ok: true };
+    return {
+      id: null,
+      ok: false,
+      error: `Enerflo create returned OK but response could not be parsed for ${payload.email}`,
+    };
   }
 }
