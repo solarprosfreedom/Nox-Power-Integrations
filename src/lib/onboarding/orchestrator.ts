@@ -335,7 +335,11 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
       if (dryRun) {
         await updateJobStep(job.id, { enerflo_status: "skipped" });
       } else {
-        const existing = await findEnerfloUserByEmail(platformEmail);
+        const existing = await findEnerfloUserByEmail(
+          platformEmail,
+          [workEmail],
+          job.sequifi_employee_id,
+        );
         if (existing) {
           await updateJobStep(job.id, {
             enerflo_status: "success",
@@ -350,6 +354,7 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
             roles: role.enerfloRoles,
             external_user_id: job.sequifi_employee_id,
             password: tempPassword,
+            alternateEmails: [workEmail],
           });
           if (!result.ok) throw new Error(result.error ?? "Enerflo create failed");
           await updateJobStep(job.id, {

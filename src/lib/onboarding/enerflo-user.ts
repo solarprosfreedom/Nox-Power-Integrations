@@ -1,6 +1,6 @@
 import { env } from "@/lib/env";
 import { enerfloV1 } from "@/lib/enerflo/client";
-import { findUserByEmailInList } from "@/lib/sync/user-email-match";
+import { expandEmailCandidates, findUserByEmailInList } from "@/lib/sync/user-email-match";
 
 function extractEnerfloUserList(parsed: unknown): Record<string, unknown>[] {
   if (!parsed || typeof parsed !== "object") return [];
@@ -73,12 +73,13 @@ async function fetchEnerfloUserPage(
   }
 }
 
-export async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
+/** Full Enerflo user list — no company filter (lookup must see all sub-companies). */
+export async function fetchEnerfloUsersUnscoped(): Promise<Record<string, unknown>[]> {
   const base = (env.enerfloV1BaseUrl ?? "https://enerflo.io").replace(/\/$/, "");
   const key = env.enerfloV1ApiKey ?? "";
   const all: Record<string, unknown>[] = [];
 
-  for (let page = 1; page <= 20; page++) {
+  for (let page = 1; page <= 50; page++) {
     const batch = await fetchEnerfloUserPage(base, key, page);
     if (!batch.length) break;
     all.push(...batch);
@@ -88,7 +89,7 @@ export async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]>
   const seenEmails = new Set(
     all.map(u => String(u.email ?? "").trim().toLowerCase()).filter(Boolean),
   );
-  for (let page = 1; page <= 20; page++) {
+  for (let page = 1; page <= 50; page++) {
     const batch = await fetchEnerfloUserPage(base, key, page, "&status=inactive");
     if (!batch.length) break;
     for (const user of batch) {
@@ -101,8 +102,81 @@ export async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]>
     if (batch.length < 100) break;
   }
 
+  return all;
+}
+
+/** Company-scoped list for roster-style use. */
+export async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
+  const all = await fetchEnerfloUsersUnscoped();
   const targetCompanyId = detectTargetCompanyId(all);
   return targetCompanyId ? all.filter(u => getUserCompanyId(u) === targetCompanyId) : all;
+}
+
+function collectLookupEmails(primaryEmail: string, alternateEmails: string[] = []): string[] {
+  const set = new Set<string>();
+  for (const raw of [primaryEmail, ...alternateEmails]) {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) continue;
+    set.add(trimmed);
+    for (const candidate of expandEmailCandidates(trimmed)) {
+      set.add(candidate);
+    }
+  }
+  return [...set];
+}
+
+function externalIdsForUser(user: Record<string, unknown>): string[] {
+  const ids = new Set<string>();
+  const push = (value: unknown) => {
+    const text = String(value ?? "").trim().toLowerCase();
+    if (text) ids.add(text);
+  };
+
+  push(user.external_user_id);
+  push(user.externalUserId);
+
+  const meta = user.meta as Record<string, unknown> | undefined;
+  const epc = meta?.epc_external_ids;
+  if (epc && typeof epc === "object") {
+    for (const value of Object.values(epc as Record<string, unknown>)) {
+      push(value);
+    }
+  }
+
+  const agent = user.agent as Record<string, unknown> | undefined;
+  push(agent?.external_user_id);
+
+  return [...ids];
+}
+
+function matchEnerfloUserRow(
+  user: Record<string, unknown>,
+  lookupEmails: string[],
+  externalUserId?: string,
+): { exactMatch: boolean } | null {
+  const userEmail = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
+  if (userEmail && lookupEmails.includes(userEmail)) {
+    return { exactMatch: true };
+  }
+
+  if (userEmail) {
+    for (const lookupEmail of lookupEmails) {
+      if (findUserByEmailInList(lookupEmail, [user], u =>
+        typeof u.email === "string" ? u.email : undefined,
+      )) {
+        return { exactMatch: false };
+      }
+    }
+  }
+
+  if (externalUserId) {
+    const needle = externalUserId.trim().toLowerCase();
+    if (needle && externalIdsForUser(user).includes(needle)) {
+      return { exactMatch: false };
+    }
+  }
+
+  return null;
 }
 
 export function isEnerfloEmailTakenError(responsePreview: string): boolean {
@@ -117,27 +191,22 @@ export function isEnerfloEmailTakenError(responsePreview: string): boolean {
 
 export async function findEnerfloUserByEmail(
   email: string,
+  alternateEmails: string[] = [],
+  externalUserId?: string,
 ): Promise<{ id: string; email: string; exactMatch: boolean } | null> {
-  const users = await fetchAllEnerfloUsers();
-  const normalized = email.trim().toLowerCase();
+  const users = await fetchEnerfloUsersUnscoped();
+  const lookupEmails = collectLookupEmails(email, alternateEmails);
+  const externalNeedle = externalUserId?.trim().toLowerCase() ?? "";
 
-  const exact = users.find(u => {
-    const uEmail = typeof u.email === "string" ? u.email.trim().toLowerCase() : "";
-    return uEmail === normalized;
-  });
-  if (exact) {
-    const id = String(exact.id ?? exact.userId ?? "");
-    const matchedEmail = typeof exact.email === "string" ? exact.email : email;
-    return id ? { id, email: matchedEmail, exactMatch: true } : null;
+  for (const user of users) {
+    const match = matchEnerfloUserRow(user, lookupEmails, externalNeedle);
+    if (!match) continue;
+    const id = String(user.id ?? user.userId ?? "");
+    const matchedEmail = typeof user.email === "string" ? user.email : email;
+    if (id) return { id, email: matchedEmail, exactMatch: match.exactMatch };
   }
 
-  const alias = findUserByEmailInList(email, users, u =>
-    typeof u.email === "string" ? u.email : undefined,
-  );
-  if (!alias) return null;
-  const id = String(alias.id ?? alias.userId ?? "");
-  const matchedEmail = typeof alias.email === "string" ? alias.email : email;
-  return id ? { id, email: matchedEmail, exactMatch: false } : null;
+  return null;
 }
 
 export async function createEnerfloUserForOnboarding(payload: {
@@ -148,6 +217,7 @@ export async function createEnerfloUserForOnboarding(payload: {
   roles: string[];
   external_user_id: string;
   password?: string;
+  alternateEmails?: string[];
 }): Promise<{ id: string | null; ok: boolean; error?: string }> {
   const log = await enerfloV1({
     operation: "onboarding:enerflo:create",
@@ -172,7 +242,11 @@ export async function createEnerfloUserForOnboarding(payload: {
   if (!log.ok) {
     const responsePreview = log.responsePreview || log.fetchError || "Enerflo create failed";
     if (isEnerfloEmailTakenError(responsePreview)) {
-      const existing = await findEnerfloUserByEmail(payload.email);
+      const existing = await findEnerfloUserByEmail(
+        payload.email,
+        payload.alternateEmails,
+        payload.external_user_id,
+      );
       if (existing) return { id: existing.id, ok: true };
       return { id: null, ok: true };
     }
