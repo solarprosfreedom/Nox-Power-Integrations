@@ -1,7 +1,6 @@
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 
-/** TODO: remove after cron testing — Edwin, Test Test, Hailey (keep Test create id 70). */
-const TEMP_EXCLUDE_SEQUIFI_USER_IDS = new Set(["73", "91", "112"]);
+const TEMP_EXCLUDE_SEQUIFI_USER_IDS = new Set<string>([]);
 
 export function sequifiExcludeUserIds(): Set<string> {
   return TEMP_EXCLUDE_SEQUIFI_USER_IDS;
