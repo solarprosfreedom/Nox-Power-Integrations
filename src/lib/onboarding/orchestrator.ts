@@ -317,33 +317,34 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
       if (dryRun) {
         await updateJobStep(job.id, { microsoft_status: "skipped", microsoft_upn: upn });
       } else {
-        const existing = await findGraphUserByUpn(upn);
-        if (existing) {
-          await applyMicrosoftLicense(existing.id);
-          await updateJobStep(job.id, {
-            microsoft_status: "success",
-            microsoft_user_id: existing.id,
-            microsoft_upn: existing.userPrincipalName,
-            temp_password: tempPassword,
-            step_errors: stepErrors,
-          });
-        } else {
-          const created = await createGraphUser({
+        let msUser = await findGraphUserByUpn(upn);
+        if (!msUser) {
+          msUser = await createGraphUser({
             upn,
             firstName: job.first_name ?? "",
             lastName: job.last_name ?? "",
             displayName: [job.first_name, job.last_name].filter(Boolean).join(" ") || upn,
             password: tempPassword,
           });
-          await applyMicrosoftLicense(created.id);
-          await updateJobStep(job.id, {
-            microsoft_status: "success",
-            microsoft_user_id: created.id,
-            microsoft_upn: created.userPrincipalName,
-            temp_password: tempPassword,
-            step_errors: stepErrors,
-          });
         }
+
+        let licenseError: string | undefined;
+        try {
+          await applyMicrosoftLicense(msUser.id);
+        } catch (licenseErr) {
+          licenseError = licenseErr instanceof Error ? licenseErr.message : String(licenseErr);
+          stepErrors.ms_license = licenseError;
+          stepErrors.microsoft = `License assign failed: ${licenseError}`;
+        }
+
+        await updateJobStep(job.id, {
+          microsoft_status: "success",
+          microsoft_user_id: msUser.id,
+          microsoft_upn: msUser.userPrincipalName,
+          temp_password: tempPassword,
+          step_errors: stepErrors,
+          ...(licenseError ? { last_error: licenseError } : {}),
+        });
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

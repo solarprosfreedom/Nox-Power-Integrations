@@ -92,6 +92,8 @@ export const env = {
   onboardingAssignMsLicense: opt("ONBOARDING_ASSIGN_MS_LICENSE", "false") === "true",
   /** Graph subscribedSkus skuId — e.g. Exchange Online (Plan 1). */
   msLicenseSkuId: opt("MS_LICENSE_SKU_ID"),
+  /** ISO 3166-1 alpha-2 country — required before assignLicense (default US). */
+  msUsageLocation: opt("MS_USAGE_LOCATION", "US"),
   /** Initial M365 password for new hires (included in welcome email). */
   onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123"),
   /** JSON map: Sequifi role/position substring → { enerfloRoles, terrosRoles, welcomeTemplate } */

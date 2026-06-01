@@ -89,6 +89,11 @@ export async function findGraphUserByEmailOrUpn(
   return first ? parseGraphUser(first) : null;
 }
 
+function msUsageLocation(): string {
+  const code = env.msUsageLocation?.trim().toUpperCase() ?? "US";
+  return /^[A-Z]{2}$/.test(code) ? code : "US";
+}
+
 export async function createGraphUser(options: {
   upn: string;
   firstName: string;
@@ -99,13 +104,14 @@ export async function createGraphUser(options: {
 }): Promise<GraphUserResult> {
   const token = await getGraphAccessToken();
   const localPart = options.upn.split("@")[0] ?? "user";
-  const body = {
+  const body: Record<string, unknown> = {
     accountEnabled: true,
     displayName: options.displayName,
     givenName: options.firstName || options.displayName,
     surname: options.lastName || ".",
     mailNickname: options.mailNickname ?? localPart.replace(/[^a-zA-Z0-9._-]/g, ""),
     userPrincipalName: options.upn,
+    usageLocation: msUsageLocation(),
     passwordProfile: {
       forceChangePasswordNextSignIn: true,
       password: options.password,
@@ -165,6 +171,42 @@ async function graphUserHasLicenseSku(userId: string, skuId: string): Promise<bo
   }
 }
 
+async function graphUserUsageLocation(userId: string): Promise<string | null> {
+  const res = await graphUserRequest(
+    `${GRAPH_BASE}/users/${encodeURIComponent(userId)}?$select=usageLocation`,
+  );
+  const text = await res.text();
+  if (!res.ok) return null;
+  try {
+    const data = JSON.parse(text) as { usageLocation?: string };
+    const loc = data.usageLocation?.trim().toUpperCase();
+    return loc && /^[A-Z]{2}$/.test(loc) ? loc : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Set usageLocation when missing — required for Exchange license assignment. */
+export async function ensureGraphUserUsageLocation(userId: string): Promise<void> {
+  const target = msUsageLocation();
+  const current = await graphUserUsageLocation(userId);
+  if (current === target) return;
+
+  const token = await getGraphAccessToken();
+  const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ usageLocation: target }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Graph set usageLocation failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+}
+
 /** Assign Exchange / M365 license sku after user create (requires User.ReadWrite.All). */
 export async function assignGraphUserLicense(userId: string): Promise<{
   assigned: boolean;
@@ -178,6 +220,8 @@ export async function assignGraphUserLicense(userId: string): Promise<{
   if (await graphUserHasLicenseSku(userId, skuId)) {
     return { assigned: true, alreadyAssigned: true };
   }
+
+  await ensureGraphUserUsageLocation(userId);
 
   const token = await getGraphAccessToken();
   const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(userId)}/assignLicense`, {
