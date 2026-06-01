@@ -28,7 +28,7 @@ export interface SequifiMicrosoftGapRow {
 export interface SequifiMicrosoftGapScanResult {
   scanned: number;
   goLiveFiltered: number;
-  /** Rows removed by ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS. */
+  /** Rows removed by temporary test blocklist in exclude.ts. */
   excludeFiltered: number;
   memberCount: number;
   guestOnlyCount: number;

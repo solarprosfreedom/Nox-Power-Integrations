@@ -94,8 +94,6 @@ export const env = {
   onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123"),
   /** JSON map: Sequifi role/position substring → { enerfloRoles, terrosRoles, welcomeTemplate } */
   onboardingRoleMapJson: opt("ONBOARDING_ROLE_MAP_JSON"),
-  /** Comma-separated Sequifi user ids to skip in gap scan and cron (e.g. 73,91,112). */
-  onboardingExcludeSequifiUserIds: opt("ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS"),
   /** UPN domain for new Microsoft users (default noxpwr.com). */
   msDefaultDomain: opt("MS_DEFAULT_DOMAIN", "noxpwr.com"),
   cronSecret: opt("CRON_SECRET"),

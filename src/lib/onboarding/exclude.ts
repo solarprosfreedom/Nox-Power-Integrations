@@ -1,16 +1,10 @@
-import { env } from "@/lib/env";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 
-/** Parse ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS (comma-separated Sequifi user ids). */
+/** TODO: remove after cron testing — Edwin, Test Test, Hailey (keep Test create id 70). */
+const TEMP_EXCLUDE_SEQUIFI_USER_IDS = new Set(["73", "91", "112"]);
+
 export function sequifiExcludeUserIds(): Set<string> {
-  const raw = env.onboardingExcludeSequifiUserIds?.trim();
-  if (!raw) return new Set();
-  return new Set(
-    raw
-      .split(/[,;\s]+/)
-      .map(id => id.trim())
-      .filter(Boolean),
-  );
+  return TEMP_EXCLUDE_SEQUIFI_USER_IDS;
 }
 
 export function isSequifiUserExcluded(user: { id: number | string }): boolean {

@@ -147,7 +147,7 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
         sequifiUserId,
         ok: false,
         skipped: true,
-        reason: "Excluded via ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS",
+        reason: "Excluded (temporary test blocklist)",
         job: null,
       };
     }

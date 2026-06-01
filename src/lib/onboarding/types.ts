@@ -58,7 +58,7 @@ export interface OnboardingJob {
 
 export interface OnboardingRunSummary {
   polled: number;
-  /** Hired users skipped via ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS. */
+  /** Hired users skipped via temporary test blocklist in exclude.ts. */
   excludeFiltered: number;
   /** Hired Sequifi users missing a member @noxpwr.com account. */
   gapNeed: number;

@@ -293,9 +293,7 @@ export default function SequifiOnboardingTab() {
             (result.goLiveFiltered > 0
               ? ` · ${result.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT`
               : "") +
-            (result.excludeFiltered > 0
-              ? ` · ${result.excludeFiltered} excluded by ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS`
-              : ""),
+            (result.excludeFiltered > 0 ? ` · ${result.excludeFiltered} excluded (test blocklist)` : ""),
         );
       }
     } catch (e) {
@@ -511,7 +509,7 @@ export default function SequifiOnboardingTab() {
                 {gapScan.goLiveFiltered > 0 &&
                   ` · ${gapScan.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT`}
                 {gapScan.excludeFiltered > 0 &&
-                  ` · ${gapScan.excludeFiltered} excluded by ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS`}
+                  ` · ${gapScan.excludeFiltered} excluded (test blocklist)`}
                 {gapScan.errorCount > 0 && ` · ${gapScan.errorCount} scan errors`}
               </p>
             </div>
