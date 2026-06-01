@@ -206,11 +206,12 @@ export default function SequifiOnboardingTab() {
       const result = await runHiredOnboardingNow();
       const parts = [
         `${result.gapNeed} need provisioning of ${result.polled} hired`,
+        result.excludeFiltered > 0 ? `${result.excludeFiltered} excluded` : null,
         `new jobs ${result.newJobs}`,
         result.dryRun ? "(dry run — queued only)" : `completed ${result.completed}, partial ${result.partial}, failed ${result.failed}`,
       ];
       if (result.errors.length) parts.push(result.errors.join("; "));
-      setMessage(parts.join(" · "));
+      setMessage(parts.filter(Boolean).join(" · "));
       await refresh();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -288,7 +289,13 @@ export default function SequifiOnboardingTab() {
         setMessage(result.error);
       } else if (result) {
         setMessage(
-          `${result.gapRows.length} without member @noxpwr.com (${result.missingCount} missing, ${result.guestOnlyCount} guest only) · ${result.scanned} hired scanned`,
+          `${result.gapRows.length} without member @noxpwr.com (${result.missingCount} missing, ${result.guestOnlyCount} guest only) · ${result.scanned} hired scanned` +
+            (result.goLiveFiltered > 0
+              ? ` · ${result.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT`
+              : "") +
+            (result.excludeFiltered > 0
+              ? ` · ${result.excludeFiltered} excluded by ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS`
+              : ""),
         );
       }
     } catch (e) {
@@ -503,6 +510,8 @@ export default function SequifiOnboardingTab() {
                 {gapScan.guestOnlyCount} guest only)
                 {gapScan.goLiveFiltered > 0 &&
                   ` · ${gapScan.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT`}
+                {gapScan.excludeFiltered > 0 &&
+                  ` · ${gapScan.excludeFiltered} excluded by ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS`}
                 {gapScan.errorCount > 0 && ` · ${gapScan.errorCount} scan errors`}
               </p>
             </div>

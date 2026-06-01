@@ -36,6 +36,7 @@ import {
 import { isGoogleSheetsConfigured } from "@/lib/google-sheets/client";
 import { appendSequifiUserToInstallerSharePointRosters, isSharePointRosterConfigured } from "@/lib/sharepoint/sync-roster";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
+import { filterExcludedSequifiUsers, isSequifiUserExcluded } from "@/lib/onboarding/exclude";
 import {
   getJobsBySequifiUserIds,
   getRetryCandidates,
@@ -93,14 +94,17 @@ async function ensureJobForSequifiUser(user: SequifiUserRecord): Promise<Onboard
 export async function getSequifiUsersNeedingProvisioning(): Promise<{
   polled: number;
   goLiveFiltered: number;
+  excludeFiltered: number;
   users: SequifiUserRecord[];
 }> {
   const all = await fetchAllSequifiUsers();
   const hired = filterUsersByGoLive(all);
-  const users = await filterSequifiUsersNeedingProvisioning(hired);
+  const eligible = filterExcludedSequifiUsers(hired);
+  const users = await filterSequifiUsersNeedingProvisioning(eligible);
   return {
     polled: hired.length,
     goLiveFiltered: all.length - hired.length,
+    excludeFiltered: hired.length - eligible.length,
     users,
   };
 }
@@ -134,6 +138,16 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
         ok: false,
         skipped: true,
         reason: "Not found in hired Sequifi users (GET /v1/users)",
+        job: null,
+      };
+    }
+
+    if (isSequifiUserExcluded(user)) {
+      return {
+        sequifiUserId,
+        ok: false,
+        skipped: true,
+        reason: "Excluded via ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS",
         job: null,
       };
     }
@@ -525,6 +539,7 @@ export async function runOnboardingCycle(options?: {
 }): Promise<OnboardingRunSummary> {
   const summary: OnboardingRunSummary = {
     polled: 0,
+    excludeFiltered: 0,
     gapNeed: 0,
     newJobs: 0,
     retried: 0,
@@ -547,8 +562,9 @@ export async function runOnboardingCycle(options?: {
   }
 
   try {
-    const { polled, users: gapUsers } = await getSequifiUsersNeedingProvisioning();
+    const { polled, excludeFiltered, users: gapUsers } = await getSequifiUsersNeedingProvisioning();
     summary.polled = polled;
+    summary.excludeFiltered = excludeFiltered;
     summary.gapNeed = gapUsers.length;
 
     const ids = gapUsers.map(u => String(u.id));

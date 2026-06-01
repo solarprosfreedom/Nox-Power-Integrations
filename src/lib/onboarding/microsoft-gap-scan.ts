@@ -5,6 +5,7 @@ import {
   resolveUpnForUser,
 } from "@/lib/microsoft/graph-users";
 import { env } from "@/lib/env";
+import { filterExcludedSequifiUsers } from "@/lib/onboarding/exclude";
 import { fetchAllSequifiUsers, filterUsersByGoLive } from "@/lib/sequifi/client";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 
@@ -27,6 +28,8 @@ export interface SequifiMicrosoftGapRow {
 export interface SequifiMicrosoftGapScanResult {
   scanned: number;
   goLiveFiltered: number;
+  /** Rows removed by ONBOARDING_EXCLUDE_SEQUIFI_USER_IDS. */
+  excludeFiltered: number;
   memberCount: number;
   guestOnlyCount: number;
   missingCount: number;
@@ -165,7 +168,8 @@ async function mapWithConcurrency<T, R>(
 export async function scanSequifiMicrosoftGaps(): Promise<SequifiMicrosoftGapScanResult> {
   try {
     const all = await fetchAllSequifiUsers();
-    const users = filterUsersByGoLive(all);
+    const afterGoLive = filterUsersByGoLive(all);
+    const users = filterExcludedSequifiUsers(afterGoLive);
     const rows = await mapWithConcurrency(users, u => classifyMicrosoftForSequifiUser(u), 5);
 
     const memberCount = rows.filter(r => r.status === "member").length;
@@ -188,7 +192,8 @@ export async function scanSequifiMicrosoftGaps(): Promise<SequifiMicrosoftGapSca
 
     return {
       scanned: rows.length,
-      goLiveFiltered: all.length - users.length,
+      goLiveFiltered: all.length - afterGoLive.length,
+      excludeFiltered: afterGoLive.length - users.length,
       memberCount,
       guestOnlyCount,
       missingCount,
@@ -202,6 +207,7 @@ export async function scanSequifiMicrosoftGaps(): Promise<SequifiMicrosoftGapSca
     return {
       scanned: 0,
       goLiveFiltered: 0,
+      excludeFiltered: 0,
       memberCount: 0,
       guestOnlyCount: 0,
       missingCount: 0,
