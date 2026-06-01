@@ -592,6 +592,10 @@ export async function runOnboardingCycle(options?: {
 
     const retries = await getRetryCandidates();
     for (const job of retries) {
+      if (isSequifiUserExcluded({ id: job.sequifi_user_id })) {
+        summary.skipped++;
+        continue;
+      }
       if (!toProcess.includes(job.id)) {
         summary.retried++;
         toProcess.push(job.id);
