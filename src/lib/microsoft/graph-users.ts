@@ -186,6 +186,10 @@ async function graphUserUsageLocation(userId: string): Promise<string | null> {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /** Set usageLocation when missing — required for Exchange license assignment. */
 export async function ensureGraphUserUsageLocation(userId: string): Promise<void> {
   const target = msUsageLocation();
@@ -205,6 +209,14 @@ export async function ensureGraphUserUsageLocation(userId: string): Promise<void
   if (!res.ok) {
     throw new Error(`Graph set usageLocation failed (${res.status}): ${text.slice(0, 300)}`);
   }
+
+  // Graph may reject assignLicense until usageLocation replicates.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(attempt === 0 ? 1500 : 2000);
+    const loc = await graphUserUsageLocation(userId);
+    if (loc === target) return;
+  }
+  throw new Error(`Graph usageLocation ${target} not visible after PATCH`);
 }
 
 /** Assign Exchange / M365 license sku after user create (requires User.ReadWrite.All). */
@@ -224,28 +236,42 @@ export async function assignGraphUserLicense(userId: string): Promise<{
   await ensureGraphUserUsageLocation(userId);
 
   const token = await getGraphAccessToken();
-  const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(userId)}/assignLicense`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      addLicenses: [{ skuId, disabledPlans: [] }],
-      removeLicenses: [],
-    }),
-  });
+  let lastText = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(2000);
+    const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(userId)}/assignLicense`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        addLicenses: [{ skuId, disabledPlans: [] }],
+        removeLicenses: [],
+      }),
+    });
 
-  const text = await res.text();
-  if (res.ok) {
-    return { assigned: true, alreadyAssigned: false };
+    lastText = await res.text();
+    if (res.ok) {
+      return { assigned: true, alreadyAssigned: false };
+    }
+
+    if (
+      lastText.toLowerCase().includes("invalid usage location") &&
+      attempt < 3
+    ) {
+      await ensureGraphUserUsageLocation(userId);
+      continue;
+    }
+
+    if (lastText.toLowerCase().includes("already") && (await graphUserHasLicenseSku(userId, skuId))) {
+      return { assigned: true, alreadyAssigned: true };
+    }
+
+    break;
   }
 
-  if (text.toLowerCase().includes("already") && (await graphUserHasLicenseSku(userId, skuId))) {
-    return { assigned: true, alreadyAssigned: true };
-  }
-
-  throw new Error(`Graph assignLicense failed (${res.status}): ${text.slice(0, 300)}`);
+  throw new Error(`Graph assignLicense failed: ${lastText.slice(0, 300)}`);
 }
 
 export async function ensureGraphUserLicensed(userId: string): Promise<{
