@@ -152,18 +152,25 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
       };
     }
 
+    const priorJobs = await getJobsBySequifiUserIds([String(user.id)]);
+    const priorJob = priorJobs.get(String(user.id));
+
     const gap = await classifyMicrosoftForSequifiUser(user);
     if (!needsMicrosoftProvisioning(gap.status)) {
-      return {
-        sequifiUserId,
-        ok: true,
-        skipped: true,
-        reason: "Already has member @noxpwr.com account",
-        job: null,
-      };
+      const incompleteJob =
+        priorJob && priorJob.status !== "completed" && priorJob.status !== "skipped";
+      if (!incompleteJob) {
+        return {
+          sequifiUserId,
+          ok: true,
+          skipped: true,
+          reason: "Already has member @noxpwr.com account",
+          job: priorJob ?? null,
+        };
+      }
     }
 
-    const job = await ensureJobForSequifiUser(user);
+    const job = priorJob ?? (await ensureJobForSequifiUser(user));
     if (!job) {
       return {
         sequifiUserId,
