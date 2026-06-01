@@ -6,6 +6,7 @@ import {
 import {
   createEnerfloUserForOnboarding,
   findEnerfloUserByEmail,
+  findEnerfloUserByExactEmail,
 } from "@/lib/onboarding/enerflo-user";
 import {
   loadJobById,
@@ -16,6 +17,7 @@ import { resolveRoleMapping } from "@/lib/onboarding/role-map";
 import {
   createTerrosUserForOnboarding,
   findTerrosUserByEmail,
+  findTerrosUserByExactEmail,
 } from "@/lib/onboarding/terros-user";
 import { filterSequifiUsersNeedingProvisioning, classifyMicrosoftForSequifiUser, needsMicrosoftProvisioning } from "@/lib/onboarding/microsoft-gap-scan";
 import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, ProvisionUserResult, SequifiUserRecord } from "@/lib/onboarding/types";
@@ -329,10 +331,20 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
     ? auroraEmailFromName(job.first_name ?? "", job.last_name ?? "")
     : workEmail;
 
-  // Enerflo
+  // Enerflo — require exact platform email; alias match (e.g. M365 work email) must not skip create.
   if (job.enerflo_status === "success" && !job.enerflo_user_id?.trim()) {
     await updateJobStep(job.id, { enerflo_status: "pending" });
     job = (await loadJobById(jobId)) ?? job;
+  }
+  if (job.enerflo_status === "success" && job.step_errors.enerflo_welcome !== "sent") {
+    const exactPlatform = await findEnerfloUserByExactEmail(
+      platformEmail,
+      job.sequifi_employee_id,
+    );
+    if (!exactPlatform) {
+      await updateJobStep(job.id, { enerflo_status: "pending" });
+      job = (await loadJobById(jobId)) ?? job;
+    }
   }
 
   if (job.enerflo_status !== "success") {
@@ -340,15 +352,16 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
       if (dryRun) {
         await updateJobStep(job.id, { enerflo_status: "skipped" });
       } else {
-        const existing = await findEnerfloUserByEmail(
+        const existing = await findEnerfloUserByExactEmail(
           platformEmail,
-          [workEmail],
           job.sequifi_employee_id,
         );
         if (existing) {
+          stepErrors.enerflo_welcome = stepErrors.enerflo_welcome ?? "skipped_existing";
           await updateJobStep(job.id, {
             enerflo_status: "success",
             enerflo_user_id: existing.id,
+            step_errors: stepErrors,
           });
         } else {
           const result = await createEnerfloUserForOnboarding({
@@ -365,6 +378,9 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
           const enerfloUserId =
             result.id ??
             (
+              await findEnerfloUserByExactEmail(platformEmail, job.sequifi_employee_id)
+            )?.id ??
+            (
               await findEnerfloUserByEmail(
                 platformEmail,
                 [workEmail],
@@ -374,9 +390,15 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
           if (!enerfloUserId) {
             throw new Error(`Enerflo account was not created for ${platformEmail}`);
           }
+          if (result.created) {
+            stepErrors.enerflo_welcome = "sent";
+          } else {
+            stepErrors.enerflo_welcome = stepErrors.enerflo_welcome ?? "skipped_existing";
+          }
           await updateJobStep(job.id, {
             enerflo_status: "success",
             enerflo_user_id: enerfloUserId,
+            step_errors: stepErrors,
           });
         }
       }
@@ -394,17 +416,27 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
 
   job = (await loadJobById(jobId)) ?? job;
 
-  // Terros
+  // Terros — same exact platform email rule as Enerflo.
+  if (job.terros_status === "success" && job.step_errors.terros_welcome !== "sent") {
+    const exactPlatform = await findTerrosUserByExactEmail(platformEmail);
+    if (!exactPlatform) {
+      await updateJobStep(job.id, { terros_status: "pending" });
+      job = (await loadJobById(jobId)) ?? job;
+    }
+  }
+
   if (job.terros_status !== "success") {
     try {
       if (dryRun) {
         await updateJobStep(job.id, { terros_status: "skipped" });
       } else {
-        const existing = await findTerrosUserByEmail(platformEmail);
+        const existing = await findTerrosUserByExactEmail(platformEmail);
         if (existing) {
+          stepErrors.terros_welcome = stepErrors.terros_welcome ?? "skipped_existing";
           await updateJobStep(job.id, {
             terros_status: "success",
             terros_user_id: existing.userId,
+            step_errors: stepErrors,
           });
         } else {
           const result = await createTerrosUserForOnboarding({
@@ -414,12 +446,17 @@ export async function runOnboardingJob(jobId: string): Promise<OnboardingJob | n
             phone: job.phone ?? undefined,
             password: tempPassword,
             roles: role.terrosRoles,
-            sendWelcomeEmail: true,
           });
           if (!result.ok) throw new Error(result.error ?? "Terros create failed");
+          if (result.created) {
+            stepErrors.terros_welcome = "sent";
+          } else {
+            stepErrors.terros_welcome = stepErrors.terros_welcome ?? "skipped_existing";
+          }
           await updateJobStep(job.id, {
             terros_status: "success",
             terros_user_id: result.userId ?? undefined,
+            step_errors: stepErrors,
           });
         }
       }

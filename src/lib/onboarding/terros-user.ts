@@ -2,6 +2,25 @@ import { env } from "@/lib/env";
 import { postTerros } from "@/lib/sync/terros-api";
 import { fetchTerrosUsers, resolveTerrosUserFromList } from "@/lib/sync/terros-users";
 
+export async function findTerrosUserByExactEmail(
+  email: string,
+): Promise<{ userId: string; email: string } | null> {
+  const base = env.terrosApiBaseUrl ?? "https://api.terros.com";
+  const key = env.terrosApiKey ?? "";
+  const users = await fetchTerrosUsers(base, key);
+  const normalized = email.trim().toLowerCase();
+
+  const exact = users.find(u => {
+    const uEmail = typeof u.email === "string" ? u.email.trim().toLowerCase() : "";
+    return uEmail === normalized;
+  });
+  if (!exact?.userId) return null;
+  return {
+    userId: String(exact.userId),
+    email: typeof exact.email === "string" ? exact.email : email,
+  };
+}
+
 export async function findTerrosUserByEmail(
   email: string,
 ): Promise<{ userId: string; email: string; exactMatch: boolean } | null> {
@@ -39,8 +58,7 @@ export async function createTerrosUserForOnboarding(payload: {
   name?: string;
   password?: string;
   roles?: string[];
-  sendWelcomeEmail?: boolean;
-}): Promise<{ userId: string | null; ok: boolean; error?: string }> {
+}): Promise<{ userId: string | null; ok: boolean; created: boolean; error?: string }> {
   const base = env.terrosApiBaseUrl ?? "https://api.terros.com";
   const key = env.terrosApiKey ?? "";
   const displayName =
@@ -60,62 +78,19 @@ export async function createTerrosUserForOnboarding(payload: {
 
   if (!ok) {
     if (text.toLowerCase().includes("exist") || text.toLowerCase().includes("duplicate")) {
-      const existing = await findTerrosUserByEmail(payload.email);
-      if (existing) return { userId: existing.userId, ok: true };
+      const existing = await findTerrosUserByExactEmail(payload.email);
+      if (existing) return { userId: existing.userId, ok: true, created: false };
     }
-    return { userId: null, ok: false, error: `Terros ${status}: ${text.slice(0, 300)}` };
+    return { userId: null, ok: false, created: false, error: `Terros ${status}: ${text.slice(0, 300)}` };
   }
 
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const user = (parsed.user ?? parsed.data ?? parsed) as Record<string, unknown>;
     const userId = user?.userId ?? user?.id;
-    const result = { userId: userId != null ? String(userId) : null, ok: true as const };
-    if (payload.sendWelcomeEmail) {
-      await sendTerrosWelcomeViaImport(base, key, payload);
-    }
-    return result;
+    return { userId: userId != null ? String(userId) : null, ok: true, created: true };
   } catch {
-    const existing = await findTerrosUserByEmail(payload.email);
-    const result = { userId: existing?.userId ?? null, ok: true as const };
-    if (payload.sendWelcomeEmail) {
-      await sendTerrosWelcomeViaImport(base, key, payload);
-    }
-    return result;
+    const existing = await findTerrosUserByExactEmail(payload.email);
+    return { userId: existing?.userId ?? null, ok: true, created: false };
   }
-}
-
-async function sendTerrosWelcomeViaImport(
-  base: string,
-  key: string,
-  payload: {
-    email: string;
-    firstName: string;
-    lastName: string;
-    phone?: string;
-    password?: string;
-    roles?: string[];
-  },
-): Promise<void> {
-  const record: Record<string, unknown> = {
-    email: payload.email,
-    firstName: payload.firstName,
-    lastName: payload.lastName,
-  };
-  if (payload.phone) record.phone = payload.phone;
-  if (payload.password) record.password = payload.password;
-  if (payload.roles?.length) record.roles = payload.roles;
-
-  await postTerros(
-    base,
-    key,
-    "/import",
-    {
-      entity: "User",
-      notifyUsers: true,
-      addMissingUsers: false,
-      records: [record],
-    },
-    { retries: 1 },
-  );
 }

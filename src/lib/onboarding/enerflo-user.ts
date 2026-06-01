@@ -187,6 +187,38 @@ export function enerfloEmailTakenWithoutUserError(email: string): string {
   );
 }
 
+/** Exact platform email (or external_user_id) — used before skipping Enerflo create. */
+export async function findEnerfloUserByExactEmail(
+  email: string,
+  externalUserId?: string,
+): Promise<{ id: string; email: string } | null> {
+  const users = await fetchEnerfloUsersUnscoped();
+  const normalized = email.trim().toLowerCase();
+  const externalNeedle = externalUserId?.trim().toLowerCase() ?? "";
+
+  for (const user of users) {
+    const userEmail = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
+    if (userEmail !== normalized) continue;
+    const id = String(user.id ?? user.userId ?? "");
+    if (id) return { id, email: typeof user.email === "string" ? user.email : email };
+  }
+
+  if (externalNeedle) {
+    for (const user of users) {
+      if (!externalIdsForUser(user).includes(externalNeedle)) continue;
+      const id = String(user.id ?? user.userId ?? "");
+      if (id) {
+        return {
+          id,
+          email: typeof user.email === "string" ? user.email : email,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function findEnerfloUserByEmail(
   email: string,
   alternateEmails: string[] = [],
@@ -215,7 +247,7 @@ export async function createEnerfloUserForOnboarding(payload: {
   external_user_id: string;
   password?: string;
   alternateEmails?: string[];
-}): Promise<{ id: string | null; ok: boolean; error?: string }> {
+}): Promise<{ id: string | null; ok: boolean; created: boolean; error?: string }> {
   const log = await enerfloV1({
     operation: "onboarding:enerflo:create",
     method: "POST",
@@ -244,27 +276,28 @@ export async function createEnerfloUserForOnboarding(payload: {
         payload.alternateEmails,
         payload.external_user_id,
       );
-      if (existing) return { id: existing.id, ok: true };
-      return { id: null, ok: false, error: enerfloEmailTakenWithoutUserError(payload.email) };
+      if (existing) return { id: existing.id, ok: true, created: false };
+      return { id: null, ok: false, created: false, error: enerfloEmailTakenWithoutUserError(payload.email) };
     }
-    return { id: null, ok: false, error: responsePreview };
+    return { id: null, ok: false, created: false, error: responsePreview };
   }
 
   try {
     const parsed = JSON.parse(log.responsePreview.replace(/\.\.\.$/, "")) as Record<string, unknown>;
     const user = (parsed.user ?? parsed.data ?? parsed) as Record<string, unknown>;
     const id = user?.id != null ? String(user.id) : null;
-    if (id) return { id, ok: true };
+    if (id) return { id, ok: true, created: true };
 
     const existing = await findEnerfloUserByEmail(
       payload.email,
       payload.alternateEmails,
       payload.external_user_id,
     );
-    if (existing) return { id: existing.id, ok: true };
+    if (existing) return { id: existing.id, ok: true, created: false };
     return {
       id: null,
       ok: false,
+      created: false,
       error: `Enerflo create returned OK but no user id for ${payload.email}`,
     };
   } catch {
@@ -273,10 +306,11 @@ export async function createEnerfloUserForOnboarding(payload: {
       payload.alternateEmails,
       payload.external_user_id,
     );
-    if (existing) return { id: existing.id, ok: true };
+    if (existing) return { id: existing.id, ok: true, created: false };
     return {
       id: null,
       ok: false,
+      created: false,
       error: `Enerflo create returned OK but response could not be parsed for ${payload.email}`,
     };
   }
