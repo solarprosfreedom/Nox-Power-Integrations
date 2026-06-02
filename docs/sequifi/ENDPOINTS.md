@@ -22,7 +22,7 @@ POST {SEQUIFI_API_BASE_URL}/v1/users
 POST {SEQUIFI_API_BASE_URL}/v1/users/termination
 ```
 
-Use-case: **after hire**, active users appear in `/v1/users?status=active` (`status_id = 1`). Our middleware polls this list daily (8:30 PM PHT cron) and provisions Microsoft + Enerflo + Terros for reps missing a member `@noxpwr.com` account, then appends each new Microsoft account to the Google Sheets **EMPWR** roster tab. Inactive users are excluded.
+Use-case: **after hire**, active users appear in `/v1/users?status=active` (`status_id = 1`). Our middleware polls this list every 5 minutes (Vercel cron) and provisions Microsoft + Enerflo + Terros for reps missing a member `@noxpwr.com` account, then appends each new Microsoft account to the Google Sheets **EMPWR** roster tab. Inactive users are excluded.
 
 ---
 
@@ -52,7 +52,7 @@ Use-case: reps in progress before hire. After `PUT /v1/onboarding/hire`, they mo
 |---|---|
 | Gap scan + cron | `GET /v1/users` |
 | Sequifi client | [`src/lib/sequifi/client.ts`](../../src/lib/sequifi/client.ts) |
-| Daily cron | `GET /api/cron/sequifi-onboarding` at `30 12 * * *` UTC (8:30 PM PHT) — provisions accounts + appends to Google Sheets **EMPWR** tab |
+| Cron | `GET /api/cron/sequifi-onboarding` every 5 min (`*/5 * * * *` UTC) — provisions accounts + appends to Google Sheets **EMPWR** tab |
 
 ---
 
