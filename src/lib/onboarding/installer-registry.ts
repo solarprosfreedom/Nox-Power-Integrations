@@ -1,9 +1,53 @@
 import type { RosterTabLayout } from "@/lib/google-sheets/tab-layout";
 import { rosterLayoutFromTabName, STANDARD_LAYOUT } from "@/lib/google-sheets/tab-layout";
+import { env } from "@/lib/env";
 
 export interface InstallerDestination {
   tabName: string;
   layout: RosterTabLayout;
+}
+
+/** Known Sequifi installer tab → Enerflo email suffix (+suffix@noxpwr.com). */
+const INSTALLER_SUFFIX_BY_TAB: Record<string, string> = {
+  axia: "axia",
+  tron: "tron",
+  empwr: "empwr",
+  "good pwr": "goodpwr",
+  goodpwr: "goodpwr",
+  "better earth": "betterearth",
+};
+
+export type InstallerTabName = string;
+
+function workDomain(): string {
+  return env.msDefaultDomain?.trim() || "noxpwr.com";
+}
+
+function localPartFromName(firstName: string, lastName: string): string {
+  return `${firstName}${lastName}`.toLowerCase().replace(/[^a-z0-9]/g, "") || "user";
+}
+
+/** Slugify free-text installer names for the +suffix (e.g. "Some Co" → "someco"). */
+export function slugifyInstallerSuffix(name: string): string {
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return slug || "installer";
+}
+
+/** Resolve Enerflo +suffix from a roster / Sequifi installer tab name. */
+export function installerEmailSuffix(tabName: string): string {
+  const key = tabName.trim().toLowerCase();
+  return INSTALLER_SUFFIX_BY_TAB[key] ?? slugifyInstallerSuffix(tabName);
+}
+
+/** Enerflo login email for one onboarded installer (e.g. test+axia@noxpwr.com). */
+export function enerfloEmailForInstaller(
+  firstName: string,
+  lastName: string,
+  tabName: string,
+  domain = workDomain(),
+): string {
+  const suffix = installerEmailSuffix(tabName);
+  return `${localPartFromName(firstName, lastName)}+${suffix}@${domain}`;
 }
 
 /** Resolve Google Sheets tab + layout for a Sequifi installer name. */

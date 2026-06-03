@@ -1,7 +1,8 @@
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 import type { ManualRosterRow, RosterBuildContext } from "@/lib/google-sheets/roster-map";
 import { parseOfficeName } from "@/lib/google-sheets/roster-map";
-import { auroraEmailFromName, buildWorkUpn } from "@/lib/onboarding/normalize";
+import { buildWorkUpn } from "@/lib/onboarding/normalize";
+import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import { env } from "@/lib/env";
 import {
@@ -26,14 +27,21 @@ function buildRosterFieldValues(
   const office = parseOfficeName(user.office_name);
   const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
   const plainNox = buildWorkUpn(user.first_name, user.last_name, workDomain());
-  const axiaNox = auroraEmailFromName(user.first_name, user.last_name);
+  const workEmail = ctx?.workEmail?.trim() || "";
+  let noxEmail = ctx?.noxEmail?.trim() || "";
+  if (!noxEmail && ctx?.installerTabName?.trim()) {
+    noxEmail = enerfloEmailForInstaller(user.first_name, user.last_name, ctx.installerTabName);
+  }
+  if (!noxEmail) {
+    noxEmail = plainNox;
+  }
 
   return {
     repName,
     phoneNumber: user.mobile_no?.trim() ?? "",
     personalEmail: user.email.trim(),
-    workEmail: ctx?.workEmail?.trim() || "",
-    noxEmail: ctx?.noxEmail?.trim() || (parsed.onboardAxia ? axiaNox : plainNox),
+    workEmail,
+    noxEmail,
     division: office.division,
     region: office.region,
     team: office.team,

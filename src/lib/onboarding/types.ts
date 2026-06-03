@@ -73,6 +73,8 @@ export interface OnboardingRunSummary {
   sheetsAppended: number;
   sheetsSkipped: number;
   sheetsErrors: string[];
+  /** Admin notification emails sent after onboarding completed. */
+  adminNotificationsSent: number;
   errors: string[];
 }
 

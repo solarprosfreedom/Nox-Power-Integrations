@@ -176,7 +176,10 @@ export async function appendSequifiUserToInstallerSharePointRosters(options: {
       await appendSequifiUserToSharePointRoster({
         worksheetName: dest.tabName,
         user: options.user,
-        ctx: options.ctx,
+        ctx: {
+          ...options.ctx,
+          installerTabName: dest.tabName,
+        },
       }),
     );
   }

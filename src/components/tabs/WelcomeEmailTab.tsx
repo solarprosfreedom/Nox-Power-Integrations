@@ -23,22 +23,37 @@ export default function WelcomeEmailTab() {
   const [username, setUsername] = useState("newrep@noxpwr.com");
   const [password, setPassword] = useState("ChangeMe123!");
   const [auroraEmail, setAuroraEmail] = useState("firstnamelastname+axia@noxpwr.com");
+  const [enerfloEmails, setEnerfloEmails] = useState(
+    "firstnamelastname+axia@noxpwr.com\nfirstnamelastname+tron@noxpwr.com",
+  );
+  const [installerTabs, setInstallerTabs] = useState("Axia, Tron");
   const [onboardAxia, setOnboardAxia] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const applyTemplate = useCallback(
     (id: WelcomeTemplateId) => {
+      const parsedInstallers = installerTabs
+        .split(/[,;\n]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      const parsedEnerflo = enerfloEmails
+        .split(/[\n,]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
       const { subject: sub, body: b } = renderWelcomeTemplate(id, {
         username,
         password,
+        terrosEmail: username,
+        installerTabs: parsedInstallers,
+        enerfloEmails: parsedEnerflo,
         onboardAxia,
         ...(onboardAxia ? { auroraEmail } : {}),
       });
       setSubject(sub);
       setBody(b);
     },
-    [username, password, auroraEmail, onboardAxia]
+    [username, password, auroraEmail, onboardAxia, enerfloEmails, installerTabs]
   );
 
   useEffect(() => {
@@ -181,6 +196,24 @@ export default function WelcomeEmailTab() {
                 Onboard to Axia
               </label>
             </div>
+          </div>
+          <div className="mt-4 flex flex-col gap-1.5 sm:max-w-md">
+            <label className="text-sm text-gray-400">Installers (comma-separated)</label>
+            <input
+              value={installerTabs}
+              onChange={(e) => setInstallerTabs(e.target.value)}
+              placeholder="Axia, Tron"
+              className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
+            />
+          </div>
+          <div className="mt-4 flex flex-col gap-1.5">
+            <label className="text-sm text-gray-400">Enerflo logins (one per line)</label>
+            <textarea
+              value={enerfloEmails}
+              onChange={(e) => setEnerfloEmails(e.target.value)}
+              rows={3}
+              className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-white"
+            />
           </div>
           {onboardAxia && templateId === "sales_rep" && (
             <div className="mt-4 flex flex-col gap-1.5 sm:max-w-md">

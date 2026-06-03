@@ -1,4 +1,5 @@
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
+import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
 
 export function normalizeEmail(email: string): string {
   const trimmed = email.trim().toLowerCase();
@@ -38,9 +39,9 @@ export function buildWorkUpn(firstName: string, lastName: string, domain: string
   return `${local || "user"}@${domain}`;
 }
 
+/** @deprecated Use enerfloEmailForInstaller(first, last, "Axia") from installer-registry. */
 export function auroraEmailFromName(firstName: string, lastName: string): string {
-  const local = `${firstName}${lastName}`.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return `${local}+axia@noxpwr.com`;
+  return enerfloEmailForInstaller(firstName, lastName, "Axia");
 }
 
 export function generateTempPassword(length = 14): string {

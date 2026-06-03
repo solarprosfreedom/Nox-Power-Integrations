@@ -218,7 +218,10 @@ export async function appendSequifiUserToInstallerRosterSheets(options: {
         tabName: dest.tabName,
         user: options.user,
         layout: dest.layout,
-        ctx: options.ctx,
+        ctx: {
+          ...options.ctx,
+          installerTabName: dest.tabName,
+        },
       }),
     );
   }

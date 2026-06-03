@@ -1,8 +1,12 @@
 import { env } from "@/lib/env";
+import { normalizeEmail } from "@/lib/onboarding/normalize";
 import {
-  auroraEmailFromName,
-  normalizeEmail,
-} from "@/lib/onboarding/normalize";
+  enerfloAccountsToStepErrors,
+  primaryEnerfloUserId,
+  readEnerfloAccountsFromJob,
+  type EnerfloInstallerAccount,
+} from "@/lib/onboarding/enerflo-accounts";
+import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
 import {
   createEnerfloUserForOnboarding,
   findEnerfloUserByEmail,
@@ -21,6 +25,7 @@ import {
 } from "@/lib/onboarding/terros-user";
 import { filterSequifiUsersNeedingProvisioning, classifyMicrosoftForSequifiUser, needsMicrosoftProvisioning } from "@/lib/onboarding/microsoft-gap-scan";
 import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, ProvisionUserResult, SequifiUserRecord } from "@/lib/onboarding/types";
+import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -54,9 +59,15 @@ function backoffMs(attempt: number): number {
 }
 
 function allStepsSuccess(job: OnboardingJob): boolean {
+  const installerTabs = parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs;
+  const enerfloOk =
+    installerTabs.length === 0 ?
+      job.enerflo_status === "skipped" || job.enerflo_status === "success"
+    : job.enerflo_status === "success";
+
   return (
     job.microsoft_status === "success" &&
-    job.enerflo_status === "success" &&
+    enerfloOk &&
     job.terros_status === "success" &&
     job.welcome_email_status === "success"
   );
@@ -191,6 +202,16 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
         ok: true,
         skipped: true,
         reason: "Onboarding already completed",
+        job,
+      };
+    }
+
+    if (job.status === "skipped") {
+      return {
+        sequifiUserId,
+        ok: true,
+        skipped: true,
+        reason: "Job skipped",
         job,
       };
     }
@@ -373,80 +394,93 @@ export async function runOnboardingJob(
   job = (await loadJobById(jobId)) ?? job;
   const workEmail = job.microsoft_upn ?? upn;
   const sequifiFields = parseSequifiFields(job.raw_sequifi_payload ?? {});
-  const platformEmail = sequifiFields.onboardAxia
-    ? auroraEmailFromName(job.first_name ?? "", job.last_name ?? "")
-    : workEmail;
+  const installerTabs = sequifiFields.installerTabs;
+  const firstName = job.first_name ?? "";
+  const lastName = job.last_name ?? "";
 
-  // Enerflo — require exact platform email; alias match (e.g. M365 work email) must not skip create.
-  if (job.enerflo_status === "success" && !job.enerflo_user_id?.trim()) {
-    await updateJobStep(job.id, { enerflo_status: "pending" });
-    job = (await loadJobById(jobId)) ?? job;
-  }
-  if (job.enerflo_status === "success" && job.step_errors.enerflo_welcome !== "sent") {
-    const exactPlatform = await findEnerfloUserByExactEmail(
-      platformEmail,
-      job.sequifi_employee_id,
-    );
-    if (!exactPlatform) {
-      await updateJobStep(job.id, { enerflo_status: "pending" });
+  // Enerflo — one account per onboarded installer (+suffix@noxpwr.com).
+  if (!installerTabs.length) {
+    if (job.enerflo_status !== "skipped") {
+      await updateJobStep(job.id, { enerflo_status: "skipped" });
       job = (await loadJobById(jobId)) ?? job;
     }
-  }
-
-  if (job.enerflo_status !== "success") {
+  } else if (job.enerflo_status !== "success" && job.enerflo_status !== "skipped") {
     try {
       if (dryRun) {
         await updateJobStep(job.id, { enerflo_status: "skipped" });
       } else {
-        const existing = await findEnerfloUserByExactEmail(
-          platformEmail,
-          job.sequifi_employee_id,
-        );
-        if (existing) {
-          stepErrors.enerflo_welcome = stepErrors.enerflo_welcome ?? "skipped_existing";
-          await updateJobStep(job.id, {
-            enerflo_status: "success",
-            enerflo_user_id: existing.id,
-            step_errors: stepErrors,
-          });
-        } else {
+        const accountByTab = new Map<string, EnerfloInstallerAccount>();
+        for (const existing of readEnerfloAccountsFromJob(job)) {
+          accountByTab.set(existing.tabName.toLowerCase(), existing);
+        }
+
+        let anyCreated = false;
+        let firstFailure: string | undefined;
+
+        for (const tabName of installerTabs) {
+          const email = enerfloEmailForInstaller(firstName, lastName, tabName);
+          const tabKey = tabName.toLowerCase();
+
+          const found = await findEnerfloUserByExactEmail(email, job.sequifi_employee_id);
+          if (found) {
+            accountByTab.set(tabKey, { tabName, email, userId: found.id });
+            continue;
+          }
+
           const result = await createEnerfloUserForOnboarding({
-            email: platformEmail,
-            first_name: job.first_name ?? "",
-            last_name: job.last_name ?? "",
+            email,
+            first_name: firstName,
+            last_name: lastName,
             phone: job.phone ?? undefined,
             roles: role.enerfloRoles,
             external_user_id: job.sequifi_employee_id,
             password: tempPassword,
             alternateEmails: [workEmail],
           });
-          if (!result.ok) throw new Error(result.error ?? "Enerflo create failed");
+
+          if (!result.ok) {
+            firstFailure = firstFailure ?? result.error ?? `Enerflo create failed for ${email}`;
+            continue;
+          }
+
           const enerfloUserId =
             result.id ??
+            (await findEnerfloUserByExactEmail(email, job.sequifi_employee_id))?.id ??
             (
-              await findEnerfloUserByExactEmail(platformEmail, job.sequifi_employee_id)
-            )?.id ??
-            (
-              await findEnerfloUserByEmail(
-                platformEmail,
-                [workEmail],
-                job.sequifi_employee_id,
-              )
+              await findEnerfloUserByEmail(email, [workEmail], job.sequifi_employee_id)
             )?.id;
+
           if (!enerfloUserId) {
-            throw new Error(`Enerflo account was not created for ${platformEmail}`);
+            firstFailure = firstFailure ?? `Enerflo account was not created for ${email}`;
+            continue;
           }
-          if (result.created) {
-            stepErrors.enerflo_welcome = "sent";
-          } else {
-            stepErrors.enerflo_welcome = stepErrors.enerflo_welcome ?? "skipped_existing";
-          }
-          await updateJobStep(job.id, {
-            enerflo_status: "success",
-            enerflo_user_id: enerfloUserId,
-            step_errors: stepErrors,
-          });
+
+          accountByTab.set(tabKey, { tabName, email, userId: enerfloUserId });
+          if (result.created) anyCreated = true;
         }
+
+        const accounts = installerTabs
+          .map(tabName => accountByTab.get(tabName.toLowerCase()))
+          .filter((a): a is EnerfloInstallerAccount => Boolean(a?.userId));
+
+        const allPresent = accounts.length === installerTabs.length;
+        Object.assign(stepErrors, enerfloAccountsToStepErrors(accounts.filter(Boolean)));
+
+        if (!allPresent) {
+          throw new Error(firstFailure ?? "One or more Enerflo installer accounts could not be created");
+        }
+
+        if (anyCreated) {
+          stepErrors.enerflo_welcome = "sent";
+        } else {
+          stepErrors.enerflo_welcome = stepErrors.enerflo_welcome ?? "skipped_existing";
+        }
+
+        await updateJobStep(job.id, {
+          enerflo_status: "success",
+          enerflo_user_id: primaryEnerfloUserId(accounts) ?? undefined,
+          step_errors: stepErrors,
+        });
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -462,10 +496,10 @@ export async function runOnboardingJob(
 
   job = (await loadJobById(jobId)) ?? job;
 
-  // Terros — same exact platform email rule as Enerflo.
+  // Terros — single base work email (no +alias).
   if (job.terros_status === "success" && job.step_errors.terros_welcome !== "sent") {
-    const exactPlatform = await findTerrosUserByExactEmail(platformEmail);
-    if (!exactPlatform) {
+    const exactWork = await findTerrosUserByExactEmail(workEmail);
+    if (!exactWork) {
       await updateJobStep(job.id, { terros_status: "pending" });
       job = (await loadJobById(jobId)) ?? job;
     }
@@ -476,7 +510,7 @@ export async function runOnboardingJob(
       if (dryRun) {
         await updateJobStep(job.id, { terros_status: "skipped" });
       } else {
-        const existing = await findTerrosUserByExactEmail(platformEmail);
+        const existing = await findTerrosUserByExactEmail(workEmail);
         if (existing) {
           stepErrors.terros_welcome = stepErrors.terros_welcome ?? "skipped_existing";
           await updateJobStep(job.id, {
@@ -486,7 +520,7 @@ export async function runOnboardingJob(
           });
         } else {
           const result = await createTerrosUserForOnboarding({
-            email: platformEmail,
+            email: workEmail,
             firstName: job.first_name ?? "",
             lastName: job.last_name ?? "",
             phone: job.phone ?? undefined,
@@ -520,6 +554,10 @@ export async function runOnboardingJob(
 
   job = (await loadJobById(jobId)) ?? job;
 
+  const enerfloEmails = installerTabs.map(tab =>
+    enerfloEmailForInstaller(firstName, lastName, tab),
+  );
+
   // Welcome email
   if (job.welcome_email_status !== "success") {
     try {
@@ -539,14 +577,12 @@ export async function runOnboardingJob(
         const { subject, body } = renderWelcomeTemplate(role.welcomeTemplate, {
           username: workEmail,
           password,
+          terrosEmail: workEmail,
+          installerTabs,
+          enerfloEmails,
           onboardAxia: sequifiFields.onboardAxia,
           ...(sequifiFields.onboardAxia
-            ? {
-                auroraEmail: auroraEmailFromName(
-                  job.first_name ?? "",
-                  job.last_name ?? "",
-                ),
-              }
+            ? { auroraEmail: enerfloEmailForInstaller(firstName, lastName, "Axia") }
             : {}),
         });
         await sendMailAsUser({ to, subject, body, contentType: "text" });
@@ -587,6 +623,11 @@ export async function runOnboardingJob(
     job = (await loadJobById(jobId)) ?? job;
   }
 
+  if (job?.status === "completed") {
+    await sendOnboardingAdminNotification(job);
+    job = (await loadJobById(jobId)) ?? job;
+  }
+
   return job;
 }
 
@@ -606,10 +647,7 @@ async function appendJobToOnboardingRosterSheet(
   }
 
   const workEmail = job.microsoft_upn ?? "";
-  const platformEmail = parsed.onboardAxia
-    ? auroraEmailFromName(job.first_name ?? "", job.last_name ?? "")
-    : workEmail;
-  const ctx = { workEmail, noxEmail: platformEmail };
+  const ctx = { workEmail };
 
   let appended = 0;
   let skipped = 0;
@@ -671,6 +709,7 @@ export async function runOnboardingCycle(options?: {
     sheetsAppended: 0,
     sheetsSkipped: 0,
     sheetsErrors: [],
+    adminNotificationsSent: 0,
     errors: [],
   };
 
@@ -747,6 +786,10 @@ export async function runOnboardingCycle(options?: {
           summary.sheetsErrors.push(result.step_errors.google_sheets);
         } else if (result?.microsoft_status === "success") {
           summary.sheetsSkipped++;
+        }
+
+        if (result?.step_errors?.admin_notify === "sent") {
+          summary.adminNotificationsSent++;
         }
       } catch (e) {
         summary.errors.push(e instanceof Error ? e.message : String(e));
