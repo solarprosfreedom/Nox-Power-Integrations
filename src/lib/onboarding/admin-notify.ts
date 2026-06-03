@@ -4,7 +4,7 @@ import { updateJobStep } from "@/lib/onboarding/repository";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 import { isGraphMailConfigured, sendMailAsUser } from "@/lib/microsoft/graph-mail";
 
-const ADMIN_NOTIFY_TO = "jonaslim@noxpwr.com";
+const ADMIN_NOTIFY_TO = "admin@noxpwr.com";
 const SENT_FLAG = "sent";
 
 export function adminNotifyAlreadySent(job: OnboardingJob): boolean {
