@@ -8,11 +8,10 @@ export function repDisplayName(job: Pick<OnboardingJob, "first_name" | "last_nam
 export function renderAdminOnboardingNotification(
   job: Pick<
     OnboardingJob,
-    "first_name" | "last_name" | "role_label" | "microsoft_upn" | "phone" | "raw_sequifi_payload"
+    "first_name" | "last_name" | "microsoft_upn" | "phone" | "raw_sequifi_payload"
   >,
 ): { subject: string; body: string } {
   const repName = repDisplayName(job);
-  const repRole = job.role_label?.trim() || "Sales Rep";
   const repEmail = job.microsoft_upn?.trim() || "—";
   const repPhone = job.phone?.trim() || "—";
   const installerTabs = parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs;
@@ -22,8 +21,8 @@ export function renderAdminOnboardingNotification(
     : "";
 
   return {
-    subject: `New Rep Onboarded: ${repName}`,
-    body: `Please welcome ${repName}, who has completed onboarding and joined us as ${repRole}.${installersBlock}
+    subject: `Onboarding completed: ${repName}`,
+    body: `${repName} has completed onboarding.${installersBlock}
 
 Rep details:
 
