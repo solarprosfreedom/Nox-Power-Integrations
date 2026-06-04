@@ -77,14 +77,16 @@ export function isGraphMailConfigured(): boolean {
 }
 
 export async function sendMailAsUser(options: {
-  to: string;
+  to: string | string[];
   subject: string;
   body: string;
   contentType?: "text" | "html";
-}): Promise<{ from: string; to: string }> {
+}): Promise<{ from: string; to: string[] }> {
   const { from } = requireAzureConfig();
-  const to = options.to.trim();
-  if (!to) throw new Error("Recipient email is required");
+  const to = (Array.isArray(options.to) ? options.to : [options.to])
+    .map(address => address.trim())
+    .filter(Boolean);
+  if (!to.length) throw new Error("Recipient email is required");
 
   const token = await getGraphAccessToken();
   assertMailSendPermission(token);
@@ -103,7 +105,7 @@ export async function sendMailAsUser(options: {
           contentType,
           content: options.body,
         },
-        toRecipients: [{ emailAddress: { address: to } }],
+        toRecipients: to.map(address => ({ emailAddress: { address } })),
       },
       saveToSentItems: true,
     }),

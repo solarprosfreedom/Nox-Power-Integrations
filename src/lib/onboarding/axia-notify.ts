@@ -5,7 +5,10 @@ import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 import { isGraphMailConfigured, sendMailAsUser } from "@/lib/microsoft/graph-mail";
 
-const AXIA_NOTIFY_TO = "onboardingspecialist2@us.q-cells.com";
+const AXIA_NOTIFY_TO = [
+  "onboardingspecialist2@us.q-cells.com",
+  "carldeveloper01@gmail.com",
+];
 const SENT_FLAG = "sent";
 
 export function axiaNotifyAlreadySent(job: OnboardingJob): boolean {
