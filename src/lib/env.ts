@@ -31,6 +31,11 @@ export const env = {
   terrosApiKey: opt("TERROS_API_KEY"),
   /** If set, Terros webhooks must send the same value in `X-Terros-Webhook-Secret` or `X-Webhook-Secret`. */
   terrosWebhookSecret: opt("TERROS_WEBHOOK_SECRET"),
+  /**
+   * JSON array of Terros proxy consumers: [{ installerId, secret, ownerEmail }].
+   * Used by GET /api/terros/proxy/accounts — teams get secret, not TERROS_API_KEY.
+   */
+  terrosProxyAccessJson: opt("TERROS_PROXY_ACCESS_JSON"),
   terrosWorkflowId: opt("TERROS_WORKFLOW_ID"),
   terrosWorkflowStartStageId: opt("TERROS_WORKFLOW_START_STAGE_ID"),
   /** Stage to set when deal.projectSubmitted fires (net deal / closed). */

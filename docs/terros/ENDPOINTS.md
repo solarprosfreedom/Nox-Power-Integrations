@@ -87,3 +87,105 @@ POST {BASE}{TERROS_REPORTING_PATH}
 ```
 
 Use-case: **your** integration posts `{ purpose: "stats_and_competition", payload: … }` from `src/lib/integrations/terros-client.ts`—align `TERROS_REPORTING_PATH` with whatever Terros assigns for your integration.
+
+---
+
+## Terros proxy (external teams — separate endpoints)
+
+Installers call **your** middleware with a per-installer Bearer secret. The server holds `TERROS_API_KEY`. Accounts and calendar are **different routes** — do not mix them.
+
+### Proxy accounts
+
+```text
+GET https://{your-domain}/api/terros/proxy/accounts
+Authorization: Bearer <installer_secret>
+```
+
+**Server env** (`TERROS_PROXY_ACCESS_JSON`) — JSON array, one object per installer:
+
+```json
+[
+  {
+    "installerId": "jonas",
+    "secret": "<long-random-string>",
+    "ownerEmail": "jonaslim@noxpwr.com"
+  }
+]
+```
+
+Also requires `TERROS_API_KEY` and `TERROS_API_BASE_URL` on the server (not shared with clients).
+
+**Behavior:**
+
+1. Validates `Authorization: Bearer` against a configured `secret`.
+2. Resolves `ownerEmail` to a Terros `userId` via `/user/list`.
+3. Calls Terros `POST /account/list` with `searchInput: { userId }` (rep’s Terros id), then keeps rows where `ownerId` **or** `closerId` matches.
+4. Returns a safe subset (`TerrosSummary`: accountId, name, resident email/phone, address fields, ownerEmail, externalLeadId).
+
+**Example:**
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer YOUR_INSTALLER_SECRET" \
+  "https://your-app.vercel.app/api/terros/proxy/accounts"
+```
+
+**Response (200):**
+
+```json
+{
+  "installerId": "jonas",
+  "ownerEmail": "jonaslim@noxpwr.com",
+  "ownerId": "U.xxxxx",
+  "count": 42,
+  "accounts": []
+}
+```
+
+**Errors:** `401` invalid/missing secret · `404` owner not in Terros · `503` proxy or Terros not configured.
+
+**Code:** [`src/app/api/terros/proxy/accounts/route.ts`](../../src/app/api/terros/proxy/accounts/route.ts) · [`src/lib/terros/proxy-config.ts`](../../src/lib/terros/proxy-config.ts) · [`src/lib/terros/proxy-accounts.ts`](../../src/lib/terros/proxy-accounts.ts)
+
+**v1 limit:** Up to 1000 accounts per Terros list call (scoped by `searchInput.userId`); no query params to change owner (preset per installer secret).
+
+### Proxy calendar (events only — not accounts)
+
+```text
+GET https://{your-domain}/api/terros/proxy/calendar
+Authorization: Bearer <installer_secret>
+```
+
+Same `TERROS_PROXY_ACCESS_JSON` and installer secret as accounts, but a **separate URL** and response shape.
+
+**Behavior:**
+
+1. Same auth + resolve `ownerEmail` → Terros `userId`.
+2. Loads scoped accounts internally (same filter as accounts proxy).
+3. For each account, Terros `POST /calendar/event/list` with `{ accountId, size: 200 }`.
+4. Keeps events where `ownerId` or `attendeeId` matches the rep.
+5. Returns deduped `events[]` (not mixed into the accounts response).
+
+**Example:**
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer YOUR_INSTALLER_SECRET" \
+  "https://your-app.vercel.app/api/terros/proxy/calendar"
+```
+
+**Response (200):**
+
+```json
+{
+  "installerId": "jonas",
+  "ownerEmail": "jonaslim@noxpwr.com",
+  "ownerId": "U.xxxxx",
+  "accountCount": 40,
+  "count": 5,
+  "events": []
+}
+```
+
+**Note:** Slower than accounts (~350ms Terros throttle per account). Route `maxDuration` is 60s. `/api/terros/proxy/appointments` is not used — use `/calendar` only.
+
+**Code:** [`src/app/api/terros/proxy/calendar/route.ts`](../../src/app/api/terros/proxy/calendar/route.ts) · [`src/lib/terros/proxy-calendar.ts`](../../src/lib/terros/proxy-calendar.ts)

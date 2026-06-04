@@ -26,6 +26,7 @@ import {
 import { filterSequifiUsersNeedingProvisioning, classifyMicrosoftForSequifiUser, needsMicrosoftProvisioning } from "@/lib/onboarding/microsoft-gap-scan";
 import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, ProvisionUserResult, SequifiUserRecord } from "@/lib/onboarding/types";
 import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
+import { sendAxiaOnboardingNotification } from "@/lib/onboarding/axia-notify";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -625,6 +626,8 @@ export async function runOnboardingJob(
 
   if (job?.status === "completed") {
     await sendOnboardingAdminNotification(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await sendAxiaOnboardingNotification(job);
     job = (await loadJobById(jobId)) ?? job;
   }
 
