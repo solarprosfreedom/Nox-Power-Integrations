@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listCalendarEventsForOwner } from "@/lib/terros/proxy-calendar";
+import { listCalendarEventsForProxy } from "@/lib/terros/proxy-calendar";
 import {
   isTerrosProxyConfigured,
   resolveProxyAccess,
@@ -15,6 +15,25 @@ function bearerFromRequest(request: Request): string {
   return "";
 }
 
+function parseCalendarQuery(request: Request): {
+  page: number;
+  pageSize: number;
+  from?: string;
+  to?: string;
+} {
+  const url = new URL(request.url);
+  const pageRaw = Number(url.searchParams.get("page") ?? "1");
+  const pageSizeRaw = Number(url.searchParams.get("pageSize") ?? "100");
+  const from = url.searchParams.get("from")?.trim() || undefined;
+  const to = url.searchParams.get("to")?.trim() || undefined;
+  return {
+    page: Number.isFinite(pageRaw) ? pageRaw : 1,
+    pageSize: Number.isFinite(pageSizeRaw) ? pageSizeRaw : 100,
+    from,
+    to,
+  };
+}
+
 export async function GET(request: Request) {
   if (!isTerrosProxyConfigured()) {
     return NextResponse.json(
@@ -28,10 +47,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await listCalendarEventsForOwner(
-    access.installerId,
-    access.ownerEmail,
-  );
+  const result = await listCalendarEventsForProxy(access, parseCalendarQuery(request));
 
   if (!result.ok) {
     switch (result.error.code) {
@@ -45,12 +61,24 @@ export async function GET(request: Request) {
           { error: "Owner not found in Terros", ownerEmail: result.error.ownerEmail },
           { status: 404 },
         );
+      case "team_not_found":
+        return NextResponse.json(
+          {
+            error: "Team not found in Terros",
+            teamName: result.error.teamName,
+            teamId: result.error.teamId,
+          },
+          { status: 404 },
+        );
       default:
         return NextResponse.json({ error: "Request failed" }, { status: 500 });
     }
   }
 
   return NextResponse.json(result.data, {
-    headers: { "Cache-Control": "private, max-age=60" },
+    headers: {
+      "Cache-Control": "private, max-age=60",
+      "X-Cache": result.data.cached ? "HIT" : "MISS",
+    },
   });
 }

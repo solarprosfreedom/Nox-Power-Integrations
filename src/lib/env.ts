@@ -32,8 +32,9 @@ export const env = {
   /** If set, Terros webhooks must send the same value in `X-Terros-Webhook-Secret` or `X-Webhook-Secret`. */
   terrosWebhookSecret: opt("TERROS_WEBHOOK_SECRET"),
   /**
-   * JSON array of Terros proxy consumers: [{ installerId, secret, ownerEmail }].
-   * Used by GET /api/terros/proxy/accounts — teams get secret, not TERROS_API_KEY.
+   * JSON array of Terros proxy consumers.
+   * Rep filter: { installerId, secret, ownerEmail }
+   * Team filter: { installerId, secret, filter: "team", teamName: "Scarface" }
    */
   terrosProxyAccessJson: opt("TERROS_PROXY_ACCESS_JSON"),
   terrosWorkflowId: opt("TERROS_WORKFLOW_ID"),

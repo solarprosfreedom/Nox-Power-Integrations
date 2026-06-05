@@ -97,11 +97,20 @@ Installers call **your** middleware with a per-installer Bearer secret. The serv
 ### Proxy accounts
 
 ```text
-GET https://{your-domain}/api/terros/proxy/accounts
+GET https://{your-domain}/api/terros/proxy/accounts?page=1&pageSize=100
 Authorization: Bearer <installer_secret>
 ```
 
-**Server env** (`TERROS_PROXY_ACCESS_JSON`) — JSON array, one object per installer:
+Query params (optional):
+
+| Param | Default | Max | Description |
+|-------|---------|-----|-------------|
+| `page` | `1` | — | Page of results (1-based) |
+| `pageSize` | `100` | `1000` | Accounts per page |
+
+**Server env** (`TERROS_PROXY_ACCESS_JSON`) — JSON array, one object per installer.
+
+**Rep filter** (single rep — owner or closer):
 
 ```json
 [
@@ -113,13 +122,28 @@ Authorization: Bearer <installer_secret>
 ]
 ```
 
+**Team filter** (all reps on a Terros team — owner or closer):
+
+```json
+[
+  {
+    "installerId": "Jack",
+    "secret": "<long-random-string>",
+    "filter": "team",
+    "teamName": "Scarface"
+  }
+]
+```
+
+You can use `teamId` instead of `teamName` (e.g. `Team.e4SgFcv3` for Scarface).
+
 Also requires `TERROS_API_KEY` and `TERROS_API_BASE_URL` on the server (not shared with clients).
 
 **Behavior:**
 
 1. Validates `Authorization: Bearer` against a configured `secret`.
-2. Resolves `ownerEmail` to a Terros `userId` via `/user/list`.
-3. Calls Terros `POST /account/list` with `searchInput: { userId }` (rep’s Terros id), then keeps rows where `ownerId` **or** `closerId` matches.
+2. **Rep filter:** resolves `ownerEmail` → Terros `userId`, lists accounts for that rep.
+3. **Team filter:** loads each team member, calls `POST /account/list` per user (`searchInput.userId`), merges accounts where `ownerId`, `closerId`, or `setterId` matches any team member.
 4. Returns a safe subset (`TerrosSummary`: accountId, name, resident email/phone, address fields, ownerEmail, externalLeadId).
 
 **Example:**
@@ -134,58 +158,91 @@ curl -sS \
 
 ```json
 {
-  "installerId": "jonas",
-  "ownerEmail": "jonaslim@noxpwr.com",
-  "ownerId": "U.xxxxx",
-  "count": 42,
+  "installerId": "Jack",
+  "filter": "team",
+  "teamId": "Team.e4SgFcv3",
+  "teamName": "Scarface",
+  "memberCount": 44,
+  "page": 1,
+  "pageSize": 100,
+  "total": 13225,
+  "totalPages": 133,
+  "count": 100,
   "accounts": []
 }
 ```
+
+First request for a team builds the full list (one Terros call per team member, ~30–90s with parallel fetch). Results are cached **15 minutes** — `page=2`, `page=3`, … are fast when `X-Cache: HIT`. Response includes `"cached": true` on cache hits.
 
 **Errors:** `401` invalid/missing secret · `404` owner not in Terros · `503` proxy or Terros not configured.
 
 **Code:** [`src/app/api/terros/proxy/accounts/route.ts`](../../src/app/api/terros/proxy/accounts/route.ts) · [`src/lib/terros/proxy-config.ts`](../../src/lib/terros/proxy-config.ts) · [`src/lib/terros/proxy-accounts.ts`](../../src/lib/terros/proxy-accounts.ts)
 
-**v1 limit:** Up to 1000 accounts per Terros list call (scoped by `searchInput.userId`); no query params to change owner (preset per installer secret).
+**v1 limit:** `pageSize` max 1000. Terros returns up to 1000 accounts per user list call. Filter preset per installer secret (rep or team).
 
 ### Proxy calendar (events only — not accounts)
 
 ```text
-GET https://{your-domain}/api/terros/proxy/calendar
+GET https://{your-domain}/api/terros/proxy/calendar?page=1&pageSize=100
 Authorization: Bearer <installer_secret>
 ```
 
 Same `TERROS_PROXY_ACCESS_JSON` and installer secret as accounts, but a **separate URL** and response shape.
 
+**Query params:** `page` (default 1), `pageSize` (default 100, max 1000), optional `from` / `to` (ISO `YYYY-MM-DD`, client-side date filter on `eventDate`).
+
 **Behavior:**
 
-1. Same auth + resolve `ownerEmail` → Terros `userId`.
-2. Loads scoped accounts internally (same filter as accounts proxy).
-3. For each account, Terros `POST /calendar/event/list` with `{ accountId, size: 200 }`.
-4. Keeps events where `ownerId` or `attendeeId` matches the rep.
-5. Returns deduped `events[]` (not mixed into the accounts response).
+1. Same auth and preset filter (rep or team) as accounts.
+2. **Team:** one Terros `POST /calendar/event/list` with `{ teamId, size: 1000 }`, then keep events where a team member is `ownerId`, `attendeeId`, `setterId`, or `closerId`.
+3. **Rep:** up to four list calls with `{ ownerId | attendeeId | setterId | closerId, size: 1000 }` for the resolved user, merged and deduped.
+4. **15 min in-memory cache** per installer scope (`cached: true`, `X-Cache: HIT` on repeat requests). Pagination and date filters apply after cache.
 
 **Example:**
 
 ```bash
 curl -sS \
   -H "Authorization: Bearer YOUR_INSTALLER_SECRET" \
-  "https://your-app.vercel.app/api/terros/proxy/calendar"
+  "https://your-app.vercel.app/api/terros/proxy/calendar?page=1&pageSize=50"
 ```
 
-**Response (200):**
+**Response (200) — rep:**
 
 ```json
 {
   "installerId": "jonas",
+  "filter": "rep",
   "ownerEmail": "jonaslim@noxpwr.com",
   "ownerId": "U.xxxxx",
-  "accountCount": 40,
-  "count": 5,
+  "page": 1,
+  "pageSize": 50,
+  "total": 15,
+  "totalPages": 1,
+  "count": 15,
+  "cached": false,
   "events": []
 }
 ```
 
-**Note:** Slower than accounts (~350ms Terros throttle per account). Route `maxDuration` is 60s. `/api/terros/proxy/appointments` is not used — use `/calendar` only.
+**Response (200) — team (e.g. Scarface):**
+
+```json
+{
+  "installerId": "Jack",
+  "filter": "team",
+  "teamId": "Team.e4SgFcv3",
+  "teamName": "Scarface",
+  "memberCount": 44,
+  "page": 1,
+  "pageSize": 100,
+  "total": 228,
+  "totalPages": 3,
+  "count": 100,
+  "cached": false,
+  "events": []
+}
+```
+
+**Note:** Team calendar completes in seconds (not per-account). Route `maxDuration` is 60s. Use `/calendar` only (not `/appointments`).
 
 **Code:** [`src/app/api/terros/proxy/calendar/route.ts`](../../src/app/api/terros/proxy/calendar/route.ts) · [`src/lib/terros/proxy-calendar.ts`](../../src/lib/terros/proxy-calendar.ts)

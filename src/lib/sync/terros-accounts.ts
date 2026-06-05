@@ -77,11 +77,12 @@ export async function fetchTerrosAccountListPage(
   key: string,
   size = 1000,
   searchInput?: Record<string, unknown>,
+  opts?: { minGapMs?: number },
 ): Promise<{ accounts: TerrosSummary[]; raw: Record<string, unknown>[] }> {
   try {
     const body: Record<string, unknown> = { size };
     if (searchInput) body.searchInput = searchInput;
-    const { ok, text } = await postTerros(base, key, "/account/list", body);
+    const { ok, text } = await postTerros(base, key, "/account/list", body, opts);
     if (!ok) return { accounts: [], raw: [] };
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const rows = extractList(parsed, ["accounts", "data", "results", "items"]);
