@@ -161,7 +161,10 @@ export function sequifiUserFromOnboardingJob(job: OnboardingJob): SequifiUserRec
     last_name: job.last_name ?? "",
     email: job.email,
     mobile_no: job.phone,
-    position_name: job.role_label,
+    position_name:
+      typeof raw.position_name === "string" ? raw.position_name : job.role_label,
+    sub_position_name:
+      typeof raw.sub_position_name === "string" ? raw.sub_position_name : null,
     office_name: typeof raw.office_name === "string" ? raw.office_name : null,
     raw,
   };

@@ -16,6 +16,7 @@ export interface SequifiUserRecord {
   email: string;
   mobile_no?: string | null;
   position_name?: string | null;
+  sub_position_name?: string | null;
   office_name?: string | null;
   worker_type?: string | null;
   status_id?: number | null;

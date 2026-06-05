@@ -92,11 +92,18 @@ export async function fetchSequifiUserById(id: number): Promise<SequifiUserRecor
   }
 
   const data = parsed.data as Record<string, unknown> | undefined;
+  const users = data?.users;
+  const fromUsers =
+    Array.isArray(users) && users[0] && typeof users[0] === "object"
+      ? (users[0] as Record<string, unknown>)
+      : undefined;
   const raw =
+    fromUsers ??
     (data?.user as Record<string, unknown> | undefined) ??
     (data as Record<string, unknown> | undefined) ??
     parsed;
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (!fromUsers && !data?.user && "users" in raw) return null;
 
   const rec = sequifiUserFromApi(raw);
   if (!rec) return null;

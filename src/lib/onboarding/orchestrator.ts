@@ -17,7 +17,11 @@ import {
   markJobProcessing,
   updateJobStep,
 } from "@/lib/onboarding/repository";
-import { resolveRoleMapping } from "@/lib/onboarding/role-map";
+import {
+  resolveRoleMappingFromSequifi,
+  sequifiPositionContextFromJob,
+  sequifiPositionContextFromUser,
+} from "@/lib/onboarding/role-map";
 import {
   createTerrosUserForOnboarding,
   findTerrosUserByEmail,
@@ -312,7 +316,10 @@ export async function runOnboardingJob(
   job = (await loadJobById(jobId)) ?? job;
 
   const stepErrors = { ...job.step_errors };
-  const role = resolveRoleMapping(job.role_label, env.onboardingRoleMapJson);
+  const positionCtx = freshUser
+    ? sequifiPositionContextFromUser(freshUser)
+    : sequifiPositionContextFromJob(job);
+  const role = resolveRoleMappingFromSequifi(positionCtx, env.onboardingRoleMapJson);
   const upn = job.microsoft_upn ?? resolveUpnForUser(job.email, job.first_name ?? "", job.last_name ?? "");
   let tempPassword =
     job.temp_password ?? (env.onboardingDefaultPassword?.trim() || "Solar123");

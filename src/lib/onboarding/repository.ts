@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import { normalizeEmail } from "@/lib/onboarding/normalize";
+import { sequifiRoleLabel } from "@/lib/onboarding/normalize";
 import type { JobStatus, OnboardingJob, SequifiUserRecord, StepStatus } from "@/lib/onboarding/types";
 
 let _client: SupabaseClient | null = null;
@@ -139,7 +140,7 @@ export async function insertJobFromSequifiUser(user: SequifiUserRecord): Promise
     first_name: user.first_name || null,
     last_name: user.last_name || null,
     phone: user.mobile_no || null,
-    role_label: user.position_name || user.office_name || null,
+    role_label: sequifiRoleLabel(user),
     welcome_email_to: welcomeTo,
     raw_sequifi_payload: user.raw,
     status: "pending" as const,
@@ -188,7 +189,7 @@ export async function refreshJobFromSequifiUser(
     first_name: user.first_name || null,
     last_name: user.last_name || null,
     phone: user.mobile_no || null,
-    role_label: user.position_name || user.office_name || null,
+    role_label: sequifiRoleLabel(user),
     welcome_email_to: welcomeTo,
   });
 }

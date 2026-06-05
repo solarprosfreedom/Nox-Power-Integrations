@@ -23,6 +23,7 @@ export function sequifiUserFromApi(raw: Record<string, unknown>): SequifiUserRec
     email,
     mobile_no: raw.mobile_no != null ? String(raw.mobile_no) : null,
     position_name: raw.position_name != null ? String(raw.position_name) : null,
+    sub_position_name: raw.sub_position_name != null ? String(raw.sub_position_name) : null,
     office_name: raw.office_name != null ? String(raw.office_name) : null,
     worker_type: raw.worker_type != null ? String(raw.worker_type) : null,
     status_id: typeof raw.status_id === "number" ? raw.status_id : null,
@@ -30,6 +31,18 @@ export function sequifiUserFromApi(raw: Record<string, unknown>): SequifiUserRec
     updated_at: raw.updated_at != null ? String(raw.updated_at) : null,
     raw,
   };
+}
+
+/** Display / job label — sub-position is the operational role when present. */
+export function sequifiRoleLabel(
+  user: Pick<SequifiUserRecord, "sub_position_name" | "position_name" | "office_name">,
+): string | null {
+  return (
+    user.sub_position_name?.trim() ||
+    user.position_name?.trim() ||
+    user.office_name?.trim() ||
+    null
+  );
 }
 
 export function buildWorkUpn(firstName: string, lastName: string, domain: string): string {
