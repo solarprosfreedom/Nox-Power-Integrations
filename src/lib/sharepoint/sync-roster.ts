@@ -117,7 +117,9 @@ export async function syncSequifiUsersToSharePointRoster(options: {
     }
   }
 
-  const appended = await appendRowsToWorksheet(worksheetName, rowsToAppend, layout.appendRange);
+  const appended = await appendRowsToWorksheet(worksheetName, rowsToAppend, layout.appendRange, {
+    headerRow: layout.headerRow,
+  });
 
   return {
     worksheetName,
@@ -159,7 +161,9 @@ export async function appendSequifiUserToSharePointRoster(options: {
     return { worksheetName, appended: false, reason: "already in sheet", dedupKey };
   }
 
-  await appendRowsToWorksheet(worksheetName, [row], layout.appendRange);
+  await appendRowsToWorksheet(worksheetName, [row], layout.appendRange, {
+    headerRow: layout.headerRow,
+  });
   return { worksheetName, appended: true, dedupKey };
 }
 
@@ -211,7 +215,9 @@ export async function appendManualRosterRowToSharePoint(options: {
   const layout = sharePointLayoutFromWorksheet(worksheetName);
   const sheetRow = manualRosterRowToSharePointRow(row, layout);
   const { fileName, webUrl } = await resolveWorkbook();
-  const appended = await appendRowsToWorksheet(worksheetName, [sheetRow], layout.appendRange);
+  const appended = await appendRowsToWorksheet(worksheetName, [sheetRow], layout.appendRange, {
+    headerRow: layout.headerRow,
+  });
 
   return {
     worksheetName,
