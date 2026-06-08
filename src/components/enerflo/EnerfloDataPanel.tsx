@@ -11,6 +11,7 @@ import {
   fetchEnerfloDealsPage,
   fetchEnerfloInstallsPage,
 } from "@/app/actions/enerflo-lists";
+import SetterBackfillPanel from "@/components/enerflo/SetterBackfillPanel";
 import type { ApiLog } from "@/lib/logger";
 
 // ── Inline activity log (Data-tab scoped) ─────────────────────────────────
@@ -115,20 +116,22 @@ function DataActivityLog({ logs }: { logs: ApiLog[] }) {
 
 // ── Nav ───────────────────────────────────────────────────────────────────
 
-type DataView = "leads" | "deals" | "installs" | "logs";
+type DataView = "leads" | "deals" | "installs" | "setter-backfill" | "logs";
 
 const VIEW_OPS: Record<DataView, string[]> = {
-  leads:    ["list_leads_page"],
-  deals:    ["list_deals_page"],
-  installs: ["list_installs_page"],
-  logs:     [],
+  leads:            ["list_leads_page"],
+  deals:            ["list_deals_page"],
+  installs:         ["list_installs_page"],
+  "setter-backfill": [],
+  logs:             [],
 };
 
 const NAV: { id: DataView; label: string; icon: string }[] = [
-  { id: "leads",    label: "Leads",    icon: "🎯" },
-  { id: "deals",    label: "Deals",    icon: "💰" },
-  { id: "installs", label: "Installs", icon: "🔧" },
-  { id: "logs",     label: "Activity Logs", icon: "📋" },
+  { id: "leads",            label: "Leads",           icon: "🎯" },
+  { id: "deals",            label: "Deals",           icon: "💰" },
+  { id: "installs",         label: "Installs",        icon: "🔧" },
+  { id: "setter-backfill",  label: "Setter Backfill", icon: "👤" },
+  { id: "logs",             label: "Activity Logs",   icon: "📋" },
 ];
 
 // ── View configs ──────────────────────────────────────────────────────────
@@ -183,7 +186,9 @@ export default function EnerfloDataPanel({ logs, onLog: _onLog }: Props) {
           const count =
             item.id === "logs"
               ? dataLogCount
-              : logs.filter((l) => VIEW_OPS[item.id].includes(l.operation)).length;
+              : VIEW_OPS[item.id].length
+                ? logs.filter((l) => VIEW_OPS[item.id].includes(l.operation)).length
+                : 0;
 
           return (
             <button
@@ -234,6 +239,8 @@ export default function EnerfloDataPanel({ logs, onLog: _onLog }: Props) {
             </div>
           );
         })()}
+
+        {view === "setter-backfill" && <SetterBackfillPanel />}
 
         {/* Activity Logs */}
         {view === "logs" && (

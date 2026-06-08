@@ -105,3 +105,65 @@ POST http://localhost:3000/api/webhooks/enerflo
 ```
 
 Use-case: local or production URL you register inside Enerflo’s webhook settings.
+
+---
+
+## Backfill Setter from Lead Owner (migration)
+
+Copy Lead Owner to Setter on existing customers where Setter is empty.
+
+```text
+POST https://{your-domain}/api/migration/enerflo-setter-backfill?customerId=3615609
+Authorization: Bearer {CRON_SECRET}
+```
+
+Query params:
+
+| Param | Description |
+|-------|-------------|
+| `customerId` | Single customer test (numeric id from `/customer/edit/{id}`) |
+| `ownerUserId` | Only leads owned by this Enerflo user id (e.g. Adam Wolf = `146362`) |
+| `ownerEmail` | Same as `ownerUserId` but resolved via user email |
+| `dryRun=true` | Preview only — no PUT |
+| `limit` | Cap updates in bulk/owner mode (owner mode scans all pages by default) |
+| `page` | Start page for `GET /api/v1/customers` (default 1) |
+
+Skips any lead that **already has a setter** — never overwrites an existing setter.
+
+**Owner-scoped (Adam Wolf — dry run):**
+
+```bash
+curl -X POST \
+  "https://nox-power-integrations.vercel.app/api/migration/enerflo-setter-backfill?ownerUserId=146362&dryRun=true" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+**Owner-scoped (live):**
+
+```bash
+curl -X POST \
+  "https://nox-power-integrations.vercel.app/api/migration/enerflo-setter-backfill?ownerUserId=146362" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+**Single customer (dry run):**
+
+```bash
+curl -X POST \
+  "https://nox-power-integrations.vercel.app/api/migration/enerflo-setter-backfill?customerId=3615609&dryRun=true" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+**Raw Enerflo PUT** (manual one-off):
+
+```bash
+curl -X PUT \
+  -H "api-key: $ENERFLO_V1_API_KEY" \
+  -H "Content-Type: application/json" \
+  "https://enerflo.io/api/v3/customers/3615609" \
+  -d '{"setter_user_id": 147547}'
+```
+
+Uses `PUT /api/v3/customers/{id}` with `{ setter_user_id: agent_user_id }` only — does not change Terros or Supabase.
+
+**Code:** [`src/lib/enerflo/backfill-setter-from-owner.ts`](../../src/lib/enerflo/backfill-setter-from-owner.ts)

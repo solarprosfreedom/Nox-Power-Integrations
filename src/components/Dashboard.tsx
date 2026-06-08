@@ -9,6 +9,7 @@ import MigrationTab from "@/components/tabs/MigrationTab";
 import WelcomeEmailTab from "@/components/tabs/WelcomeEmailTab";
 import SequifiOnboardingTab from "@/components/tabs/SequifiOnboardingTab";
 import SheetsRosterTab from "@/components/tabs/SheetsRosterTab";
+import ParagonSyncTab from "@/components/tabs/ParagonSyncTab";
 import LeaderboardFixTab from "@/components/tabs/LeaderboardFixTab";
 import { fetchStoredLogs } from "@/app/actions/enerflo";
 import { getIntegrationEnvStatus } from "@/app/actions/env-status";
@@ -24,6 +25,7 @@ type SectionId =
   | "migration"
   | "welcome-email"
   | "sheets-roster"
+  | "paragon-sync"
   | "leaderboard-fix";
 
 const VENDORS: { id: SectionId; label: string; color: string; dot: string; tagline: string }[] = [
@@ -226,6 +228,23 @@ export default function Dashboard() {
           </button>
 
           <button
+            onClick={() => setSection("paragon-sync")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "paragon-sync"
+                ? "bg-teal-900/40 text-teal-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-teal-400">
+              🏠
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Paragon Sync</p>
+              <p className="text-[10px] text-gray-600 truncate">Enerflo installs → Google Sheet</p>
+            </div>
+          </button>
+
+          <button
             onClick={() => setSection("leaderboard-fix")}
             className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
               ${section === "leaderboard-fix"
@@ -316,6 +335,12 @@ export default function Dashboard() {
               <h1 className="text-base font-semibold text-green-300">Sheets Roster</h1>
               <span className="text-xs text-gray-600">Append Sequifi hires to Google Sheets test tab</span>
             </>
+          ) : section === "paragon-sync" ? (
+            <>
+              <span className="text-teal-400">🏠</span>
+              <h1 className="text-base font-semibold text-teal-300">Paragon Sync</h1>
+              <span className="text-xs text-gray-600">Append Enerflo installs to Paragon Google Sheet</span>
+            </>
           ) : section === "leaderboard-fix" ? (
             <>
               <span className="text-sky-400">📊</span>
@@ -374,6 +399,11 @@ export default function Dashboard() {
           {section === "sheets-roster" && (
             <div className="flex-1 overflow-y-auto px-8 py-8">
               <SheetsRosterTab />
+            </div>
+          )}
+          {section === "paragon-sync" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <ParagonSyncTab />
             </div>
           )}
           {section === "leaderboard-fix" && (

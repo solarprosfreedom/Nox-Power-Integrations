@@ -2,7 +2,6 @@ import type { SequifiUserRecord } from "@/lib/onboarding/types";
 import type { ManualRosterRow, RosterBuildContext } from "@/lib/google-sheets/roster-map";
 import { parseOfficeName } from "@/lib/google-sheets/roster-map";
 import { buildWorkUpn } from "@/lib/onboarding/normalize";
-import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import { env } from "@/lib/env";
 import {
@@ -28,13 +27,7 @@ function buildRosterFieldValues(
   const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
   const plainNox = buildWorkUpn(user.first_name, user.last_name, workDomain());
   const workEmail = ctx?.workEmail?.trim() || "";
-  let noxEmail = ctx?.noxEmail?.trim() || "";
-  if (!noxEmail && ctx?.installerTabName?.trim()) {
-    noxEmail = enerfloEmailForInstaller(user.first_name, user.last_name, ctx.installerTabName);
-  }
-  if (!noxEmail) {
-    noxEmail = plainNox;
-  }
+  const noxEmail = ctx?.noxEmail?.trim() || workEmail || plainNox;
 
   return {
     repName,

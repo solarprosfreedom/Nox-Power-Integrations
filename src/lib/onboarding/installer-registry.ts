@@ -39,7 +39,7 @@ export function installerEmailSuffix(tabName: string): string {
   return INSTALLER_SUFFIX_BY_TAB[key] ?? slugifyInstallerSuffix(tabName);
 }
 
-/** Enerflo login email for one onboarded installer (e.g. test+axia@noxpwr.com). */
+/** @deprecated Use buildWorkUpn — one company email for Microsoft, Enerflo, and Terros. */
 export function enerfloEmailForInstaller(
   firstName: string,
   lastName: string,

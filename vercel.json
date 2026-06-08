@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/sequifi-onboarding",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/paragon-sync",
+      "schedule": "0 6 * * *"
     }
   ]
 }

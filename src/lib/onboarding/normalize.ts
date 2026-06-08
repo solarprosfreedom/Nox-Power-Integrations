@@ -1,5 +1,5 @@
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
-import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
+import { env } from "@/lib/env";
 
 export function normalizeEmail(email: string): string {
   const trimmed = email.trim().toLowerCase();
@@ -52,9 +52,9 @@ export function buildWorkUpn(firstName: string, lastName: string, domain: string
   return `${local || "user"}@${domain}`;
 }
 
-/** @deprecated Use enerfloEmailForInstaller(first, last, "Axia") from installer-registry. */
-export function auroraEmailFromName(firstName: string, lastName: string): string {
-  return enerfloEmailForInstaller(firstName, lastName, "Axia");
+/** @deprecated Per-installer +alias emails removed — use buildWorkUpn for company email. */
+export function auroraEmailFromName(firstName: string, lastName: string, domain?: string): string {
+  return buildWorkUpn(firstName, lastName, domain ?? (env.msDefaultDomain?.trim() || "noxpwr.com"));
 }
 
 export function generateTempPassword(length = 14): string {

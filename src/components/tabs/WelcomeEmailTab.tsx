@@ -20,13 +20,10 @@ export default function WelcomeEmailTab() {
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
-  const [username, setUsername] = useState("newrep@noxpwr.com");
+  const [firstName, setFirstName] = useState("Jane");
+  const [username, setUsername] = useState("janedoe@noxpwr.com");
   const [password, setPassword] = useState("ChangeMe123!");
-  const [auroraEmail, setAuroraEmail] = useState("firstnamelastname+axia@noxpwr.com");
-  const [enerfloEmails, setEnerfloEmails] = useState(
-    "firstnamelastname+axia@noxpwr.com\nfirstnamelastname+tron@noxpwr.com",
-  );
-  const [installerTabs, setInstallerTabs] = useState("Axia, Tron");
+  const [installerTabs, setInstallerTabs] = useState("Tron");
   const [onboardAxia, setOnboardAxia] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -37,23 +34,17 @@ export default function WelcomeEmailTab() {
         .split(/[,;\n]+/)
         .map(s => s.trim())
         .filter(Boolean);
-      const parsedEnerflo = enerfloEmails
-        .split(/[\n,]+/)
-        .map(s => s.trim())
-        .filter(Boolean);
       const { subject: sub, body: b } = renderWelcomeTemplate(id, {
         username,
         password,
-        terrosEmail: username,
+        firstName,
         installerTabs: parsedInstallers,
-        enerfloEmails: parsedEnerflo,
         onboardAxia,
-        ...(onboardAxia ? { auroraEmail } : {}),
       });
       setSubject(sub);
       setBody(b);
     },
-    [username, password, auroraEmail, onboardAxia, enerfloEmails, installerTabs]
+    [username, password, firstName, onboardAxia, installerTabs],
   );
 
   useEffect(() => {
@@ -168,9 +159,17 @@ export default function WelcomeEmailTab() {
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
             Placeholders (for template)
           </h3>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm text-gray-400">Username</label>
+              <label className="text-sm text-gray-400">First name</label>
+              <input
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm text-gray-400">Company email (username)</label>
               <input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -202,29 +201,10 @@ export default function WelcomeEmailTab() {
             <input
               value={installerTabs}
               onChange={(e) => setInstallerTabs(e.target.value)}
-              placeholder="Axia, Tron"
+              placeholder="Tron, EMPWR"
               className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
             />
           </div>
-          <div className="mt-4 flex flex-col gap-1.5">
-            <label className="text-sm text-gray-400">Enerflo logins (one per line)</label>
-            <textarea
-              value={enerfloEmails}
-              onChange={(e) => setEnerfloEmails(e.target.value)}
-              rows={3}
-              className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-white"
-            />
-          </div>
-          {onboardAxia && templateId === "sales_rep" && (
-            <div className="mt-4 flex flex-col gap-1.5 sm:max-w-md">
-              <label className="text-sm text-gray-400">Aurora email (Sales Rep)</label>
-              <input
-                value={auroraEmail}
-                onChange={(e) => setAuroraEmail(e.target.value)}
-                className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white"
-              />
-            </div>
-          )}
         </section>
 
         <section className="space-y-4">

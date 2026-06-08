@@ -1,5 +1,4 @@
 import { buildWorkUpn } from "@/lib/onboarding/normalize";
-import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 import { env } from "@/lib/env";
@@ -40,9 +39,7 @@ function workDomain(): string {
 
 export interface RosterBuildContext {
   workEmail?: string;
-  /** When set, noxEmail is the Enerflo login for this installer tab (+suffix). */
-  installerTabName?: string;
-  /** Legacy single nox email override (prefer installerTabName). */
+  /** Legacy single nox email override. */
   noxEmail?: string;
 }
 
@@ -56,13 +53,7 @@ function buildRosterFieldValues(
   const repName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
   const plainNox = buildWorkUpn(user.first_name, user.last_name, workDomain());
   const workEmail = ctx?.workEmail?.trim() || "";
-  let noxEmail = ctx?.noxEmail?.trim() || "";
-  if (!noxEmail && ctx?.installerTabName?.trim()) {
-    noxEmail = enerfloEmailForInstaller(user.first_name, user.last_name, ctx.installerTabName);
-  }
-  if (!noxEmail) {
-    noxEmail = plainNox;
-  }
+  const noxEmail = ctx?.noxEmail?.trim() || workEmail || plainNox;
 
   return {
     repName,

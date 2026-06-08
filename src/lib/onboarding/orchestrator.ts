@@ -3,10 +3,8 @@ import { normalizeEmail } from "@/lib/onboarding/normalize";
 import {
   enerfloAccountsToStepErrors,
   primaryEnerfloUserId,
-  readEnerfloAccountsFromJob,
   type EnerfloInstallerAccount,
 } from "@/lib/onboarding/enerflo-accounts";
-import { enerfloEmailForInstaller } from "@/lib/onboarding/installer-registry";
 import {
   createEnerfloUserForOnboarding,
   findEnerfloUserByEmail,
@@ -406,7 +404,7 @@ export async function runOnboardingJob(
   const firstName = job.first_name ?? "";
   const lastName = job.last_name ?? "";
 
-  // Enerflo — one account per onboarded installer (+suffix@noxpwr.com).
+  // Enerflo — one account using company work email (same as Microsoft / Terros).
   if (!installerTabs.length) {
     if (job.enerflo_status !== "skipped") {
       await updateJobStep(job.id, { enerflo_status: "skipped" });
@@ -417,24 +415,18 @@ export async function runOnboardingJob(
       if (dryRun) {
         await updateJobStep(job.id, { enerflo_status: "skipped" });
       } else {
-        const accountByTab = new Map<string, EnerfloInstallerAccount>();
-        for (const existing of readEnerfloAccountsFromJob(job)) {
-          accountByTab.set(existing.tabName.toLowerCase(), existing);
+        const email = workEmail.trim();
+        if (!email) {
+          throw new Error("Microsoft work email is required before creating Enerflo account");
         }
 
+        let enerfloUserId: string | undefined;
         let anyCreated = false;
-        let firstFailure: string | undefined;
 
-        for (const tabName of installerTabs) {
-          const email = enerfloEmailForInstaller(firstName, lastName, tabName);
-          const tabKey = tabName.toLowerCase();
-
-          const found = await findEnerfloUserByExactEmail(email, job.sequifi_employee_id);
-          if (found) {
-            accountByTab.set(tabKey, { tabName, email, userId: found.id });
-            continue;
-          }
-
+        const found = await findEnerfloUserByExactEmail(email, job.sequifi_employee_id);
+        if (found) {
+          enerfloUserId = found.id;
+        } else {
           const result = await createEnerfloUserForOnboarding({
             email,
             first_name: firstName,
@@ -443,40 +435,31 @@ export async function runOnboardingJob(
             roles: role.enerfloRoles,
             external_user_id: job.sequifi_employee_id,
             password: tempPassword,
-            alternateEmails: [workEmail],
           });
 
           if (!result.ok) {
-            firstFailure = firstFailure ?? result.error ?? `Enerflo create failed for ${email}`;
-            continue;
+            throw new Error(result.error ?? `Enerflo create failed for ${email}`);
           }
 
-          const enerfloUserId =
+          enerfloUserId =
             result.id ??
             (await findEnerfloUserByExactEmail(email, job.sequifi_employee_id))?.id ??
-            (
-              await findEnerfloUserByEmail(email, [workEmail], job.sequifi_employee_id)
-            )?.id;
+            (await findEnerfloUserByEmail(email, [], job.sequifi_employee_id))?.id;
 
           if (!enerfloUserId) {
-            firstFailure = firstFailure ?? `Enerflo account was not created for ${email}`;
-            continue;
+            throw new Error(`Enerflo account was not created for ${email}`);
           }
 
-          accountByTab.set(tabKey, { tabName, email, userId: enerfloUserId });
           if (result.created) anyCreated = true;
         }
 
-        const accounts = installerTabs
-          .map(tabName => accountByTab.get(tabName.toLowerCase()))
-          .filter((a): a is EnerfloInstallerAccount => Boolean(a?.userId));
+        const accounts: EnerfloInstallerAccount[] = installerTabs.map(tabName => ({
+          tabName,
+          email,
+          userId: enerfloUserId!,
+        }));
 
-        const allPresent = accounts.length === installerTabs.length;
-        Object.assign(stepErrors, enerfloAccountsToStepErrors(accounts.filter(Boolean)));
-
-        if (!allPresent) {
-          throw new Error(firstFailure ?? "One or more Enerflo installer accounts could not be created");
-        }
+        Object.assign(stepErrors, enerfloAccountsToStepErrors(accounts));
 
         if (anyCreated) {
           stepErrors.enerflo_welcome = "sent";
@@ -562,11 +545,7 @@ export async function runOnboardingJob(
 
   job = (await loadJobById(jobId)) ?? job;
 
-  const enerfloEmails = installerTabs.map(tab =>
-    enerfloEmailForInstaller(firstName, lastName, tab),
-  );
-
-  // Welcome email
+  // Welcome email — sent to personal email (welcome_email_to) with new company credentials.
   if (job.welcome_email_status !== "success") {
     try {
       if (dryRun || !isGraphMailConfigured()) {
@@ -585,13 +564,9 @@ export async function runOnboardingJob(
         const { subject, body } = renderWelcomeTemplate(role.welcomeTemplate, {
           username: workEmail,
           password,
-          terrosEmail: workEmail,
+          firstName,
           installerTabs,
-          enerfloEmails,
           onboardAxia: sequifiFields.onboardAxia,
-          ...(sequifiFields.onboardAxia
-            ? { auroraEmail: enerfloEmailForInstaller(firstName, lastName, "Axia") }
-            : {}),
         });
         await sendMailAsUser({ to, subject, body, contentType: "text" });
         await updateJobStep(job.id, { welcome_email_status: "success" });

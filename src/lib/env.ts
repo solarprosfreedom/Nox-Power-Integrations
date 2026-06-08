@@ -130,4 +130,10 @@ export const env = {
   sharepointExcelPath: opt("SHAREPOINT_EXCEL_PATH"),
   /** Worksheet tab for sync testing (e.g. LAZARUS) */
   sharepointTestWorksheetName: opt("SHAREPOINT_TEST_WORKSHEET_NAME", "LAZARUS"),
+  /** Paragon partner sheet — spreadsheet ID from shared Google Sheet URL */
+  paragonSheetsSpreadsheetId: opt("PARAGON_SHEETS_SPREADSHEET_ID"),
+  /** Paragon sheet tab name (case-sensitive) */
+  paragonSheetsTabName: opt("PARAGON_SHEETS_TAB_NAME"),
+  /** When false, cron skips writes (UI manual run still writes). Default false. */
+  paragonSyncEnabled: opt("PARAGON_SYNC_ENABLED", "false") === "true",
 };
