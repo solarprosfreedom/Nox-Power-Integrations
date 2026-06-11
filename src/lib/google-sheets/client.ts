@@ -10,11 +10,16 @@ import {
 
 export { AXIA_HEADERS as ROSTER_HEADERS } from "@/lib/google-sheets/tab-layout";
 
+export function isGoogleServiceAccountConfigured(): boolean {
+  return Boolean(
+    env.googleServiceAccountEmail?.trim() &&
+      env.googleServiceAccountPrivateKey?.trim(),
+  );
+}
+
 export function isGoogleSheetsConfigured(): boolean {
   return Boolean(
-    env.googleSheetsSpreadsheetId?.trim() &&
-      env.googleServiceAccountEmail?.trim() &&
-      env.googleServiceAccountPrivateKey?.trim(),
+    env.googleSheetsSpreadsheetId?.trim() && isGoogleServiceAccountConfigured(),
   );
 }
 
@@ -39,9 +44,9 @@ export function getProductionTabName(): string {
 }
 
 export async function getSheetsClient(): Promise<sheets_v4.Sheets> {
-  if (!isGoogleSheetsConfigured()) {
+  if (!isGoogleServiceAccountConfigured()) {
     throw new Error(
-      "Google Sheets not configured. Set GOOGLE_SHEETS_SPREADSHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY in .env.local.",
+      "Google service account not configured. Set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY in .env.local.",
     );
   }
 

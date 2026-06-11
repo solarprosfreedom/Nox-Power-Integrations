@@ -11,8 +11,10 @@ import {
   retryOnboardingJob,
   runHiredOnboardingNow,
   scanSequifiMicrosoftGapList,
+  submitEmpwrHubSpotForJob,
 } from "@/app/actions/onboarding";
 import type { MicrosoftGapStatus, SequifiMicrosoftGapRow } from "@/lib/onboarding/microsoft-gap-scan";
+import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
 type PreviewState = Awaited<ReturnType<typeof getOnboardingPreview>>;
@@ -173,6 +175,13 @@ export default function SequifiOnboardingTab() {
   const [provisioningId, setProvisioningId] = useState<number | null>(null);
   const [bulkProvisioning, setBulkProvisioning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [hubspotJobId, setHubspotJobId] = useState<string | null>(null);
+
+  function jobHasEmpwrTab(job: OnboardingJob): boolean {
+    return parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.some(
+      tab => tab.trim().toLowerCase() === "empwr",
+    );
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -353,6 +362,26 @@ export default function SequifiOnboardingTab() {
     }
   }
 
+  async function handleEmpwrHubSpot(jobId: string) {
+    setHubspotJobId(jobId);
+    setMessage(null);
+    try {
+      const result = await submitEmpwrHubSpotForJob(jobId);
+      if (result.result === "sent") {
+        setMessage(`EMPWR HubSpot: submitted for job ${jobId}`);
+      } else {
+        setMessage(
+          `EMPWR HubSpot ${result.result}: ${result.error ?? result.stepError ?? "unknown"}`,
+        );
+      }
+      await refresh();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHubspotJobId(null);
+    }
+  }
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div>
@@ -400,6 +429,7 @@ export default function SequifiOnboardingTab() {
               { label: "Graph", ok: config.graphConfigured },
               { label: "Enerflo", ok: config.enerfloConfigured },
               { label: "Terros", ok: config.terrosConfigured },
+              { label: "EMPWR HubSpot", ok: config.empwrHubSpotConfigured },
             ] as const
           ).map(({ label, ok }) => (
             <div
@@ -755,15 +785,33 @@ export default function SequifiOnboardingTab() {
                       <StatusPill status={job.status} />
                     </td>
                     <td className="px-4 py-2">
-                      {job.status !== "completed" && !config?.dryRun && (
-                        <button
-                          type="button"
-                          onClick={() => handleRetry(job.id)}
-                          className="text-xs text-violet-400 hover:text-violet-300"
-                        >
-                          Retry
-                        </button>
-                      )}
+                      <div className="flex flex-col gap-1">
+                        {job.status !== "completed" && !config?.dryRun && (
+                          <button
+                            type="button"
+                            onClick={() => handleRetry(job.id)}
+                            className="text-xs text-violet-400 hover:text-violet-300 text-left"
+                          >
+                            Retry
+                          </button>
+                        )}
+                        {job.status === "completed" &&
+                          config?.empwrHubSpotConfigured &&
+                          jobHasEmpwrTab(job) && (
+                            <button
+                              type="button"
+                              onClick={() => handleEmpwrHubSpot(job.id)}
+                              disabled={hubspotJobId === job.id}
+                              className="text-xs text-orange-400 hover:text-orange-300 text-left disabled:opacity-50"
+                            >
+                              {hubspotJobId === job.id
+                                ? "HubSpot…"
+                                : job.step_errors.empwr_hubspot === "sent"
+                                  ? "HubSpot sent"
+                                  : "EMPWR HubSpot"}
+                            </button>
+                          )}
+                      </div>
                     </td>
                   </tr>
                 ))}

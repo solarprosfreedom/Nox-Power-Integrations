@@ -12,6 +12,7 @@ import {
   fetchEnerfloInstallsPage,
 } from "@/app/actions/enerflo-lists";
 import SetterBackfillPanel from "@/components/enerflo/SetterBackfillPanel";
+import AxiaImportPanel from "@/components/enerflo/AxiaImportPanel";
 import type { ApiLog } from "@/lib/logger";
 
 // ── Inline activity log (Data-tab scoped) ─────────────────────────────────
@@ -116,13 +117,14 @@ function DataActivityLog({ logs }: { logs: ApiLog[] }) {
 
 // ── Nav ───────────────────────────────────────────────────────────────────
 
-type DataView = "leads" | "deals" | "installs" | "setter-backfill" | "logs";
+type DataView = "leads" | "deals" | "installs" | "setter-backfill" | "axia-import" | "logs";
 
 const VIEW_OPS: Record<DataView, string[]> = {
   leads:            ["list_leads_page"],
   deals:            ["list_deals_page"],
   installs:         ["list_installs_page"],
   "setter-backfill": [],
+  "axia-import":    [],
   logs:             [],
 };
 
@@ -131,6 +133,7 @@ const NAV: { id: DataView; label: string; icon: string }[] = [
   { id: "deals",            label: "Deals",           icon: "💰" },
   { id: "installs",         label: "Installs",        icon: "🔧" },
   { id: "setter-backfill",  label: "Setter Backfill", icon: "👤" },
+  { id: "axia-import",      label: "Axia Import",     icon: "📥" },
   { id: "logs",             label: "Activity Logs",   icon: "📋" },
 ];
 
@@ -241,6 +244,8 @@ export default function EnerfloDataPanel({ logs, onLog: _onLog }: Props) {
         })()}
 
         {view === "setter-backfill" && <SetterBackfillPanel />}
+
+        {view === "axia-import" && <AxiaImportPanel />}
 
         {/* Activity Logs */}
         {view === "logs" && (

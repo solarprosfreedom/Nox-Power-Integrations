@@ -136,4 +136,18 @@ export const env = {
   paragonSheetsTabName: opt("PARAGON_SHEETS_TAB_NAME"),
   /** When false, cron skips writes (UI manual run still writes). Default false. */
   paragonSyncEnabled: opt("PARAGON_SYNC_ENABLED", "false") === "true",
+  /** Axia install backlog sheet — spreadsheet ID from Google Sheet URL */
+  installSheetsSpreadsheetId: opt("INSTALL_SHEETS_SPREADSHEET_ID"),
+  /** Axia install backlog tab name (case-sensitive) */
+  installSheetsTabName: opt("INSTALL_SHEETS_TAB_NAME", "Sheet1"),
+  /** When false, cron skips Enerflo creates (dashboard manual run still creates). Default false. */
+  installSheetSyncEnabled: opt("INSTALL_SHEET_SYNC_ENABLED", "false") === "true",
+  /** Fixed assign_to_email for Axia install sheet imports (overrides sheet Assign_To_Email column). */
+  installSheetAssignToEmail: opt("INSTALL_SHEET_ASSIGN_TO_EMAIL", "jonaslim@noxpwr.com"),
+  /** EMPWR partner onboarding — HubSpot form submit (NA2 unauthenticated API) */
+  hubspotEmpwrPortalId: opt("HUBSPOT_EMPWR_PORTAL_ID", "244696383"),
+  hubspotEmpwrFormGuid: opt("HUBSPOT_EMPWR_FORM_GUID", "bf39525c-6a76-4679-acca-459f92f20ded"),
+  hubspotEmpwrApiBase: opt("HUBSPOT_EMPWR_API_BASE", "https://api-na2.hsforms.com"),
+  hubspotEmpwrCompany: opt("HUBSPOT_EMPWR_COMPANY", "Nox Power"),
+  hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "true") === "true",
 };

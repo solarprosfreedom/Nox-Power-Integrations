@@ -9,6 +9,21 @@ import type {
 type LoadPhase = "idle" | "loading-reps" | "error";
 type ScanPhase = "idle" | "scanning" | "done" | "error";
 type RowRunState = "idle" | "running" | "done" | "error";
+type GlobalRunPhase = "idle" | "running" | "done" | "error";
+
+interface GlobalRunProgress {
+  current: number;
+  total: number;
+  repName: string;
+}
+
+interface GlobalRunSummary {
+  repsProcessed: number;
+  totalUpdated: number;
+  totalSkipped: number;
+  repErrors: number;
+  dryRun: boolean;
+}
 
 interface RowStatus {
   state: RowRunState;
@@ -162,6 +177,10 @@ export default function SetterBackfillPanel() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [dryRun, setDryRun] = useState(false);
   const [rowStatus, setRowStatus] = useState<Record<number, RowStatus>>({});
+  const [globalRunPhase, setGlobalRunPhase] = useState<GlobalRunPhase>("idle");
+  const [globalProgress, setGlobalProgress] = useState<GlobalRunProgress | null>(null);
+  const [globalSummary, setGlobalSummary] = useState<GlobalRunSummary | null>(null);
+  const [globalError, setGlobalError] = useState<string | null>(null);
 
   const visibleRows = useMemo(() => {
     return allReps.map(rep => {
@@ -170,7 +189,9 @@ export default function SetterBackfillPanel() {
     });
   }, [allReps, countById]);
 
-  const anyRowBusy = Object.values(rowStatus).some(s => s.state === "running");
+  const anyRowBusy =
+    globalRunPhase === "running" ||
+    Object.values(rowStatus).some(s => s.state === "running");
   const scanReady = scanPhase === "done";
   const repsLoaded = allReps.length > 0;
 
@@ -188,6 +209,10 @@ export default function SetterBackfillPanel() {
       setScanRows(0);
       setScanError(null);
       setRowStatus({});
+      setGlobalRunPhase("idle");
+      setGlobalProgress(null);
+      setGlobalSummary(null);
+      setGlobalError(null);
       return;
     }
 
@@ -212,6 +237,10 @@ export default function SetterBackfillPanel() {
     setScanPage(0);
     setScanRows(0);
     setRowStatus({});
+    setGlobalRunPhase("idle");
+    setGlobalProgress(null);
+    setGlobalSummary(null);
+    setGlobalError(null);
 
     try {
       const { summaries, eligibleByOwner: eligible } = await consumeScanStream(
@@ -232,22 +261,9 @@ export default function SetterBackfillPanel() {
     }
   }, [allReps, anyRowBusy, repsLoaded, scanPhase]);
 
-  const runBackfill = useCallback(async (rep: OwnerSetterSummary) => {
-    const ownerUserId = rep.ownerUserId;
-    const cachedIds = eligibleByOwner.get(ownerUserId) ?? [];
-
-    setRowStatus(prev => ({
-      ...prev,
-      [ownerUserId]: { state: "running" },
-    }));
-
-    try {
-      const result = await consumeBackfillStream(
-        ownerUserId,
-        dryRun,
-        cachedIds,
-        rep.totalLeads,
-      );
+  const applyBackfillResult = useCallback(
+    (rep: OwnerSetterSummary, result: EnerfloSetterBackfillResult, cachedIds: string[]) => {
+      const ownerUserId = rep.ownerUserId;
 
       setRowStatus(prev => ({
         ...prev,
@@ -272,6 +288,28 @@ export default function SetterBackfillPanel() {
           return next;
         });
       }
+    },
+    [dryRun],
+  );
+
+  const runBackfill = useCallback(async (rep: OwnerSetterSummary) => {
+    const ownerUserId = rep.ownerUserId;
+    const cachedIds = eligibleByOwner.get(ownerUserId) ?? [];
+
+    setRowStatus(prev => ({
+      ...prev,
+      [ownerUserId]: { state: "running" },
+    }));
+
+    try {
+      const result = await consumeBackfillStream(
+        ownerUserId,
+        dryRun,
+        cachedIds,
+        rep.totalLeads,
+      );
+      applyBackfillResult(rep, result, cachedIds);
+      return result;
     } catch (e) {
       setRowStatus(prev => ({
         ...prev,
@@ -280,8 +318,60 @@ export default function SetterBackfillPanel() {
           error: e instanceof Error ? e.message : String(e),
         },
       }));
+      throw e;
     }
-  }, [dryRun, eligibleByOwner]);
+  }, [applyBackfillResult, dryRun, eligibleByOwner]);
+
+  const runAllBackfill = useCallback(async () => {
+    if (!scanReady || globalRunPhase === "running" || anyRowBusy) return;
+
+    const targets = visibleRows
+      .filter(rep => rep.missingSetter > 0)
+      .filter(rep => (eligibleByOwner.get(rep.ownerUserId)?.length ?? 0) > 0)
+      .sort((a, b) => b.missingSetter - a.missingSetter);
+
+    if (targets.length === 0) return;
+
+    setGlobalRunPhase("running");
+    setGlobalError(null);
+    setGlobalSummary(null);
+    setGlobalProgress({ current: 0, total: targets.length, repName: "" });
+
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+    let repErrors = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      const rep = targets[i]!;
+      setGlobalProgress({
+        current: i + 1,
+        total: targets.length,
+        repName: rep.ownerName,
+      });
+
+      try {
+        const result = await runBackfill(rep);
+        totalUpdated += result.updated;
+        totalSkipped += result.skipped;
+      } catch {
+        repErrors++;
+      }
+    }
+
+    setGlobalRunPhase(repErrors > 0 ? "error" : "done");
+    setGlobalSummary({
+      repsProcessed: targets.length,
+      totalUpdated,
+      totalSkipped,
+      repErrors,
+      dryRun,
+    });
+    setGlobalProgress(null);
+
+    if (repErrors > 0) {
+      setGlobalError(`${repErrors} rep(s) failed — see row errors below. Others may have completed.`);
+    }
+  }, [anyRowBusy, dryRun, eligibleByOwner, globalRunPhase, runBackfill, scanReady, visibleRows]);
 
   const loadButtonLabel = (() => {
     if (loadPhase === "loading-reps") return "Loading reps…";
@@ -290,6 +380,14 @@ export default function SetterBackfillPanel() {
   })();
 
   const repsWithMissing = visibleRows.filter(r => r.missingSetter > 0).length;
+  const totalEligibleCustomers = useMemo(() => {
+    let total = 0;
+    for (const rep of visibleRows) {
+      if (rep.missingSetter <= 0) continue;
+      total += eligibleByOwner.get(rep.ownerUserId)?.length ?? 0;
+    }
+    return total;
+  }, [eligibleByOwner, visibleRows]);
 
   return (
     <div className="px-8 py-8">
@@ -297,9 +395,9 @@ export default function SetterBackfillPanel() {
         <div>
           <h2 className="text-xl font-semibold text-white">Setter Backfill</h2>
           <p className="text-sm text-gray-500 mt-1 max-w-2xl">
-            Copy Lead Owner to Setter on existing customers. Only updates rows where Setter is empty —
-            never overwrites an existing setter. Load all reps, scan all customers once, then backfill
-            per rep from the cache.
+            Copy Lead Owner to Setter on existing customers. Golden rule: only updates rows where Setter
+            is empty — never overwrites an existing setter. Scan once, then backfill per rep or run all
+            reps globally.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -334,6 +432,22 @@ export default function SetterBackfillPanel() {
                   : "Scan all customers"}
             </button>
           )}
+          {scanReady && repsWithMissing > 0 && (
+            <button
+              type="button"
+              onClick={runAllBackfill}
+              disabled={anyRowBusy || totalEligibleCustomers === 0}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {globalRunPhase === "running"
+                ? globalProgress
+                  ? `${dryRun ? "Previewing" : "Backfilling"} all… ${globalProgress.current}/${globalProgress.total}`
+                  : "Backfilling all…"
+                : dryRun
+                  ? "Preview all reps"
+                  : "Backfill all reps"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -362,10 +476,38 @@ export default function SetterBackfillPanel() {
         </div>
       )}
 
+      {globalRunPhase === "running" && globalProgress && (
+        <div className="mb-6 rounded-lg border border-emerald-900/40 bg-emerald-950/20 px-4 py-3 text-sm text-emerald-200">
+          {dryRun ? "Previewing" : "Backfilling"} all reps ({globalProgress.current}/
+          {globalProgress.total}) — <strong>{globalProgress.repName}</strong>
+          {!dryRun && " · empty setters only, never overwriting existing setters"}
+        </div>
+      )}
+
+      {globalSummary && globalRunPhase === "done" && (
+        <div className="mb-6 rounded-lg border border-emerald-800 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-200">
+          ✓ Global {globalSummary.dryRun ? "preview" : "backfill"} complete —{" "}
+          {globalSummary.repsProcessed} rep(s),{" "}
+          {globalSummary.dryRun ? "would update" : "updated"} {globalSummary.totalUpdated},{" "}
+          skipped {globalSummary.totalSkipped}
+        </div>
+      )}
+
+      {globalError && (
+        <div className="mb-6 rounded-lg border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          {globalError}
+        </div>
+      )}
+
       {visibleRows.length > 0 && (
         <p className="mb-4 text-xs text-gray-500">
           {allReps.length} reps loaded
-          {scanReady && repsWithMissing > 0 && ` · ${repsWithMissing} with missing setter`}
+          {scanReady && repsWithMissing > 0 && (
+            <>
+              {` · ${repsWithMissing} with missing setter`}
+              {totalEligibleCustomers > 0 && ` · ${totalEligibleCustomers.toLocaleString()} customers eligible`}
+            </>
+          )}
           {!scanReady && " · scan all customers to load counts"}
         </p>
       )}
@@ -379,7 +521,7 @@ export default function SetterBackfillPanel() {
             <br />
             2. Scan all customers — one pass, counts for everyone.
             <br />
-            3. Backfill setter — per rep, from the scan cache.
+            3. Backfill setter — per rep, or use Backfill all reps after scan.
           </p>
         </div>
       )}

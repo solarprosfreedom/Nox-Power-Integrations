@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "fetch-tape-customers": "npx tsx scripts/fetch-tape-customers.ts"
   },
   "dependencies": {
     "@coperniq/node-sdk": "^1.1.3",

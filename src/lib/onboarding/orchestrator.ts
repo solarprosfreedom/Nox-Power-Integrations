@@ -29,6 +29,7 @@ import { filterSequifiUsersNeedingProvisioning, classifyMicrosoftForSequifiUser,
 import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, ProvisionUserResult, SequifiUserRecord } from "@/lib/onboarding/types";
 import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
 import { sendAxiaOnboardingNotification } from "@/lib/onboarding/axia-notify";
+import { submitEmpwrHubSpotForm } from "@/lib/onboarding/empwr-hubspot";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -610,6 +611,8 @@ export async function runOnboardingJob(
     await sendOnboardingAdminNotification(job);
     job = (await loadJobById(jobId)) ?? job;
     await sendAxiaOnboardingNotification(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await submitEmpwrHubSpotForm(job);
     job = (await loadJobById(jobId)) ?? job;
   }
 

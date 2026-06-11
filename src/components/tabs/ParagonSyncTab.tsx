@@ -107,8 +107,9 @@ export default function ParagonSyncTab() {
 
       <div className="rounded-lg border border-teal-800 bg-teal-950/40 px-4 py-3 text-sm text-teal-200">
         <strong>Paragon sheet sync.</strong> Writes go to tab{" "}
-        <strong>{config?.tabName ?? "PARAGON_SHEETS_TAB_NAME"}</strong>. Daily cron runs at 6:00
-        UTC when <code className="text-teal-300">PARAGON_SYNC_ENABLED=true</code>.
+        <strong>{config?.tabName ?? "PARAGON_SHEETS_TAB_NAME"}</strong>. Cron runs hourly at the
+        top of each hour (UTC) when{" "}
+        <code className="text-teal-300">PARAGON_SYNC_ENABLED=true</code>.
       </div>
 
       {config && (

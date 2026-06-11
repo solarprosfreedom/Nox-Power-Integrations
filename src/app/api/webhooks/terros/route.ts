@@ -574,7 +574,11 @@ function buildEnerfloPayloadFromTerros(
   };
   if (email) lead.email = email;
   if (phone) lead.mobile = phone;
-  if (resolvedOwnerEmail) lead.assign_to_email = resolvedOwnerEmail;
+  if (resolvedOwnerEmail) {
+    lead.assign_to_email = resolvedOwnerEmail;
+    // Account create only — same rep as Terros owner; updates do not touch setter.
+    lead.setter_email = resolvedOwnerEmail;
+  }
   return { lead };
 }
 
@@ -622,7 +626,7 @@ export async function GET() {
       { entity: "Event",   actions: ["add"] },
     ],
     outbound: [
-      "Account add/update: Creates or updates an Enerflo customer via REST; resolves the Terros account owner's canonical email via /user/get and sets assign_to_email. Links Terros externalLeadId after create.",
+      "Account add: Creates an Enerflo customer via lead/add; sets assign_to_email and setter_email from the Terros account owner. Account update: assign_to_email only (does not overwrite setter). Links Terros externalLeadId after create.",
       "Event add: Creates an Enerflo appointment via POST /api/v1/appointments; resolves numeric customer ID from externalLeadId and numeric user ID from owner.email. Stamps [Enerflo:ID] back onto the Terros event notes.",
     ],
   });

@@ -42,3 +42,4 @@ next-env.d.ts
 
 # local data storage (logs, etc.)
 /data/
+customers.json
