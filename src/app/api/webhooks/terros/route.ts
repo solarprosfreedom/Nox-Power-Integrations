@@ -1,3 +1,4 @@
+// Terros webhook handler — account + event sync to Enerflo.
 import { NextRequest, NextResponse, after } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
