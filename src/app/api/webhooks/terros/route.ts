@@ -984,8 +984,42 @@ async function handleUpdate(
   }
 
   if (!customerUuid) {
-    const skipReason =
-      "No Enerflo customer id found (externalLeadId on Terros, integration_record_id search, or email match). Ensure the customer exists in both systems with the same email.";
+    // No mapping found via any lookup. For leads created before the mapping-save fix,
+    // try a lead/add upsert: Enerflo matches existing leads by integration_record_id
+    // and returns "Lead Updated" with the existing ID — no duplicate is created.
+    // This self-heals old unmapped accounts on their next Terros update.
+    const upsertBody = buildEnerfloPayloadFromTerros(merged, terrosAccountId);
+    const upsertLog = await enerfloRequest({
+      operation: "webhook:terros:update-enerflo-customer",
+      method: "POST",
+      path: "/api/v1/partner/action/lead/add",
+      body: upsertBody,
+    });
+
+    const upsertId = upsertLog.rawResponseText
+      ? parseEnerfloCreateCustomerId(upsertLog.rawResponseText)
+      : null;
+
+    if (upsertLog.ok && upsertId) {
+      const numericId = Number(upsertId);
+      if (Number.isFinite(numericId)) {
+        await saveCustomerAccountMapping(terrosAccountId, numericId);
+      }
+      if (terrosKey) {
+        await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, upsertId);
+      }
+      return NextResponse.json({
+        received: true,
+        action: "update",
+        terrosAccountId,
+        enerfloCustomerId: upsertId,
+        success: true,
+        enerfloStatus: upsertLog.status,
+        updatePath: "v1-lead-add-upsert-fallback",
+      });
+    }
+
+    // Upsert also failed — truly no matching lead in Enerflo.
     await writeApiLog({
       operation: "webhook:terros:update-enerflo-customer-skipped",
       vendor: "terros",
@@ -999,6 +1033,7 @@ async function handleUpdate(
         reason: "no-customer-id",
         residentEmail,
         externalLeadId: merged.externalLeadId ?? webhookData.externalLeadId ?? null,
+        upsertStatus: upsertLog.status,
       }).slice(0, 400),
     });
     return NextResponse.json({
@@ -1006,7 +1041,7 @@ async function handleUpdate(
       action: "update",
       terrosAccountId,
       skipped: true,
-      reason: skipReason,
+      reason: "No Enerflo customer found via mapping, externalLeadId, email, or lead/add upsert.",
     });
   }
 
