@@ -785,14 +785,35 @@ async function handleAdd(
   terrosAccountId: string,
   data: TerrosAccountWebhookData
 ): Promise<NextResponse> {
+  // Fetch the full account from Terros so we have resident data even when the
+  // "add" webhook payload has an empty resident: {} object. Terros sometimes
+  // fires the webhook before the resident is included in the payload, but the
+  // account/get API always returns the complete record.
+  let full: Record<string, unknown> | null = null;
+  if (terrosKey) {
+    full = await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId);
+  }
+
+  const enrichedData: TerrosAccountWebhookData = {
+    ...data,
+    ...(full
+      ? {
+          resident: {
+            ...terrosResidentFromAccount(full),
+            ...data.resident, // webhook data takes precedence if it has values
+          },
+        }
+      : {}),
+  };
+
   const resolvedOwnerEmail = terrosKey
-    ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, data.owner)
+    ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, enrichedData.owner ?? data.owner)
     : undefined;
 
   // Use the raw Terros owner email for the Enerflo user lookup so
   // findEnerfloUserByEmail can try BOTH the +alias form and the stripped form.
   // (Some reps are registered in Enerflo with +axia, others without.)
-  const rawOwnerEmail = data.owner?.email?.trim();
+  const rawOwnerEmail = (enrichedData.owner ?? data.owner)?.email?.trim();
   const emailForLookup = rawOwnerEmail ?? resolvedOwnerEmail;
   let verifiedOwnerEmail: string | undefined;
   if (emailForLookup) {
@@ -803,7 +824,7 @@ async function handleAdd(
     verifiedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
   }
 
-  const createBody = buildEnerfloPayloadFromTerros(data, terrosAccountId, verifiedOwnerEmail);
+  const createBody = buildEnerfloPayloadFromTerros(enrichedData, terrosAccountId, verifiedOwnerEmail);
 
   const log = await enerfloRequest({
     operation: "webhook:terros:create-enerflo-customer",
@@ -819,8 +840,8 @@ async function handleAdd(
   // find the account by UUID via account/upsert later.
   let enerfloUuid: string | null = null;
   if (log.ok && newId) {
-    const residentEmail = typeof data.resident === "object" && data.resident !== null
-      ? (data.resident as Record<string, unknown>).email as string | undefined
+    const residentEmail = typeof enrichedData.resident === "object" && enrichedData.resident !== null
+      ? (enrichedData.resident as Record<string, unknown>).email as string | undefined
       : undefined;
     if (residentEmail) {
       const { ok: searchOk, data: searchData } = await enerfloRequestParsed<unknown>({
@@ -891,8 +912,26 @@ async function handleUpdate(
     responsePreview: JSON.stringify({ terrosAccountId, resident: webhookData.resident, externalLeadId: webhookData.externalLeadId }).slice(0, 300),
   });
 
+  // Fast path first: Supabase mapping lookup (milliseconds, no HTTP to Terros).
+  // Only fall back to fetchTerrosAccountById when we genuinely need data it provides:
+  //   a) Supabase has no mapping yet → need externalLeadId from the full Terros account, OR
+  //   b) The webhook resident is empty → need to fetch resident data from Terros.
+  // Skipping this call in the common case (resident-add update after handleAdd) saves
+  // 2–6 s and keeps us well within Terros's webhook delivery timeout.
+  const mappedNumericId =
+    (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
+    (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
+
+  const webhookHasResident = Boolean(
+    webhookData.resident?.firstName ||
+    webhookData.resident?.lastName ||
+    webhookData.resident?.name ||
+    webhookData.resident?.email
+  );
+  const needsFullFetch = terrosKey && (!mappedNumericId || !webhookHasResident);
+
   let full: Record<string, unknown> | null = null;
-  if (terrosKey) {
+  if (needsFullFetch) {
     full = await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId);
   }
 
@@ -918,11 +957,6 @@ async function handleUpdate(
         }
       : {}),
   };
-
-  // Enerflo→Terros customers often have empty email and never appear in v1 search.
-  const mappedNumericId =
-    (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
-    (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
 
   let customerUuid: string | null = mappedNumericId != null ? String(mappedNumericId) : null;
 
