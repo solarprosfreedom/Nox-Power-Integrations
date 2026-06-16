@@ -153,15 +153,19 @@ async function resolveTerrosOwnerEmail(
 
   if (!rawEmail && !ownerId) return undefined;
 
+  // If the owner already has a valid email, use it directly — no Terros API call needed.
+  // The API call only adds latency and returns the same value. We only need the API call
+  // when the owner has only a userId (no email) to resolve the canonical email.
+  if (rawEmail && rawEmail.includes("@")) return stripEmailAlias(rawEmail);
+
   const url = `${terrosBase}/user/get`;
   const headers = {
     "Content-Type": "application/json",
     Authorization: `ApiKey ${terrosKey}`,
   };
 
-  // Try email lookup first, then ID-based lookups
+  // No email available — resolve from userId via Terros API
   const bodies: Record<string, unknown>[] = [];
-  if (rawEmail && rawEmail.includes("@")) bodies.push({ email: rawEmail });
   if (ownerId) {
     bodies.push({ userId: ownerId });
     bodies.push({ id: ownerId });
@@ -186,8 +190,7 @@ async function resolveTerrosOwnerEmail(
     }
   }
 
-  // Fall back to alias-stripped raw email so assignment is still attempted
-  return rawEmail && rawEmail.includes("@") ? stripEmailAlias(rawEmail) : undefined;
+  return undefined;
 }
 
 function mapAddress(a?: TerrosAddress): {
@@ -785,13 +788,23 @@ async function handleAdd(
   terrosAccountId: string,
   data: TerrosAccountWebhookData
 ): Promise<NextResponse> {
-  // Fetch the full account from Terros so we have resident data even when the
-  // "add" webhook payload has an empty resident: {} object. Terros sometimes
-  // fires the webhook before the resident is included in the payload, but the
-  // account/get API always returns the complete record.
-  let full: Record<string, unknown> | null = null;
-  if (terrosKey) {
-    full = await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId);
+  // Fetch the full account from Terros (for resident name) in parallel with the
+  // Enerflo user lookup (for owner/setter). Running them concurrently halves
+  // the latency before we can create the lead and save the Supabase mapping,
+  // which reduces the race-condition window for the follow-up update webhook.
+  const rawOwnerEmail = data.owner?.email?.trim();
+  const ownerEmailForLookup = rawOwnerEmail
+    ?? (terrosKey ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, data.owner) : undefined);
+
+  const [full, verifiedOwnerEmailResult] = await Promise.all([
+    terrosKey ? fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId) : Promise.resolve(null),
+    ownerEmailForLookup ? findEnerfloUserByEmail(ownerEmailForLookup) : Promise.resolve(undefined),
+  ]);
+
+  let verifiedOwnerEmail: string | undefined = verifiedOwnerEmailResult ?? undefined;
+  // Fall back to default owner (X Lead) if no owner could be resolved
+  if (!verifiedOwnerEmail && env.defaultOwnerEmail) {
+    verifiedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
   }
 
   const enrichedData: TerrosAccountWebhookData = {
@@ -805,24 +818,6 @@ async function handleAdd(
         }
       : {}),
   };
-
-  const resolvedOwnerEmail = terrosKey
-    ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, enrichedData.owner ?? data.owner)
-    : undefined;
-
-  // Use the raw Terros owner email for the Enerflo user lookup so
-  // findEnerfloUserByEmail can try BOTH the +alias form and the stripped form.
-  // (Some reps are registered in Enerflo with +axia, others without.)
-  const rawOwnerEmail = (enrichedData.owner ?? data.owner)?.email?.trim();
-  const emailForLookup = rawOwnerEmail ?? resolvedOwnerEmail;
-  let verifiedOwnerEmail: string | undefined;
-  if (emailForLookup) {
-    verifiedOwnerEmail = await findEnerfloUserByEmail(emailForLookup);
-  }
-  // Fall back to default owner (X Lead) if no owner could be resolved
-  if (!verifiedOwnerEmail && env.defaultOwnerEmail) {
-    verifiedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
-  }
 
   const createBody = buildEnerfloPayloadFromTerros(enrichedData, terrosAccountId, verifiedOwnerEmail);
 
@@ -888,8 +883,7 @@ async function handleAdd(
     skipped: false,
     debug: {
       rawOwnerEmail: rawOwnerEmail ?? null,
-      emailForLookup: emailForLookup ?? null,
-      resolvedOwnerEmail: resolvedOwnerEmail ?? null,
+      emailForLookup: ownerEmailForLookup ?? null,
       verifiedOwnerEmail: verifiedOwnerEmail ?? null,
     },
   });
@@ -912,51 +906,27 @@ async function handleUpdate(
     responsePreview: JSON.stringify({ terrosAccountId, resident: webhookData.resident, externalLeadId: webhookData.externalLeadId }).slice(0, 300),
   });
 
-  // Fast path first: Supabase mapping lookup (milliseconds, no HTTP to Terros).
-  // Only fall back to fetchTerrosAccountById when we genuinely need data it provides:
-  //   a) Supabase has no mapping yet → need externalLeadId from the full Terros account, OR
-  //   b) The webhook resident is empty → need to fetch resident data from Terros.
-  // Skipping this call in the common case (resident-add update after handleAdd) saves
-  // 2–6 s and keeps us well within Terros's webhook delivery timeout.
-  const mappedNumericId =
+  // Fast-path: Supabase mapping lookup (milliseconds, no HTTP to Terros).
+  // We intentionally NEVER call fetchTerrosAccountById here — it makes up to 3
+  // serial HTTP calls and routinely exceeds Terros's ~10s webhook delivery timeout.
+  // The webhook payload already carries the resident and address data we need.
+  //
+  // Race-condition guard: Terros fires the "update" webhook immediately after "add".
+  // handleAdd may still be in-flight (saving the mapping). If no mapping is found,
+  // wait 2.5s and retry once — that's enough time for handleAdd to finish.
+  let mappedNumericId =
     (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
     (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
 
-  const webhookHasResident = Boolean(
-    webhookData.resident?.firstName ||
-    webhookData.resident?.lastName ||
-    webhookData.resident?.name ||
-    webhookData.resident?.email
-  );
-  const needsFullFetch = terrosKey && (!mappedNumericId || !webhookHasResident);
-
-  let full: Record<string, unknown> | null = null;
-  if (needsFullFetch) {
-    full = await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId);
+  if (mappedNumericId == null) {
+    await new Promise<void>(resolve => setTimeout(resolve, 2500));
+    mappedNumericId =
+      (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
+      (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
   }
 
-  const merged: TerrosAccountWebhookData = {
-    ...webhookData,
-    ...(full
-      ? {
-          address: {
-            ...(typeof full.location === "object" && full.location
-              ? terrosLocationToAddress(full.location as Record<string, unknown>)
-              : typeof full.address === "object" && full.address
-                ? (full.address as TerrosAddress)
-                : {}),
-            ...webhookData.address,
-          },
-          resident: {
-            ...terrosResidentFromAccount(full),
-            ...webhookData.resident,
-          },
-          externalLeadId:
-            (typeof full.externalLeadId === "string" ? full.externalLeadId : undefined) ??
-            webhookData.externalLeadId,
-        }
-      : {}),
-  };
+  // Use webhook data directly — no Terros API fetch needed.
+  const merged: TerrosAccountWebhookData = webhookData;
 
   let customerUuid: string | null = mappedNumericId != null ? String(mappedNumericId) : null;
 
@@ -965,8 +935,7 @@ async function handleUpdate(
       (merged.externalLeadId && UUID_RE.test(merged.externalLeadId) ? merged.externalLeadId : null) ??
       (webhookData.externalLeadId && UUID_RE.test(webhookData.externalLeadId)
         ? webhookData.externalLeadId
-        : null) ??
-      (full ? pickExternalLeadId(full) : null);
+        : null);
   }
 
   if (!customerUuid) {
@@ -984,10 +953,7 @@ async function handleUpdate(
   // handleAdd stores the Enerflo numeric ID directly. UUID_RE rejects it above, so we
   // pick it up here so subsequent resident-add updates can still reach Enerflo.
   if (!customerUuid) {
-    const rawId =
-      merged.externalLeadId ??
-      webhookData.externalLeadId ??
-      (typeof full?.externalLeadId === "string" ? full.externalLeadId : null);
+    const rawId = merged.externalLeadId ?? webhookData.externalLeadId ?? null;
     if (rawId && /^\d+$/.test(rawId.trim())) customerUuid = rawId.trim();
   }
 
@@ -1020,10 +986,7 @@ async function handleUpdate(
 
   // Opportunistic UUID backfill: if the stored externalLeadId is not a UUID,
   // upgrade it when customerUuid is a real UUID (not a numeric v1 ID).
-  const storedExternalLeadId =
-    (typeof full?.externalLeadId === "string" ? full.externalLeadId : null) ??
-    webhookData.externalLeadId ??
-    null;
+  const storedExternalLeadId = webhookData.externalLeadId ?? null;
   const customerIdIsUuid = UUID_RE.test(customerUuid);
   const needsUuidBackfill =
     terrosKey &&
