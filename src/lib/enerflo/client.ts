@@ -1,6 +1,30 @@
 import { env } from "@/lib/env";
 import { writeApiLog, preview, type ApiLog } from "@/lib/logger";
 
+/**
+ * Per-request timeout for Enerflo calls. Without this, a slow/struggling Enerflo
+ * (we've seen 504s on their appointment + scheduling subsystems) makes fetch hang
+ * indefinitely. In a background after() task that hang runs until Vercel's 60s
+ * function limit kills the whole task mid-flight — so the lead/add upsert fallback
+ * never runs and the update is silently dropped. A bounded timeout makes each call
+ * fail fast so the handler can fall through to its fallback and still log an outcome.
+ */
+const ENERFLO_FETCH_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = ENERFLO_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function enerfloRequest(options: {
   operation: string;
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -39,7 +63,7 @@ export async function enerfloRequest(options: {
   let rawResponseText = "";
 
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: options.method,
       headers: {
         "Content-Type": "application/json",
@@ -135,7 +159,7 @@ export async function enerfloRequestParsed<T = unknown>(options: {
   let rawResponseText = "";
 
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: options.method,
       headers: {
         "Content-Type": "application/json",
