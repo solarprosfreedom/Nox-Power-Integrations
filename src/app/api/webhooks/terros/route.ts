@@ -1053,14 +1053,35 @@ async function handleUpdate(
     });
   }
 
-  const path = `/api/v3/customers/${encodeURIComponent(enerfloNumericId)}`;
-  const method = "PUT" as const;
-  const log = await enerfloRequest({
+  // Try v3 customers PUT first. If Enerflo returns 403 it means this record is
+  // still an unconverted lead (created via lead/add) — v3/customers only covers
+  // records that have progressed to a full customer/deal. In that case fall back
+  // to re-posting lead/add with the same integration_record_id, which acts as an
+  // upsert and returns "Lead Updated" without creating a duplicate.
+  const v3Path = `/api/v3/customers/${encodeURIComponent(enerfloNumericId)}`;
+  let log = await enerfloRequest({
     operation: "webhook:terros:update-enerflo-customer",
-    method,
-    path,
+    method: "PUT" as const,
+    path: v3Path,
     body: updateBody,
   });
+
+  let updatePath = "v3-customer-put";
+  if (!log.ok && log.status === 403) {
+    // Record is still a lead — use lead/add upsert via integration_record_id.
+    const leadUpsertBody = buildEnerfloPayloadFromTerros(
+      merged,
+      terrosAccountId,
+      resolvedOwnerEmail
+    );
+    log = await enerfloRequest({
+      operation: "webhook:terros:update-enerflo-customer",
+      method: "POST" as const,
+      path: "/api/v1/partner/action/lead/add",
+      body: leadUpsertBody,
+    });
+    updatePath = "v1-lead-upsert";
+  }
 
   if (log.ok) {
     const numericId = Number(enerfloNumericId);
@@ -1078,6 +1099,7 @@ async function handleUpdate(
     customerLookupSource: mappedNumericId != null ? "account-id-map" : "search",
     success: log.ok,
     enerfloStatus: log.status,
+    updatePath,
     fieldsSent: Object.keys(updateBody),
     uuidBackfill: needsUuidBackfill ? "attempted" : "not-needed",
   });
