@@ -945,14 +945,20 @@ async function handleUpdate(
   // Race-condition guard: Terros fires the "update" webhook immediately after
   // "add", so handleAdd may still be in-flight (creating the lead + saving the
   // mapping). Poll the mapping a few times with short delays until it appears.
-  // This runs in the background (after()), so there's no Terros timeout pressure
-  // — we can afford to wait for a slow Enerflo create under bulk load.
+  //
+  // Keep this poll SHORT. The handler runs in a background after() task; under a
+  // webhook storm a long-lived task (with a multi-second sleep) can be starved or
+  // recycled by the serverless runtime before it finishes — silently dropping the
+  // update. We don't need a long wait anyway: if no mapping appears, the lead/add
+  // upsert fallback below resolves the lead by integration_record_id, which is
+  // idempotent and works whether the lead already exists or handleAdd hasn't
+  // finished creating it yet (no duplicate is created either way).
   let mappedNumericId =
     (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
     (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
 
-  const MAX_MAPPING_RETRIES = 8;
-  const MAPPING_RETRY_DELAY_MS = 2000;
+  const MAX_MAPPING_RETRIES = 3;
+  const MAPPING_RETRY_DELAY_MS = 1500;
   for (let attempt = 0; mappedNumericId == null && attempt < MAX_MAPPING_RETRIES; attempt++) {
     await new Promise<void>(resolve => setTimeout(resolve, MAPPING_RETRY_DELAY_MS));
     mappedNumericId =
