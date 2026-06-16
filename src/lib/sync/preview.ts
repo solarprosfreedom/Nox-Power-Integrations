@@ -606,9 +606,10 @@ export async function buildUsersPreview(): Promise<UsersPreviewResult> {
     // We cannot rely on the ?company_id= API param because super-company keys
     // get HTTP 403 or wrong results. Instead we detect the company from the user objects.
     (async () => {
+      // Enerflo ignores `pageSize` (caps at 100) — use `per_page` instead.
       async function fetchUserPage(page: number, extra = ""): Promise<Record<string, unknown>[]> {
         try {
-          const res = await fetch(`${enerfloBase}/api/v3/users?page=${page}&pageSize=100${extra}`, {
+          const res = await fetch(`${enerfloBase}/api/v3/users?page=${page}&per_page=500${extra}`, {
             method: "GET",
             headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
           });
@@ -618,16 +619,13 @@ export async function buildUsersPreview(): Promise<UsersPreviewResult> {
         } catch { return []; }
       }
 
-      // Fetch all pages (active users). MAX_PAGES is a high safety cap — the
-      // old 20-page (2000-user) limit could silently miss users as the account
-      // grows past it (the account already has 1200+ users).
       const MAX_PAGES = 100;
       const all: Record<string, unknown>[] = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
         const batch = await fetchUserPage(page);
         if (batch.length === 0) break;
         all.push(...batch);
-        if (batch.length < 100) break;
+        if (batch.length < 500) break;
       }
 
       // Also try inactive users (undocumented status param — silently ignored if unsupported)
@@ -640,7 +638,7 @@ export async function buildUsersPreview(): Promise<UsersPreviewResult> {
             const e = String(u.email ?? "").trim().toLowerCase();
             if (e && !seenEmails.has(e)) { all.push(u); seenEmails.add(e); }
           }
-          if (batch.length < 100) break;
+          if (batch.length < 500) break;
         }
       } catch { /* silently skip */ }
 

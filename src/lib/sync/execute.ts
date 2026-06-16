@@ -195,10 +195,11 @@ export async function executeT2E(rows: T2ERow[]): Promise<ExecuteResultRow[]> {
   // Fetch Enerflo users once for bulk owner resolution
   const allEnerfloUsers: Record<string, unknown>[] = [];
   try {
-    const PAGE_SIZE = 200;
+    // Enerflo ignores `pageSize` (caps at 100) — use `per_page` instead.
+    const PAGE_SIZE = 500;
     const MAX_PAGES = 100;
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const res = await fetch(`${enerfloBase}/api/v3/users?page=${page}&pageSize=${PAGE_SIZE}`, {
+      const res = await fetch(`${enerfloBase}/api/v3/users?page=${page}&per_page=${PAGE_SIZE}`, {
         method: "GET",
         headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
       });

@@ -1524,13 +1524,14 @@ async function fetchEnerfloUserEmailByNumericId(
   const target = String(numericId);
   // Page through all users (1200+) — a low page cap would miss reps past the
   // cutoff and fail to resolve their email. MAX_PAGES is a safety guard.
-  const PAGE_SIZE = 200;
+  // Enerflo ignores `pageSize` (caps at 100) — use `per_page` instead.
+  const PAGE_SIZE = 500;
   const MAX_PAGES = 100;
   let seen = 0;
   for (let page = 1; page <= MAX_PAGES; page++) {
     try {
       const r = await fetch(
-        `${enerfloBase}/api/v3/users?page=${page}&pageSize=${PAGE_SIZE}`,
+        `${enerfloBase}/api/v3/users?page=${page}&per_page=${PAGE_SIZE}`,
         { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
       );
       if (!r.ok) break;
@@ -1624,8 +1625,9 @@ async function resolveEnerfloUserEmailByLookupId(
   }
 
   try {
+    // Enerflo ignores `pageSize` — use `per_page` instead (returns all users at once).
     for (let page = 1; page <= 50; page++) {
-      const listUrl = `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`;
+      const listUrl = `${enerfloBase}/api/v3/users?page=${page}&per_page=500`;
       const res = await fetch(listUrl, { method: "GET", headers });
       lastStatus = res.status;
       const rawBody = await res.text();
@@ -1634,7 +1636,7 @@ async function resolveEnerfloUserEmailByLookupId(
       const users = extractUsers(JSON.parse(rawBody) as unknown);
       const match = users.find((u) => repUserRecordMatchesLookup(u, lookupId));
       if (match?.email) return { email: match.email, lastStatus, lastPreview };
-      if (users.length < 100) break;
+      if (users.length < 500) break;
     }
   } catch (e) {
     lastPreview = e instanceof Error ? e.message : String(e);

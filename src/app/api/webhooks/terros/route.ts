@@ -317,14 +317,17 @@ function parseEnerfloCreateCustomerId(responseText: string): string | null {
  */
 async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
   const allUsers: Record<string, unknown>[] = [];
-  const PAGE_SIZE = 200;
+  // Enerflo ignores `pageSize` (caps at 100) but respects `per_page`.
+  // With per_page=500 the API returns all users in a single request (tested up
+  // to 1232 users). Keep the loop as a safety net for future growth.
+  const PAGE_SIZE = 500;
   const MAX_PAGES = 100;
   for (let page = 1; page <= MAX_PAGES; page++) {
     const { ok, data } = await enerfloRequestParsed<unknown>({
       operation: "webhook:terros:lookup-enerflo-user-by-email",
       method: "GET",
       path: "/api/v3/users",
-      query: { page: String(page), pageSize: String(PAGE_SIZE) },
+      query: { page: String(page), per_page: String(PAGE_SIZE) },
     });
     if (!ok || !data || typeof data !== "object") break;
     const o = data as Record<string, unknown>;
@@ -333,7 +336,6 @@ async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
       .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
     if (!Array.isArray(rows) || rows.length === 0) break;
     allUsers.push(...rows);
-    // Stop once we've collected every user (dataCount) or the last short page.
     const total = typeof o.dataCount === "number" ? o.dataCount : undefined;
     if (total != null && allUsers.length >= total) break;
     if (rows.length < PAGE_SIZE) break;
