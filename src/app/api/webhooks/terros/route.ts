@@ -830,6 +830,17 @@ async function handleAdd(
 
   const newId = log.responsePreview ? parseEnerfloCreateCustomerId(log.responsePreview) : null;
 
+  // Save the Terros→Enerflo mapping IMMEDIATELY after the create so handleUpdate
+  // (which fires within seconds) can find it via the Supabase lookup. Previously
+  // this was saved at the very end (~4.5 s after the webhook arrived), causing
+  // the follow-up update webhook to hit the race window and be skipped.
+  if (log.ok && newId) {
+    const numericIdEarly = Number(newId);
+    if (Number.isFinite(numericIdEarly)) {
+      await saveCustomerAccountMapping(terrosAccountId, numericIdEarly);
+    }
+  }
+
   // Resolve the Enerflo UUID from the numeric customer_id so externalLeadId on Terros
   // stores the UUID, not the numeric id. This lets deal.created / customer.created
   // find the account by UUID via account/upsert later.
@@ -861,13 +872,6 @@ async function handleAdd(
   let linked: { ok: boolean; status: number | null; preview: string } | null = null;
   if (log.ok && idToStore && terrosKey) {
     linked = await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, idToStore);
-  }
-
-  if (log.ok && newId) {
-    const numericId = Number(newId);
-    if (Number.isFinite(numericId)) {
-      await saveCustomerAccountMapping(terrosAccountId, numericId);
-    }
   }
 
   return NextResponse.json({
@@ -919,7 +923,10 @@ async function handleUpdate(
     (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
 
   if (mappedNumericId == null) {
-    await new Promise<void>(resolve => setTimeout(resolve, 2500));
+    // Wait long enough for handleAdd to finish creating the lead and saving the
+    // mapping (~3 s for the parallel fetch + Enerflo create). 3.5 s gives a
+    // comfortable buffer while still leaving ~6 s before Terros's 10 s timeout.
+    await new Promise<void>(resolve => setTimeout(resolve, 3500));
     mappedNumericId =
       (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
       (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
