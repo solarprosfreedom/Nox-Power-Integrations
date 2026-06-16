@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping, getTerrosAccountIdByEnerfloNumericId } from "@/lib/logger";
+import { writeApiLog, acquireCalendarEventLock, acquireAppointmentStageLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping, getTerrosAccountIdByEnerfloNumericId } from "@/lib/logger";
 import {
   getEnerfloCustomerUuid,
   getEnerfloIntegrationExternalId,
@@ -2120,8 +2120,10 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   let step3Status: number | null = null;
   let step3Preview = "";
   if (accountId && terrosKey) {
-    // 3a: account/update — set workflow stage
-    if (appointmentStageId) {
+    // 3a: account/update — set workflow stage (once per appointment).
+    // Guarded so the repeated new_appointment/update_appointment deliveries don't
+    // spam the account history with duplicate "Stage: Appointment" entries.
+    if (appointmentStageId && await acquireAppointmentStageLock(enerfloAppointmentId)) {
       try {
         const r = await fetch(`${terrosBase}/account/update`, {
           method: "POST",
@@ -2315,8 +2317,10 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   let step3Preview = "";
 
   if (accountId && terrosKey) {
-    // 3a: account/update — set workflow stage
-    if (appointmentStageId) {
+    // 3a: account/update — set workflow stage (once per appointment).
+    // Guarded so the repeated new_appointment/update_appointment deliveries don't
+    // spam the account history with duplicate "Stage: Appointment" entries.
+    if (appointmentStageId && await acquireAppointmentStageLock(enerfloAppointmentId)) {
       try {
         const r = await fetch(`${terrosBase}/account/update`, {
           method: "POST",

@@ -187,6 +187,22 @@ export async function acquireTerrosEventCreateLock(terrosEventId: string): Promi
 }
 
 /**
+ * One-time guard for setting the Terros "Appointment" workflow stage.
+ * Enerflo fires new_appointment + update_appointment (each 2-3 times) per
+ * appointment, and every delivery wrote the stage again — spamming the account
+ * history with duplicate "Stage: Appointment" entries. Returns true only for the
+ * FIRST delivery of a given appointment within the window, so the stage is set
+ * once. The 24h window covers the webhook burst and same-day reschedules.
+ */
+export async function acquireAppointmentStageLock(
+  enerfloAppointmentId: number | string
+): Promise<boolean> {
+  const key = String(enerfloAppointmentId).trim();
+  if (!key) return true;
+  return acquireDedupLock(key, "appointment-stage-lock", 24 * 60 * 60_000);
+}
+
+/**
  * Persist the mapping from Enerflo appointment ID → Terros calendar event ID.
  * Stored as a dedicated log entry so update_appointment can look it up even
  * when calendar/event/list doesn't return notes.
