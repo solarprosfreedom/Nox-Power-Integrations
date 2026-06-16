@@ -617,7 +617,8 @@ function buildEnerfloPayloadFromTerros(
 
 function buildEnerfloUpdatePayload(
   account: TerrosAccountWebhookData,
-  resolvedOwnerEmail?: string
+  resolvedOwnerEmail?: string,
+  ownerUserId?: number | null
 ): Record<string, unknown> {
   const r = account.resident ?? {};
   // Prefer combined firstName+lastName (sent by Terros update payloads);
@@ -644,6 +645,12 @@ function buildEnerfloUpdatePayload(
   if (city) body.city = city;
   if (state) body.state = state;
   if (zip) body.zip = zip;
+  // Owner / sales-rep reassignment on the v3 customers endpoint uses the numeric
+  // `agent_user_id` field (mirrors `setter_user_id`). The v1 `assign_to_email`
+  // field is silently ignored by v3 PUT, which is why changing the owner in
+  // Terros never propagated. Send the numeric id when we could resolve it; keep
+  // assign_to_email too as a harmless hint for any endpoint that honors it.
+  if (ownerUserId != null) body.agent_user_id = ownerUserId;
   if (resolvedOwnerEmail) body.assign_to_email = resolvedOwnerEmail;
   return body;
 }
@@ -1081,7 +1088,12 @@ async function handleUpdate(
   if (!resolvedOwnerEmail && env.defaultOwnerEmail) {
     resolvedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
   }
-  const updateBody = buildEnerfloUpdatePayload(merged, resolvedOwnerEmail);
+  // Resolve the numeric Enerflo user id so the v3 customers PUT can reassign the
+  // owner via agent_user_id (assign_to_email alone is ignored by v3).
+  const ownerUserId = resolvedOwnerEmail
+    ? await findEnerfloUserIdByEmail(resolvedOwnerEmail)
+    : null;
+  const updateBody = buildEnerfloUpdatePayload(merged, resolvedOwnerEmail, ownerUserId);
   if (Object.keys(updateBody).length === 0) {
     await writeApiLog({
       operation: "webhook:terros:update-enerflo-customer-skipped",
