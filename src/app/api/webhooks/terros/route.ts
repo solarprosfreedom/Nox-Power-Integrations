@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
 import {
@@ -22,6 +22,11 @@ import {
  */
 const EVENT_ECHO_WINDOW_MS = 2 * 60 * 1000;
 import { findUserByEmailInList } from "@/lib/sync/user-email-match";
+
+// Give background work (via after()) enough headroom to finish the Enerflo
+// round-trips. Terros itself gets an instant 200, so this only bounds the
+// async processing, not the webhook response.
+export const maxDuration = 60;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -761,25 +766,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true, skipped: true, reason: "Missing data object" });
   }
 
-  try {
-    if (action === "add") {
-      return await handleAdd(terrosBase, terrosKey, terrosAccountId, data);
+  // Respond to Terros immediately and do the Enerflo work in the background.
+  // Terros aborts webhook delivery after ~10s; the create→update sequence plus
+  // the race-condition wait and Enerflo round-trips can exceed that. Using
+  // after() removes all timeout pressure: Terros gets an instant 200 while the
+  // actual processing runs (bounded by maxDuration above).
+  const pathname = req.nextUrl.pathname;
+  after(async () => {
+    try {
+      if (action === "add") {
+        await handleAdd(terrosBase, terrosKey, terrosAccountId, data);
+      } else {
+        await handleUpdate(terrosBase, terrosKey, terrosAccountId, data);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await writeApiLog({
+        operation: "webhook:terros:unhandled-error",
+        vendor: "terros",
+        method: "POST",
+        url: pathname,
+        hadApiKey: false,
+        status: 500,
+        ok: false,
+        responsePreview: logPreview(msg),
+      });
     }
-    return await handleUpdate(terrosBase, terrosKey, terrosAccountId, data);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await writeApiLog({
-      operation: "webhook:terros:unhandled-error",
-      vendor: "terros",
-      method: "POST",
-      url: `${req.nextUrl.pathname}`,
-      hadApiKey: false,
-      status: 500,
-      ok: false,
-      responsePreview: logPreview(msg),
-    });
-    return NextResponse.json({ received: true, success: false, error: msg }, { status: 200 });
-  }
+  });
+
+  return NextResponse.json({ received: true, queued: true, action });
 }
 
 async function handleAdd(
@@ -912,21 +927,22 @@ async function handleUpdate(
 
   // Fast-path: Supabase mapping lookup (milliseconds, no HTTP to Terros).
   // We intentionally NEVER call fetchTerrosAccountById here — it makes up to 3
-  // serial HTTP calls and routinely exceeds Terros's ~10s webhook delivery timeout.
-  // The webhook payload already carries the resident and address data we need.
+  // serial HTTP calls. The webhook payload already carries the resident and
+  // address data we need.
   //
-  // Race-condition guard: Terros fires the "update" webhook immediately after "add".
-  // handleAdd may still be in-flight (saving the mapping). If no mapping is found,
-  // wait 2.5s and retry once — that's enough time for handleAdd to finish.
+  // Race-condition guard: Terros fires the "update" webhook immediately after
+  // "add", so handleAdd may still be in-flight (creating the lead + saving the
+  // mapping). Poll the mapping a few times with short delays until it appears.
+  // This runs in the background (after()), so there's no Terros timeout pressure
+  // — we can afford to wait for a slow Enerflo create under bulk load.
   let mappedNumericId =
     (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
     (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
 
-  if (mappedNumericId == null) {
-    // Wait long enough for handleAdd to finish creating the lead and saving the
-    // mapping (~3 s for the parallel fetch + Enerflo create). 3.5 s gives a
-    // comfortable buffer while still leaving ~6 s before Terros's 10 s timeout.
-    await new Promise<void>(resolve => setTimeout(resolve, 3500));
+  const MAX_MAPPING_RETRIES = 8;
+  const MAPPING_RETRY_DELAY_MS = 2000;
+  for (let attempt = 0; mappedNumericId == null && attempt < MAX_MAPPING_RETRIES; attempt++) {
+    await new Promise<void>(resolve => setTimeout(resolve, MAPPING_RETRY_DELAY_MS));
     mappedNumericId =
       (await getEnerfloCustomerIdByTerrosAccountId(terrosAccountId)) ??
       (await findEnerfloCustomerIdFromHistoricalLogs(terrosAccountId));
