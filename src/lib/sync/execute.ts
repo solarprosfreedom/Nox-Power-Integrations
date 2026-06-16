@@ -195,8 +195,10 @@ export async function executeT2E(rows: T2ERow[]): Promise<ExecuteResultRow[]> {
   // Fetch Enerflo users once for bulk owner resolution
   const allEnerfloUsers: Record<string, unknown>[] = [];
   try {
-    for (let page = 1; page <= 3; page++) {
-      const res = await fetch(`${enerfloBase}/api/v3/users?page=${page}&pageSize=100`, {
+    const PAGE_SIZE = 200;
+    const MAX_PAGES = 100;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(`${enerfloBase}/api/v3/users?page=${page}&pageSize=${PAGE_SIZE}`, {
         method: "GET",
         headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
       });
@@ -207,7 +209,9 @@ export async function executeT2E(rows: T2ERow[]): Promise<ExecuteResultRow[]> {
         .find(v => Array.isArray(v)) as Record<string, unknown>[] | undefined;
       if (!batch || batch.length === 0) break;
       allEnerfloUsers.push(...batch);
-      if (batch.length < 100) break;
+      const total = typeof parsed.dataCount === "number" ? parsed.dataCount : undefined;
+      if (total != null && allEnerfloUsers.length >= total) break;
+      if (batch.length < PAGE_SIZE) break;
     }
   } catch { /* best-effort */ }
 

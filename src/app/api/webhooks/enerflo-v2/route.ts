@@ -1522,10 +1522,15 @@ async function fetchEnerfloUserEmailByNumericId(
 ): Promise<string | null> {
   if (!numericId || !enerfloKey) return null;
   const target = String(numericId);
-  for (let page = 1; page <= 5; page++) {
+  // Page through all users (1200+) — a low page cap would miss reps past the
+  // cutoff and fail to resolve their email. MAX_PAGES is a safety guard.
+  const PAGE_SIZE = 200;
+  const MAX_PAGES = 100;
+  let seen = 0;
+  for (let page = 1; page <= MAX_PAGES; page++) {
     try {
       const r = await fetch(
-        `${enerfloBase}/api/v3/users?page=${page}&pageSize=100`,
+        `${enerfloBase}/api/v3/users?page=${page}&pageSize=${PAGE_SIZE}`,
         { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } }
       );
       if (!r.ok) break;
@@ -1534,7 +1539,10 @@ async function fetchEnerfloUserEmailByNumericId(
       if (!Array.isArray(rows) || rows.length === 0) break;
       const match = rows.find(u => String(u.id ?? u.user_id) === target);
       if (match) return (match.email ?? match.user_email) as string | null ?? null;
-      if (rows.length < 100) break;
+      seen += rows.length;
+      const total = typeof parsed.dataCount === "number" ? parsed.dataCount : undefined;
+      if (total != null && seen >= total) break;
+      if (rows.length < PAGE_SIZE) break;
     } catch { break; }
   }
   return null;

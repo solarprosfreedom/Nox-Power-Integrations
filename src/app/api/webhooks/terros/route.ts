@@ -296,15 +296,23 @@ function parseEnerfloCreateCustomerId(responseText: string): string | null {
 }
 
 // Cross-platform email matching (domain aliases, middle initial, env alias map).
-/** Collect all Enerflo users up to 3 pages of 100 (shared by email/id lookup helpers). */
+/**
+ * Collect ALL Enerflo users (shared by email/id lookup helpers).
+ * Paginates until every user is fetched — the account count has grown past
+ * 1200, so a fixed page cap would silently miss reps and leave the Terros
+ * owner/setter unmatched (lead lands with no Lead Owner / Setter).
+ * A high safety cap prevents an infinite loop if the API misbehaves.
+ */
 async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
   const allUsers: Record<string, unknown>[] = [];
-  for (let page = 1; page <= 3; page++) {
+  const PAGE_SIZE = 200;
+  const MAX_PAGES = 100;
+  for (let page = 1; page <= MAX_PAGES; page++) {
     const { ok, data } = await enerfloRequestParsed<unknown>({
       operation: "webhook:terros:lookup-enerflo-user-by-email",
       method: "GET",
       path: "/api/v3/users",
-      query: { page: String(page), pageSize: "100" },
+      query: { page: String(page), pageSize: String(PAGE_SIZE) },
     });
     if (!ok || !data || typeof data !== "object") break;
     const o = data as Record<string, unknown>;
@@ -313,7 +321,10 @@ async function fetchAllEnerfloUsers(): Promise<Record<string, unknown>[]> {
       .find((v) => Array.isArray(v)) as Record<string, unknown>[] | undefined;
     if (!Array.isArray(rows) || rows.length === 0) break;
     allUsers.push(...rows);
-    if (rows.length < 100) break;
+    // Stop once we've collected every user (dataCount) or the last short page.
+    const total = typeof o.dataCount === "number" ? o.dataCount : undefined;
+    if (total != null && allUsers.length >= total) break;
+    if (rows.length < PAGE_SIZE) break;
   }
   return allUsers;
 }

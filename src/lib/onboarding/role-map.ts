@@ -13,7 +13,7 @@ export interface SequifiPositionContext {
 }
 
 /** Enerflo POST /api/v1/users rejects custom labels like "Self Gen & Closer". */
-const DEFAULT_ENERFLO_ROLES = ["Sales Rep"];
+const DEFAULT_ENERFLO_ROLES = ["Setter", "Sales Rep"];
 const DEFAULT_TERROS_ROLES = ["Self Gen & Closer"];
 
 const DEFAULT_MAPPING: RoleMapping = {
@@ -47,7 +47,7 @@ function mappingForSubPosition(subPositionName: string): RoleMapping | null {
   }
   if (/^sales\s*rep$/i.test(sub)) {
     return {
-      enerfloRoles: ["Sales Rep"],
+      enerfloRoles: ["Setter", "Sales Rep"],
       terrosRoles: ["Closer"],
       welcomeTemplate: "sales_rep",
     };
@@ -76,7 +76,7 @@ function mappingForPositionOnly(positionName: string): RoleMapping {
   }
   if (isCloserName(position)) {
     return {
-      enerfloRoles: ["Sales Rep"],
+      enerfloRoles: ["Setter", "Sales Rep"],
       terrosRoles: ["Closer"],
       welcomeTemplate: "sales_rep",
     };
