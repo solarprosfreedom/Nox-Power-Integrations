@@ -168,11 +168,19 @@ async function acquireDedupLock(
   }
 }
 
-/** Lock for Enerflo → Terros calendar event creation (concurrent update_appointment). */
+/**
+ * Lock for Enerflo → Terros calendar event creation (concurrent update_appointment).
+ * Enerflo fires update_appointment 2-3+ times per appointment, spread over 15-90s.
+ * The default 10s window let deliveries >10s apart each win the lock and create a
+ * DUPLICATE Terros calendar event (find-existing often misses the just-created
+ * event because the id-map save races and calendar/event/list lags). Use a wide
+ * 5-minute window so only the first delivery in the burst creates the event;
+ * later genuine reschedules fall outside the window and update via the id-map.
+ */
 export async function acquireCalendarEventLock(
   enerfloAppointmentId: number
 ): Promise<boolean> {
-  return acquireDedupLock(String(enerfloAppointmentId), "calendar-event-lock");
+  return acquireDedupLock(String(enerfloAppointmentId), "calendar-event-lock", 5 * 60_000);
 }
 
 /**
