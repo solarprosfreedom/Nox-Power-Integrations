@@ -226,19 +226,36 @@ export async function saveCalendarEventMapping(
 export async function getEnerfloAppointmentIdByTerrosEventId(
   terrosEventId: string
 ): Promise<number | null> {
+  const meta = await getCalendarEventMappingMeta(terrosEventId);
+  return meta?.enerfloAppointmentId ?? null;
+}
+
+/**
+ * Like getEnerfloAppointmentIdByTerrosEventId but also returns how long ago the
+ * mapping row was written (ageMs). Used to distinguish the note-stamp / sync
+ * echo (arrives seconds after the mapping is created) from a genuine human
+ * reschedule (happens later), so the Terros event-update handler can break sync
+ * loops without permanently blocking legitimate updates.
+ */
+export async function getCalendarEventMappingMeta(
+  terrosEventId: string
+): Promise<{ enerfloAppointmentId: number; ageMs: number } | null> {
   try {
     const supabase = getSupabase();
     if (!supabase) return null;
     const { data } = await supabase
       .from("api_logs")
-      .select("response_preview")
+      .select("response_preview, timestamp")
       .eq("operation", "calendar-event-id-map")
       .ilike("response_preview", `%"terrosEventId":"${terrosEventId}"%`)
       .order("timestamp", { ascending: false })
       .limit(1);
     if (!data?.[0]?.response_preview) return null;
     const parsed = JSON.parse(data[0].response_preview) as { enerfloAppointmentId?: number };
-    return parsed.enerfloAppointmentId ?? null;
+    if (parsed.enerfloAppointmentId == null) return null;
+    const ts = data[0].timestamp ? new Date(data[0].timestamp).getTime() : NaN;
+    const ageMs = Number.isFinite(ts) ? Date.now() - ts : Number.POSITIVE_INFINITY;
+    return { enerfloAppointmentId: parsed.enerfloAppointmentId, ageMs };
   } catch (err) {
     console.error("[EVENT MAP] reverse lookup failed:", err);
     return null;

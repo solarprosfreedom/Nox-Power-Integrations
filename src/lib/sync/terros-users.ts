@@ -31,28 +31,22 @@ export async function fetchTerrosUsers(
   terrosBase: string,
   terrosKey: string,
 ): Promise<Record<string, unknown>[]> {
-  const allUsers: Record<string, unknown>[] = [];
+  // Terros /user/list ignores page/pageSize and returns ALL users in a single
+  // response. The previous paginated loop therefore re-fetched the same full
+  // list up to 10 times (duplicated data + wasted API calls); one request is
+  // both correct and far cheaper.
   try {
-    for (let page = 1; page <= 10; page++) {
-      const { ok, text } = await postTerros(
-        terrosBase,
-        terrosKey,
-        "/user/list",
-        page === 1 ? {} : { page, pageSize: 100 },
-      );
-      if (!ok) break;
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      const users = (parsed.users ?? parsed.data ?? parsed.results) as
-        | Record<string, unknown>[]
-        | undefined;
-      if (!Array.isArray(users) || users.length === 0) break;
-      allUsers.push(...users);
-      if (users.length < 100) break;
-    }
+    const { ok, text } = await postTerros(terrosBase, terrosKey, "/user/list", {});
+    if (!ok) return [];
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const users = (parsed.users ?? parsed.data ?? parsed.results) as
+      | Record<string, unknown>[]
+      | undefined;
+    return Array.isArray(users) ? users : [];
   } catch {
     /* best-effort */
+    return [];
   }
-  return allUsers;
 }
 
 export async function resolveTerrosUserIdByEmail(

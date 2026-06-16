@@ -618,9 +618,12 @@ export async function buildUsersPreview(): Promise<UsersPreviewResult> {
         } catch { return []; }
       }
 
-      // Fetch all pages (active users)
+      // Fetch all pages (active users). MAX_PAGES is a high safety cap — the
+      // old 20-page (2000-user) limit could silently miss users as the account
+      // grows past it (the account already has 1200+ users).
+      const MAX_PAGES = 100;
       const all: Record<string, unknown>[] = [];
-      for (let page = 1; page <= 20; page++) {
+      for (let page = 1; page <= MAX_PAGES; page++) {
         const batch = await fetchUserPage(page);
         if (batch.length === 0) break;
         all.push(...batch);
@@ -630,7 +633,7 @@ export async function buildUsersPreview(): Promise<UsersPreviewResult> {
       // Also try inactive users (undocumented status param — silently ignored if unsupported)
       const seenEmails = new Set(all.map(u => String(u.email ?? "").trim().toLowerCase()).filter(Boolean));
       try {
-        for (let page = 1; page <= 20; page++) {
+        for (let page = 1; page <= MAX_PAGES; page++) {
           const batch = await fetchUserPage(page, "&status=inactive");
           if (batch.length === 0) break;
           for (const u of batch) {

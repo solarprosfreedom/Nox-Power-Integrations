@@ -4,6 +4,7 @@ import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
 import {
   writeApiLog,
   getEnerfloAppointmentIdByTerrosEventId,
+  getCalendarEventMappingMeta,
   acquireTerrosEventCreateLock,
   saveCalendarEventMapping,
   saveCustomerAccountMapping,
@@ -11,6 +12,15 @@ import {
   findEnerfloCustomerIdFromHistoricalLogs,
   normalizeTerrosAccountId,
 } from "@/lib/logger";
+
+/**
+ * Window after a calendar-event mapping is written during which a Terros
+ * event-update carrying the [Enerflo:ID] marker is treated as the note-stamp /
+ * sync echo and skipped. Updates after this window are genuine reschedules and
+ * are pushed to Enerflo. Echoes are automated and arrive within seconds; humans
+ * reschedule minutes/hours later.
+ */
+const EVENT_ECHO_WINDOW_MS = 2 * 60 * 1000;
 import { findUserByEmailInList } from "@/lib/sync/user-email-match";
 
 const UUID_RE =
@@ -75,6 +85,8 @@ interface TerrosWebhookBody {
 
 interface TerrosEventData {
   id?: string;
+  /** Some Terros event payloads use "eventId" instead of "id". */
+  eventId?: string;
   title?: string;
   eventDate?: string | number;
   duration?: number;
@@ -1255,7 +1267,7 @@ async function handleEventAdd(
   terrosKey: string,
   data: TerrosEventData
 ): Promise<NextResponse> {
-  const terrosEventId  = (data.id ?? "").trim();
+  const terrosEventId  = (data.id ?? data.eventId ?? "").trim();
   const accountId      = (data.account?.accountId ?? "").trim();
   // Prefer attendee (Closer) email for Enerflo `user`; fall back to owner
   const assigneeEmail  = (data.attendee?.email ?? data.owner?.email ?? "").trim();
@@ -1276,10 +1288,13 @@ async function handleEventAdd(
       const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body:    JSON.stringify({ accountId }),
+        // size:200 — accounts with many events can otherwise truncate the list
+        // before our event appears, making the dedup note check silently fail.
+        body:    JSON.stringify({ accountId, size: 200 }),
       });
-      if (listRes.ok) {
-        const parsed = JSON.parse(await listRes.text()) as Record<string, unknown>;
+      const listText = await listRes.text();
+      if (listRes.ok && terrosJsonBodyIndicatesSuccess(listText)) {
+        const parsed = JSON.parse(listText) as Record<string, unknown>;
         const evts   = parsed.events as Record<string, unknown>[] | undefined;
         if (Array.isArray(evts)) {
           const thisEvt = evts.find(e => (e.eventId ?? e.id) === terrosEventId);
@@ -1528,7 +1543,7 @@ async function handleEventUpdate(
   terrosKey: string,
   data: TerrosEventData
 ): Promise<NextResponse> {
-  const terrosEventId  = (data.id ?? "").trim();
+  const terrosEventId  = (data.id ?? data.eventId ?? "").trim();
   const accountId      = (data.account?.accountId ?? "").trim();
   // Prefer attendee (Closer) email for Enerflo `user`; fall back to owner
   const assigneeEmail  = (data.attendee?.email ?? data.owner?.email ?? "").trim();
@@ -1537,9 +1552,10 @@ async function handleEventUpdate(
     ? addMinutesToEnerfloDate(enerfloStart, data.duration ?? 60)
     : null;
 
-  // ── Dedup guard ──────────────────────────────────────────────────────────
-  // Terros sends the dedup marker in "note" (singular). If the event originated
-  // from Enerflo, the update is just the echo — skip to prevent a loop.
+  // ── Fetch the event note (carries the [Enerflo:ID] marker) ───────────────
+  // Terros sends the marker in "note" (singular). If the webhook payload omits
+  // it, fetch the event from the calendar list. The marker is used below both
+  // to resolve the appointment id and to detect sync echoes.
   let eventNote = extractEventNoteMarker(data);
 
   if (!eventNote && terrosEventId && accountId && terrosKey) {
@@ -1547,10 +1563,12 @@ async function handleEventUpdate(
       const listRes = await fetch(`${terrosBase}/calendar/event/list`, {
         method:  "POST",
         headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-        body:    JSON.stringify({ accountId }),
+        // size:200 — see handleEventAdd; avoids truncating busy accounts.
+        body:    JSON.stringify({ accountId, size: 200 }),
       });
-      if (listRes.ok) {
-        const parsed = JSON.parse(await listRes.text()) as Record<string, unknown>;
+      const listText = await listRes.text();
+      if (listRes.ok && terrosJsonBodyIndicatesSuccess(listText)) {
+        const parsed = JSON.parse(listText) as Record<string, unknown>;
         const evts   = parsed.events as Record<string, unknown>[] | undefined;
         if (Array.isArray(evts)) {
           const thisEvt = evts.find(e => (e.eventId ?? e.id) === terrosEventId);
@@ -1562,24 +1580,41 @@ async function handleEventUpdate(
     } catch { /* best-effort */ }
   }
 
-  if (/\[Enerflo:\d+\]/i.test(eventNote)) {
-    await writeApiLog({
-      operation:       "webhook:terros:event-update-dedup",
-      vendor:          "terros",
-      method:          "POST",
-      url:             `/api/webhooks/terros`,
-      hadApiKey:       Boolean(terrosKey),
-      status:          200,
-      ok:              true,
-      responsePreview: JSON.stringify({ terrosEventId, accountId, reason: "originated-from-enerflo", notePreview: eventNote.slice(0, 80) }).slice(0, 400),
-    });
-    return NextResponse.json({ received: true, action: "event-update", skipped: true, reason: "dedup:enerflo-marker-in-note" });
+  // ── Resolve Enerflo appointment ID ───────────────────────────────────────
+  // The [Enerflo:ID] marker we stamp on Terros events is the most reliable
+  // source — it embeds the exact appointment id. Parse it first, then fall back
+  // to the Supabase map and the API scan below.
+  let enerfloAppointmentId: number | null = null;
+  const markerMatch = eventNote.match(/\[Enerflo:(\d+)\]/i);
+  const markerApptId = markerMatch ? Number(markerMatch[1]) : null;
+
+  // ── Echo guard (loop prevention) ─────────────────────────────────────────
+  // A marker-bearing update that lands within EVENT_ECHO_WINDOW_MS of the
+  // mapping being written is the note-stamp / sync echo, not a human action —
+  // skip it so we don't ping-pong with Enerflo. Genuine reschedules arrive
+  // later and fall through to the PUT.
+  if (markerApptId != null && terrosEventId) {
+    const mapMeta = await getCalendarEventMappingMeta(terrosEventId);
+    if (mapMeta && mapMeta.ageMs < EVENT_ECHO_WINDOW_MS) {
+      await writeApiLog({
+        operation:       "webhook:terros:event-update-dedup",
+        vendor:          "terros",
+        method:          "POST",
+        url:             `/api/webhooks/terros`,
+        hadApiKey:       Boolean(terrosKey),
+        status:          200,
+        ok:              true,
+        responsePreview: JSON.stringify({ terrosEventId, accountId, reason: "sync-echo-within-window", ageMs: mapMeta.ageMs, notePreview: eventNote.slice(0, 80) }).slice(0, 400),
+      });
+      return NextResponse.json({ received: true, action: "event-update", skipped: true, reason: "dedup:sync-echo-within-window" });
+    }
   }
 
-  // ── Resolve Enerflo appointment ID ───────────────────────────────────────
-  // Primary: reverse-lookup from Supabase calendar-event-id-map
-  let enerfloAppointmentId: number | null = null;
-  if (terrosEventId) {
+  // Primary: the marker, then reverse-lookup from Supabase calendar-event-id-map
+  if (markerApptId != null) {
+    enerfloAppointmentId = markerApptId;
+  }
+  if (!enerfloAppointmentId && terrosEventId) {
     enerfloAppointmentId = await getEnerfloAppointmentIdByTerrosEventId(terrosEventId);
   }
 

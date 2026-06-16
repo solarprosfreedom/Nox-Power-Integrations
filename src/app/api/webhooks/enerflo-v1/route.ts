@@ -66,10 +66,23 @@ export async function POST(req: NextRequest) {
     fromHeader ||
     "(unknown)";
 
-  // Events with real handlers — forward to v2 route which reads webhook_event too
+  // Events with real handlers — forward to v2 route which reads webhook_event too.
+  // NOTE: req.json() above already consumed the body stream, so we must hand v2
+  // a fresh request with a re-serialized body — otherwise v2's own req.json()
+  // throws and every forwarded event fails with "400 Invalid JSON body".
   const handledEvents = new Set(["update_customer", "new_customer", "new_appointment", "update_appointment"]);
   if (handledEvents.has(webhookEvent)) {
-    return enerfloV2Post(req);
+    // Drop the original content-length: the re-serialized body may differ in
+    // length from the source (whitespace/key order), and a stale length can
+    // truncate or stall the forwarded request.
+    const forwardedHeaders = new Headers(req.headers);
+    forwardedHeaders.delete("content-length");
+    const forwarded = new NextRequest(req.nextUrl, {
+      method: "POST",
+      headers: forwardedHeaders,
+      body: JSON.stringify(body),
+    });
+    return enerfloV2Post(forwarded);
   }
 
   const url = `${req.nextUrl.pathname}${req.nextUrl.search}`;
