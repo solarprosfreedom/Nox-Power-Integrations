@@ -843,7 +843,10 @@ async function handleAdd(
     body: createBody,
   });
 
-  const newId = log.responsePreview ? parseEnerfloCreateCustomerId(log.responsePreview) : null;
+  // Use rawResponseText (full body) not responsePreview (truncated to 500 chars) —
+  // the Enerflo lead/add response is >500 chars, so the preview is not valid JSON
+  // and parseEnerfloCreateCustomerId would always return null from it.
+  const newId = log.rawResponseText ? parseEnerfloCreateCustomerId(log.rawResponseText) : null;
 
   // Save the Terros→Enerflo mapping IMMEDIATELY after the create so handleUpdate
   // (which fires within seconds) can find it via the Supabase lookup. Previously
