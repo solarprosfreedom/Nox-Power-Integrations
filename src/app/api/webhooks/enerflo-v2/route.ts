@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping } from "@/lib/logger";
+import { writeApiLog, acquireCalendarEventLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping, getTerrosAccountIdByEnerfloNumericId } from "@/lib/logger";
 import {
   getEnerfloCustomerUuid,
   getEnerfloIntegrationExternalId,
@@ -1154,9 +1154,65 @@ async function handleCustomerCreated(
     },
   };
 
+  // ── Dedup guard: never create a duplicate Terros account ──────────────────
+  // customer.created fires when an Enerflo lead converts to a customer. If that
+  // lead ORIGINATED in Terros (we created the Enerflo lead from a Terros account
+  // via lead/add), a Terros account already exists — a blind account/add would
+  // duplicate it. Check our reverse mapping first (fast), then search Terros by
+  // strong identifiers (Enerflo numeric id / UUID / email / phone).
+  let existingTerrosAccountId: string | null = null;
+  if (resolvedNumericId) {
+    existingTerrosAccountId = await getTerrosAccountIdByEnerfloNumericId(resolvedNumericId);
+  }
+  if (!existingTerrosAccountId && terrosKey) {
+    const dedupQueries = [
+      resolvedNumericId ? String(resolvedNumericId) : "",
+      customerId,
+      customerEmail,
+      sanitizePhone(customerPhone) ?? "",
+    ];
+    for (const q of dedupQueries) {
+      if (!q) continue;
+      const hit = await searchTerrosAccountByQuery(terrosBase, terrosKey, q);
+      if (hit) {
+        existingTerrosAccountId = String(hit.accountId ?? hit.id ?? "").trim() || null;
+        if (existingTerrosAccountId) break;
+      }
+    }
+  }
+  if (existingTerrosAccountId) {
+    // Persist the mapping so future updates resolve instantly, then skip the add.
+    if (resolvedNumericId) {
+      await saveCustomerAccountMapping(existingTerrosAccountId, Number(resolvedNumericId));
+    }
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:add-terros-account-from-customer-created",
+      vendor: "terros",
+      method: "POST",
+      url: `${terrosBase}/account/add`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        skipped: "existing-terros-account",
+        terrosAccountId: existingTerrosAccountId,
+        enerfloNumericId: resolvedNumericId ?? null,
+        customerId,
+      }).slice(0, 400),
+    });
+    return NextResponse.json({
+      received: true,
+      event: "customer.created",
+      customerId,
+      skipped: true,
+      reason: "existing-terros-account",
+      terrosAccountId: existingTerrosAccountId,
+    });
+  }
+
   // Use account/add (not upsert) — account/add reliably sets workflowStageId for new accounts.
   // account/upsert ignores workflowStageId on both create and update, leaving the account stageless
-  // and invisible in the Terros UI. customer.created fires once per customer so duplicates are not a concern.
+  // and invisible in the Terros UI. The dedup guard above prevents duplicates.
   let ok = false;
   let status: number | null = null;
   let responseText = "";

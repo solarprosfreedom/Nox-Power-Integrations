@@ -716,25 +716,34 @@ export async function POST(req: NextRequest) {
         reason: "Missing data for Event webhook",
       });
     }
-    try {
-      if (action === "update") {
-        return await handleEventUpdate(terrosBase, terrosKey, eventData);
+    // Respond to Terros immediately and create/update the Enerflo appointment in
+    // the background. The Enerflo /api/v1/appointments endpoint is slow and often
+    // takes >10s, which exceeded the Terros webhook timeout and caused Terros to
+    // retry the same event 2-3 times — a retry storm that races the dedup guards.
+    // after() gives Terros an instant 200 so it never retries; the dedup lock and
+    // [Enerflo:ID] marker still protect against any genuine duplicate delivery.
+    after(async () => {
+      try {
+        if (action === "update") {
+          await handleEventUpdate(terrosBase, terrosKey, eventData);
+        } else {
+          await handleEventAdd(terrosBase, terrosKey, eventData);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await writeApiLog({
+          operation: "webhook:terros:event-unhandled-error",
+          vendor: "terros",
+          method: "POST",
+          url: `/api/webhooks/terros`,
+          hadApiKey: false,
+          status: 500,
+          ok: false,
+          responsePreview: logPreview(msg),
+        });
       }
-      return await handleEventAdd(terrosBase, terrosKey, eventData);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await writeApiLog({
-        operation: "webhook:terros:event-unhandled-error",
-        vendor: "terros",
-        method: "POST",
-        url: `/api/webhooks/terros`,
-        hadApiKey: false,
-        status: 500,
-        ok: false,
-        responsePreview: logPreview(msg),
-      });
-      return NextResponse.json({ received: true, success: false, error: msg }, { status: 200 });
-    }
+    });
+    return NextResponse.json({ received: true, queued: true, action: `event-${action}` });
   }
 
   // ── Terros Account entity ─────────────────────────────────────────────────
@@ -1438,14 +1447,38 @@ async function handleEventAdd(
 
   // ── Step 1: resolve Enerflo customer (numeric ID or email) ───────────────
   // Enerflo POST /v1/appointments accepts `customer` as numeric ID or email.
-  // Prefer the numeric externalLeadId from Terros; fall back to resident email.
+  // The numeric Enerflo customer id is the ONLY reliable value — passing a UUID
+  // or an email that Enerflo hasn't indexed yet returns "No customer found".
+  // Resolution order (most → least reliable):
+  //   1) Supabase customer-account-id-map (saved by handleAdd/handleUpdate)
+  //   2) numeric externalLeadId inline on the webhook or on the Terros account
+  //   3) resident email (last resort)
   let enerfloCustomer: string | null = null;
 
-  // Check inline externalLeadId in the webhook payload first (update payloads include it)
+  // Strategy 1: the numeric id we stored when the lead was created/updated.
+  // Poll briefly — the Event webhook can arrive seconds after Account add, before
+  // handleAdd has saved the mapping (both now run in the background via after()).
+  if (accountId) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const mappedId =
+        (await getEnerfloCustomerIdByTerrosAccountId(accountId)) ??
+        (await findEnerfloCustomerIdFromHistoricalLogs(accountId));
+      if (mappedId != null) {
+        enerfloCustomer = String(mappedId);
+        break;
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 2000));
+    }
+  }
+
+  // Strategy 2: numeric externalLeadId inline in the webhook payload
   const inlineExtId = (data.account?.externalLeadId ?? "").trim();
-  if (inlineExtId && !UUID_RE.test(inlineExtId)) {
+  if (!enerfloCustomer && inlineExtId && !UUID_RE.test(inlineExtId)) {
     enerfloCustomer = inlineExtId;
-  } else if (accountId && terrosKey) {
+  }
+
+  // Strategy 2b: numeric externalLeadId on the Terros account record
+  if (!enerfloCustomer && accountId && terrosKey) {
     const acc = await fetchTerrosAccountById(terrosBase, terrosKey, accountId);
     if (acc) {
       const eid =
@@ -1457,17 +1490,31 @@ async function handleEventAdd(
     }
   }
 
-  // Fall back to resident email — Enerflo accepts email as `customer` value
+  // Strategy 3: resident email — Enerflo accepts email as `customer` value
   if (!enerfloCustomer && residentEmail) {
     enerfloCustomer = residentEmail;
   }
 
   if (!enerfloCustomer) {
+    await writeApiLog({
+      operation: "webhook:terros:create-enerflo-appointment-skipped",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosEventId,
+        accountId,
+        reason: "no-enerflo-customer",
+      }).slice(0, 400),
+    });
     return NextResponse.json({
       received: true,
       action: "event-add",
       skipped: true,
-      reason: "Could not resolve Enerflo customer (no externalLeadId or resident email).",
+      reason: "Could not resolve Enerflo customer (no mapping, externalLeadId, or resident email).",
       terrosEventId,
       accountId,
     });

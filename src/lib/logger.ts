@@ -328,6 +328,45 @@ export async function getEnerfloCustomerIdByTerrosAccountId(
 }
 
 /**
+ * Reverse lookup: given an Enerflo numeric customer id, find the Terros account id
+ * it was mapped to. Used to detect that a customer.created event refers to a lead
+ * that ORIGINATED in Terros (we created the Enerflo lead from it), so we must not
+ * create a second Terros account for it.
+ */
+export async function getTerrosAccountIdByEnerfloNumericId(
+  enerfloNumericId: number | string
+): Promise<string | null> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    const idNum = Number(enerfloNumericId);
+    if (!Number.isFinite(idNum)) return null;
+    const { data } = await supabase
+      .from("api_logs")
+      .select("response_preview")
+      .eq("operation", "customer-account-id-map")
+      .ilike("response_preview", `%"enerfloNumericId":${idNum}%`)
+      .order("timestamp", { ascending: false })
+      .limit(5);
+    for (const row of data ?? []) {
+      try {
+        const parsed = JSON.parse(row.response_preview as string) as {
+          terrosAccountId?: string;
+          enerfloNumericId?: number;
+        };
+        if (parsed.enerfloNumericId === idNum && parsed.terrosAccountId) {
+          return parsed.terrosAccountId;
+        }
+      } catch { /* skip malformed row */ }
+    }
+    return null;
+  } catch (err) {
+    console.error("[CUSTOMER MAP] reverse lookup failed:", err);
+    return null;
+  }
+}
+
+/**
  * Backfill mapping from prior enerflo-v2 v3-fetch logs when v1 search cannot find the customer.
  */
 export async function findEnerfloCustomerIdFromHistoricalLogs(
