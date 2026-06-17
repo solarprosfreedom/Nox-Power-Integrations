@@ -1168,18 +1168,29 @@ async function handleCustomerCreated(
 
   let terrosOwnerId:  string | null = null;
   let terrosCloserId: string | null = null;
-  const emailToResolve = ownerEmail || env.defaultOwnerEmail || "";
-  if (emailToResolve) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToResolve);
+  // Field mapping for Enerflo-originated leads (business rule):
+  //   Enerflo Setter              → Terros Owner
+  //   Enerflo Lead Owner/SalesRep → Terros Closer
+  // Terros Owner source prefers the setter, falls back to the sales rep when
+  // there's no setter, then to DEFAULT_OWNER_EMAIL (gap detection) when neither
+  // resolves to a Terros user.
+  const terrosOwnerSourceEmail = setterEmailResolved || ownerEmail || env.defaultOwnerEmail || "";
+  _ownerDebug.terrosOwnerSource = terrosOwnerSourceEmail || null;
+  _ownerDebug.terrosCloserSource = ownerEmail || null;
+  if (terrosOwnerSourceEmail) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosOwnerSourceEmail);
     terrosOwnerId = u.userId;
     _ownerDebug.terrosLookupStatus = u.status;
     _ownerDebug.terrosLookupOk = u.ok;
     _ownerDebug.terrosLookupPreview = u.preview.slice(0, 200);
-    if (!ownerEmail && terrosOwnerId) _ownerDebug.note = "fell back to DEFAULT_OWNER_EMAIL";
+    if (!setterEmailResolved && !ownerEmail && terrosOwnerId) {
+      _ownerDebug.note = "fell back to DEFAULT_OWNER_EMAIL";
+    }
   }
-  // closer = setter; only resolve if different from owner
-  if (setterEmailResolved && setterEmailResolved !== ownerEmail) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmailResolved);
+  // Terros Closer ← Enerflo lead owner / sales rep. Resolve only when present and
+  // different from the owner source (avoid assigning the same person to both).
+  if (ownerEmail && ownerEmail !== terrosOwnerSourceEmail) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmail);
     terrosCloserId = u.userId;
   }
 
@@ -1353,19 +1364,23 @@ async function handleCustomerUpdatedV2(
     customerEmail,
     customerUuid: customerId,
   });
-  const emailToResolve = ownerResolution.ownerEmail || env.defaultOwnerEmail || "";
+  // Field mapping (same business rule as customer.created):
+  //   Enerflo Setter              → Terros Owner
+  //   Enerflo Lead Owner/SalesRep → Terros Closer
+  const terrosOwnerSourceEmail =
+    ownerResolution.setterEmail || ownerResolution.ownerEmail || env.defaultOwnerEmail || "";
   let terrosOwnerId: string | null = null;
   let terrosCloserId: string | null = null;
-  if (emailToResolve && terrosKey) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToResolve);
+  if (terrosOwnerSourceEmail && terrosKey) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosOwnerSourceEmail);
     terrosOwnerId = u.userId;
   }
   if (
-    ownerResolution.setterEmail &&
-    ownerResolution.setterEmail !== ownerResolution.ownerEmail &&
+    ownerResolution.ownerEmail &&
+    ownerResolution.ownerEmail !== terrosOwnerSourceEmail &&
     terrosKey
   ) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerResolution.setterEmail);
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerResolution.ownerEmail);
     terrosCloserId = u.userId;
   }
 
