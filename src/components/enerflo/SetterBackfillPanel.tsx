@@ -125,11 +125,12 @@ async function consumeBackfillStream(
   dryRun: boolean,
   customerIds: string[],
   ownerTotalLeads: number,
+  limit?: number,
 ): Promise<EnerfloSetterBackfillResult> {
   const res = await fetch("/api/enerflo/setter-backfill/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ownerUserId, dryRun, customerIds, ownerTotalLeads }),
+    body: JSON.stringify({ ownerUserId, dryRun, customerIds, ownerTotalLeads, limit }),
   });
 
   if (!res.ok || !res.body) {
@@ -181,6 +182,17 @@ export default function SetterBackfillPanel() {
   const [globalProgress, setGlobalProgress] = useState<GlobalRunProgress | null>(null);
   const [globalSummary, setGlobalSummary] = useState<GlobalRunSummary | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
+
+  // Single-user test runner (skips the global scan — scans just one rep's leads)
+  const [singleQuery, setSingleQuery] = useState("");
+  const [singleSelected, setSingleSelected] = useState<OwnerSetterSummary | null>(null);
+  const [singleLimit, setSingleLimit] = useState("10");
+  const [singleStatus, setSingleStatus] = useState<{
+    state: RowRunState;
+    result?: EnerfloSetterBackfillResult;
+    error?: string;
+    dryRun?: boolean;
+  }>({ state: "idle" });
 
   const visibleRows = useMemo(() => {
     return allReps.map(rep => {
@@ -373,6 +385,42 @@ export default function SetterBackfillPanel() {
     }
   }, [anyRowBusy, dryRun, eligibleByOwner, globalRunPhase, runBackfill, scanReady, visibleRows]);
 
+  const singleMatches = useMemo(() => {
+    const q = singleQuery.trim().toLowerCase();
+    if (!q) return [];
+    return allReps
+      .filter(
+        r =>
+          r.ownerName.toLowerCase().includes(q) ||
+          (r.ownerEmail ?? "").toLowerCase().includes(q),
+      )
+      .slice(0, 8);
+  }, [allReps, singleQuery]);
+
+  const singleBusy = singleStatus.state === "running";
+
+  const runSingleUser = useCallback(
+    async (asDryRun: boolean) => {
+      if (!singleSelected) return;
+      const lim = parseInt(singleLimit, 10);
+      const limit = Number.isFinite(lim) && lim > 0 ? lim : undefined;
+      setSingleStatus({ state: "running" });
+      try {
+        const result = await consumeBackfillStream(
+          singleSelected.ownerUserId,
+          asDryRun,
+          [],
+          0,
+          limit,
+        );
+        setSingleStatus({ state: "done", result, dryRun: asDryRun });
+      } catch (e) {
+        setSingleStatus({ state: "error", error: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [singleSelected, singleLimit],
+  );
+
   const loadButtonLabel = (() => {
     if (loadPhase === "loading-reps") return "Loading reps…";
     if (repsLoaded) return "Clear";
@@ -450,6 +498,101 @@ export default function SetterBackfillPanel() {
           )}
         </div>
       </div>
+
+      {repsLoaded && (
+        <div className="mb-6 rounded-xl border border-gray-800 bg-gray-950/40 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-white">Try one rep (no full scan)</h3>
+            <span className="text-xs text-gray-500">Scans only this rep&apos;s leads</span>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="relative">
+              <label className="mb-1 block text-xs text-gray-500">Search rep</label>
+              <input
+                type="text"
+                value={singleQuery}
+                onChange={e => {
+                  setSingleQuery(e.target.value);
+                  setSingleSelected(null);
+                }}
+                placeholder="name or email"
+                className="w-64 rounded-md border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-orange-500/40"
+              />
+              {singleQuery.trim() && !singleSelected && singleMatches.length > 0 && (
+                <div className="absolute z-10 mt-1 max-h-56 w-64 overflow-y-auto rounded-md border border-gray-700 bg-gray-900 shadow-lg">
+                  {singleMatches.map(rep => (
+                    <button
+                      key={rep.ownerUserId}
+                      type="button"
+                      onClick={() => {
+                        setSingleSelected(rep);
+                        setSingleQuery(rep.ownerName);
+                      }}
+                      className="block w-full px-3 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+                    >
+                      {rep.ownerName}
+                      <span className="block text-xs text-gray-500">
+                        {rep.ownerEmail ?? `ID ${rep.ownerUserId}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-gray-500">Max leads (optional)</label>
+              <input
+                type="number"
+                min={1}
+                value={singleLimit}
+                onChange={e => setSingleLimit(e.target.value)}
+                placeholder="all"
+                className="w-28 rounded-md border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-orange-500/40"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={!singleSelected || singleBusy || scanPhase === "scanning" || globalRunPhase === "running"}
+              onClick={() => runSingleUser(true)}
+              className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+            >
+              {singleBusy ? "Running…" : "Preview (dry run)"}
+            </button>
+            <button
+              type="button"
+              disabled={!singleSelected || singleBusy || scanPhase === "scanning" || globalRunPhase === "running"}
+              onClick={() => runSingleUser(false)}
+              className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+            >
+              {singleBusy ? "Running…" : "Backfill this rep"}
+            </button>
+          </div>
+          {singleSelected && (
+            <p className="mt-2 text-xs text-gray-400">
+              Selected: <span className="text-gray-200">{singleSelected.ownerName}</span>{" "}
+              <span className="text-gray-500">
+                ({singleSelected.ownerEmail ?? `ID ${singleSelected.ownerUserId}`})
+              </span>
+            </p>
+          )}
+          {singleStatus.state === "running" && (
+            <p className="mt-2 text-sm text-orange-200">
+              Scanning this rep&apos;s leads in Enerflo… this can take a minute.
+            </p>
+          )}
+          {singleStatus.state === "done" && singleStatus.result && (
+            <p className="mt-2 text-sm text-green-400">
+              ✓ {singleStatus.dryRun ? "Would update" : "Updated"} {singleStatus.result.updated}
+              {` · scanned ${singleStatus.result.scanned}`}
+              {singleStatus.result.skipped > 0 && ` · skipped ${singleStatus.result.skipped}`}
+              {singleStatus.result.errors.length > 0 && ` · errors ${singleStatus.result.errors.length}`}
+            </p>
+          )}
+          {singleStatus.state === "error" && (
+            <p className="mt-2 text-sm text-red-400">{singleStatus.error}</p>
+          )}
+        </div>
+      )}
 
       {loadPhase === "loading-reps" && (
         <div className="mb-6 rounded-lg border border-orange-900/40 bg-orange-950/20 px-4 py-3 text-sm text-orange-200">

@@ -20,6 +20,7 @@ export async function POST(request: Request) {
     dryRun?: boolean;
     customerIds?: string[];
     ownerTotalLeads?: number;
+    limit?: number;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -37,6 +38,12 @@ export async function POST(request: Request) {
   const ownerTotalLeads =
     body.ownerTotalLeads != null && Number.isFinite(body.ownerTotalLeads)
       ? Math.max(0, Math.floor(body.ownerTotalLeads))
+      : undefined;
+  // Optional cap — when set, the owner-scoped scan stops after collecting this
+  // many eligible leads. Used by the single-user test runner for a fast preview.
+  const limit =
+    body.limit != null && Number.isFinite(body.limit) && body.limit > 0
+      ? Math.floor(body.limit)
       : undefined;
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -59,6 +66,7 @@ export async function POST(request: Request) {
           dryRun,
           customerIds: customerIds.length ? customerIds : undefined,
           ownerTotalLeads,
+          limit,
           onScanPage: (page, pagesFetched) => {
             send({ type: "scan_progress", page, pagesFetched, ownerUserId });
           },
