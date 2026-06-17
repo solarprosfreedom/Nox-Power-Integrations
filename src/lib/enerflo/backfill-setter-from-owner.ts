@@ -1,5 +1,31 @@
 import { env } from "@/lib/env";
 import { enerfloRequest } from "@/lib/enerflo/client";
+import { writeApiLog } from "@/lib/logger";
+
+/**
+ * Audit trail for setter backfill writes. One entry per actual change, recording
+ * the previous and new setter so a run can be reviewed or reverted. Because the
+ * golden rule only fills EMPTY setters, previousSetterUserId is expected to be
+ * null — reverting a change means setting the customer's setter back to null.
+ * Stored in api_logs (queryable) under a dedicated operation.
+ */
+async function writeSetterBackfillAudit(entry: {
+  customerId: string;
+  ownerUserId: number;
+  previousSetterUserId: number | null;
+  newSetterUserId: number;
+}): Promise<void> {
+  await writeApiLog({
+    operation: "enerflo-setter-backfill:audit-setter-change",
+    vendor: "enerflo",
+    method: "PUT",
+    url: `/api/v3/customers/${entry.customerId}`,
+    hadApiKey: true,
+    status: 200,
+    ok: true,
+    responsePreview: JSON.stringify(entry).slice(0, 300),
+  });
+}
 
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_CONCURRENCY = 3;
@@ -404,7 +430,17 @@ async function processCustomer(
     result.eligible++;
     await updateSetterFromOwner(customerId, agentUserId, dryRun);
     result.updated++;
-    if (!dryRun) await sleep(putGapMs);
+    if (!dryRun) {
+      // updateSetterFromOwner throws on failure, so reaching here means the PUT
+      // succeeded — record the before/after for audit + potential revert.
+      await writeSetterBackfillAudit({
+        customerId,
+        ownerUserId: agentUserId,
+        previousSetterUserId: setterUserId,
+        newSetterUserId: agentUserId,
+      });
+      await sleep(putGapMs);
+    }
 
     if (result.samples.length < maxSamples) {
       result.samples.push({
