@@ -186,7 +186,9 @@ export default function SetterBackfillPanel() {
   // Single-user test runner (skips the global scan — scans just one rep's leads)
   const [singleQuery, setSingleQuery] = useState("");
   const [singleSelected, setSingleSelected] = useState<OwnerSetterSummary | null>(null);
-  const [singleLimit, setSingleLimit] = useState("10");
+  // Empty = process ALL of this rep's eligible leads. Set a number only for a
+  // quick capped preview — leaving it blank avoids silently missing leads.
+  const [singleLimit, setSingleLimit] = useState("");
   const [singleStatus, setSingleStatus] = useState<{
     state: RowRunState;
     result?: EnerfloSetterBackfillResult;
@@ -540,7 +542,7 @@ export default function SetterBackfillPanel() {
               )}
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Max leads (optional)</label>
+              <label className="mb-1 block text-xs text-gray-500">Max leads (blank = all)</label>
               <input
                 type="number"
                 min={1}
