@@ -14,6 +14,8 @@ export function renderAdminOnboardingNotification(
   const repName = repDisplayName(job);
   const repEmail = job.microsoft_upn?.trim() || "—";
   const repPhone = job.phone?.trim() || "—";
+  const raw = job.raw_sequifi_payload ?? {};
+  const repRole = String(raw.position_name ?? "").trim() || "—";
   const installerTabs = parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs;
   const installersBlock =
     installerTabs.length ?
@@ -31,6 +33,8 @@ Name: ${repName}
 Email: ${repEmail}
 
 Phone: ${repPhone}
+
+Position: ${repRole}
 `,
   };
 }
