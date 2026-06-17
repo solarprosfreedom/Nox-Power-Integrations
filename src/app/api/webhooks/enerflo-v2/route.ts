@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { writeApiLog, acquireCalendarEventLock, acquireAppointmentStageLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping, getTerrosAccountIdByEnerfloNumericId } from "@/lib/logger";
+import { writeApiLog, acquireCalendarEventLock, acquireAppointmentStageLock, acquireCustomerCreatedLock, saveCalendarEventMapping, getCalendarEventId, saveCustomerAccountMapping, getTerrosAccountIdByEnerfloNumericId } from "@/lib/logger";
 import {
   getEnerfloCustomerUuid,
   getEnerfloIntegrationExternalId,
@@ -1075,6 +1075,56 @@ async function handleCustomerCreated(
   const customerName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "Unknown";
   const customerEmail = c.email?.trim() ?? "";
   const customerPhone = (c.mobile?.trim() || c.phone?.trim()) ?? "";
+
+  // ── Junk-delivery guard ───────────────────────────────────────────────────
+  // Enerflo fires customer.created 2-3× per customer, and some deliveries in the
+  // burst arrive with no usable customer data (empty email/phone, name "Unknown").
+  // Those empty deliveries can't resolve an owner, so they fall back to the
+  // default owner and create a junk Terros account wrongly assigned to the API
+  // user. A real lead always has at least an email or a phone — skip the rest.
+  if (!customerEmail && !customerPhone) {
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:customer-created:skipped",
+      vendor: "enerflo",
+      method: "POST",
+      url: "/api/webhooks/enerflo-v2",
+      hadApiKey: false,
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({ reason: "empty-payload", customerId }).slice(0, 200),
+    });
+    return NextResponse.json({
+      received: true,
+      event: "customer.created",
+      customerId,
+      skipped: true,
+      reason: "empty-payload",
+    });
+  }
+
+  // ── Idempotency lock ──────────────────────────────────────────────────────
+  // Serialize the customer.created burst so only the FIRST delivery for a given
+  // Enerflo customer creates the Terros account. This is what prevents duplicate
+  // accounts (and the duplicate that gets mis-assigned to the default owner).
+  if (customerId && !(await acquireCustomerCreatedLock(customerId))) {
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:customer-created:skipped",
+      vendor: "enerflo",
+      method: "POST",
+      url: "/api/webhooks/enerflo-v2",
+      hadApiKey: false,
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({ reason: "duplicate-delivery-lock", customerId }).slice(0, 200),
+    });
+    return NextResponse.json({
+      received: true,
+      event: "customer.created",
+      customerId,
+      skipped: true,
+      reason: "duplicate-delivery-lock",
+    });
+  }
 
   const addr = c.address;
   const addrTrim  = addr?.fullAddress?.trim() ?? [addr?.line1, addr?.line2, addr?.line3].filter(Boolean).join(" ");

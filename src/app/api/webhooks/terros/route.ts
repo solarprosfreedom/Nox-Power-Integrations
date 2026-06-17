@@ -7,6 +7,7 @@ import {
   getEnerfloAppointmentIdByTerrosEventId,
   getCalendarEventMappingMeta,
   acquireTerrosEventCreateLock,
+  acquireTerrosAccountAddLock,
   saveCalendarEventMapping,
   saveCustomerAccountMapping,
   getEnerfloCustomerIdByTerrosAccountId,
@@ -820,6 +821,63 @@ async function handleAdd(
   terrosAccountId: string,
   data: TerrosAccountWebhookData
 ): Promise<NextResponse> {
+  // ── Loopback guard ──────────────────────────────────────────────────────
+  // An account created in Terros from an Enerflo customer (via customer.created
+  // → account/add) already carries an externalLeadId pointing at the Enerflo
+  // record. When Terros fires "Account add" for it, creating a new Enerflo lead
+  // would duplicate the original customer. Skip — the Enerflo record already
+  // exists. Genuine Terros-origin accounts have no externalLeadId at add time.
+  const incomingExternalLeadId = (data.externalLeadId ?? "").trim();
+  if (incomingExternalLeadId) {
+    await writeApiLog({
+      operation: "webhook:terros:create-enerflo-customer-skipped",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosAccountId,
+        reason: "already-linked-to-enerflo",
+        externalLeadId: incomingExternalLeadId,
+      }).slice(0, 300),
+    });
+    return NextResponse.json({
+      received: true,
+      action: "add",
+      terrosAccountId,
+      skipped: true,
+      reason: "already-linked-to-enerflo",
+    });
+  }
+
+  // ── Idempotency lock ──────────────────────────────────────────────────────
+  // Only one lead/add per Terros account should win, even if the add webhook is
+  // delivered more than once.
+  if (!(await acquireTerrosAccountAddLock(terrosAccountId))) {
+    await writeApiLog({
+      operation: "webhook:terros:create-enerflo-customer-skipped",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        terrosAccountId,
+        reason: "duplicate-add-lock",
+      }).slice(0, 300),
+    });
+    return NextResponse.json({
+      received: true,
+      action: "add",
+      terrosAccountId,
+      skipped: true,
+      reason: "duplicate-add-lock",
+    });
+  }
+
   // Fetch the full account from Terros (for resident name) in parallel with the
   // Enerflo user lookup (for owner/setter). Running them concurrently halves
   // the latency before we can create the lead and save the Supabase mapping,

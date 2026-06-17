@@ -211,6 +211,35 @@ export async function acquireAppointmentStageLock(
 }
 
 /**
+ * Lock for Enerflo → Terros account creation (concurrent customer.created bursts).
+ * Enerflo fires customer.created 2-3× for the same customer within ~1-2s. Without
+ * a lock, all deliveries pass the search-based dedup guard simultaneously (before
+ * any has finished creating the Terros account) and each creates a DUPLICATE
+ * account — including junk/empty deliveries that fall back to the default owner.
+ * Returns true only for the first delivery of a given Enerflo customer id in the
+ * window, so exactly one Terros account is created.
+ */
+export async function acquireCustomerCreatedLock(
+  enerfloCustomerId: string
+): Promise<boolean> {
+  const key = enerfloCustomerId.trim();
+  if (!key) return true;
+  return acquireDedupLock(key, "customer-created-lock", 5 * 60_000);
+}
+
+/**
+ * Lock for Terros → Enerflo lead creation (concurrent / duplicate Account add).
+ * Only one POST /api/v1/partner/action/lead/add per Terros account should win.
+ */
+export async function acquireTerrosAccountAddLock(
+  terrosAccountId: string
+): Promise<boolean> {
+  const key = terrosAccountId.trim();
+  if (!key) return true;
+  return acquireDedupLock(key, "terros-account-add-lock", 5 * 60_000);
+}
+
+/**
  * Persist the mapping from Enerflo appointment ID → Terros calendar event ID.
  * Stored as a dedicated log entry so update_appointment can look it up even
  * when calendar/event/list doesn't return notes.
