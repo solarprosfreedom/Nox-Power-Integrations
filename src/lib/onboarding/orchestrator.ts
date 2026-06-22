@@ -37,6 +37,7 @@ import {
   findGraphUserByEmailOrUpn,
   findGraphUserByUpn,
   GraphUserPermissionError,
+  isMailboxReady,
   resolveUpnForUser,
 } from "@/lib/microsoft/graph-users";
 import { sendMailAsUser, isGraphMailConfigured } from "@/lib/microsoft/graph-mail";
@@ -404,6 +405,30 @@ export async function runOnboardingJob(
   const installerTabs = sequifiFields.installerTabs;
   const firstName = job.first_name ?? "";
   const lastName = job.last_name ?? "";
+
+  // Mailbox readiness gate — Exchange Online provisions the mailbox in the
+  // background after license assignment (typically 2–10 min).  If we create
+  // Terros/Enerflo accounts before the mailbox exists, their invite emails
+  // bounce and the address lands on a suppression list.  We check
+  // /mailboxSettings (only returns 200 once Exchange is ready) and reschedule
+  // the job for 5 minutes later if it isn't ready yet.
+  if (
+    !dryRun &&
+    job.microsoft_status === "success" &&
+    job.microsoft_user_id &&
+    (job.enerflo_status !== "success" || job.terros_status !== "success")
+  ) {
+    const mailboxReady = await isMailboxReady(job.microsoft_user_id);
+    if (!mailboxReady) {
+      stepErrors.mailbox_wait = new Date().toISOString();
+      await updateJobStep(job.id, {
+        status: "partial",
+        next_retry_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        step_errors: stepErrors,
+      });
+      return job;
+    }
+  }
 
   // Enerflo — one account using company work email (same as Microsoft / Terros).
   if (!installerTabs.length) {

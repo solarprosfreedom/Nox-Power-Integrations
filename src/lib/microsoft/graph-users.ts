@@ -286,6 +286,24 @@ export async function ensureGraphUserLicensed(userId: string): Promise<{
   return { ...result, skipped: false };
 }
 
+/**
+ * Polls Graph mailboxSettings until Exchange Online has fully provisioned the
+ * mailbox for the given user.  Returns true as soon as the mailbox is ready,
+ * false if the deadline is reached before it becomes available.
+ *
+ * Exchange typically provisions within 2–10 minutes after license assignment,
+ * but can take longer in edge cases.  The caller should treat a false return
+ * as "not yet ready" and retry later rather than failing permanently.
+ */
+export async function isMailboxReady(userId: string): Promise<boolean> {
+  const token = await getGraphAccessToken();
+  const res = await fetch(
+    `${GRAPH_BASE}/users/${encodeURIComponent(userId)}/mailboxSettings`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return res.ok;
+}
+
 export function resolveUpnForUser(
   email: string,
   firstName: string,
