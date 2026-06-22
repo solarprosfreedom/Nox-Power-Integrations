@@ -2545,7 +2545,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
             if (byNotes) {
               existingEventId = (byNotes.eventId ?? byNotes.id) as string;
             } else {
-              // Strategy 3: title match (Enerflo "In-Home – Name" vs Terros "Consultation")
+              // Strategy 3: title match (Enerflo "In-Home – Name" vs Terros "Name")
               const apptTypeName2 = payload.appointment_type?.name ?? "Consultation";
               const expectedTitle = `${apptTypeName2} – ${payload.customer?.first_name ?? ""} ${payload.customer?.last_name ?? ""}`.trim();
               const byTitle = evts.find(e =>
@@ -2554,17 +2554,50 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
               if (byTitle) {
                 existingEventId = (byTitle.eventId ?? byTitle.id) as string;
               } else {
-                // Strategy 3b: same start time (Terros often titles events "Consultation")
+                // Strategy 3b: normalized title equality.
+                // This catches manual Terros events that use resident-only titles while
+                // Enerflo update_appointment uses "In-Home – <name>".
+                const normalizeTitle = (v: unknown): string => String(v ?? "")
+                  .toLowerCase()
+                  .replace(/\s+/g, " ")
+                  .replace(/^[\s-–]*(in-home|consultation)\s*[–-]?\s*/i, "")
+                  .trim();
+                const expectedNormalized = normalizeTitle(expectedTitle);
+                const byNormalizedTitle = evts.find(e =>
+                  normalizeTitle(e.title) === expectedNormalized && expectedNormalized.length > 0
+                );
+                if (byNormalizedTitle) {
+                  existingEventId = (byNormalizedTitle.eventId ?? byNormalizedTitle.id) as string;
+                } else {
+                // Strategy 3c: same start time (allow small jitter; parse numbers and numeric strings).
+                const parseTerrosEventDateMs = (rawDate: unknown): number => {
+                  if (rawDate == null) return Number.NaN;
+                  if (typeof rawDate === "number") {
+                    // Some APIs return epoch seconds; normalize to ms.
+                    return rawDate < 1_000_000_000_000 ? rawDate * 1000 : rawDate;
+                  }
+                  if (typeof rawDate === "string") {
+                    const trimmed = rawDate.trim();
+                    if (/^\d+$/.test(trimmed)) {
+                      const n = Number(trimmed);
+                      return Number.isFinite(n)
+                        ? (n < 1_000_000_000_000 ? n * 1000 : n)
+                        : Number.NaN;
+                    }
+                    const parsed = Date.parse(trimmed);
+                    return Number.isNaN(parsed) ? Number.NaN : parsed;
+                  }
+                  return Number.NaN;
+                };
                 const byDate = evts.find(e => {
                   const rawDate = e.eventDate ?? e.startDate;
-                  if (rawDate == null) return false;
-                  const evtMs =
-                    typeof rawDate === "number" ? rawDate : new Date(String(rawDate)).getTime();
+                  const evtMs = parseTerrosEventDateMs(rawDate);
                   if (Number.isNaN(evtMs)) return false;
-                  return Math.abs(evtMs - startTimeMs) < 60_000;
+                  return Math.abs(evtMs - startTimeMs) < 5 * 60_000;
                 });
                 if (byDate) {
                   existingEventId = (byDate.eventId ?? byDate.id) as string;
+                }
                 }
               }
             }
