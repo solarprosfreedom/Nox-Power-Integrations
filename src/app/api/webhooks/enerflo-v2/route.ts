@@ -1812,6 +1812,7 @@ function repUserRecordMatchesLookup(u: EnerfloUser, repLookupId: string): boolea
 interface AppointmentAccountResolution {
   accountId: string | null;
   accountOwnerIdFromLookup: string | null;
+  accountWorkflowStageId: string | null;
   accountLocation: Record<string, unknown> | null;
   customerUuid: string | null;
   v3Customer: Record<string, unknown>;
@@ -1955,6 +1956,7 @@ async function resolveTerrosAccountForAppointment(
   let enerfloAgentNumericId: string | null = null;
   let accountId: string | null = null;
   let accountOwnerIdFromLookup: string | null = null;
+  let accountWorkflowStageId: string | null = null;
   let accountLocation: Record<string, unknown> | null = null;
   let step1Source = "";
   let step1Ok = false;
@@ -1985,6 +1987,7 @@ async function resolveTerrosAccountForAppointment(
   const applyAccountMatch = (acc: Record<string, unknown>, source: string) => {
     accountId = String(acc.accountId ?? acc.id ?? "").trim() || null;
     accountOwnerIdFromLookup = (acc.ownerId as string | undefined) ?? null;
+    accountWorkflowStageId = String(acc.workflowStageId ?? "").trim() || null;
     if (acc.location && typeof acc.location === "object") {
       accountLocation = acc.location as Record<string, unknown>;
     }
@@ -2080,6 +2083,7 @@ async function resolveTerrosAccountForAppointment(
   return {
     accountId,
     accountOwnerIdFromLookup,
+    accountWorkflowStageId,
     accountLocation,
     customerUuid,
     v3Customer,
@@ -2133,6 +2137,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   );
   let accountId = accountResolution.accountId;
   let accountOwnerIdFromLookup = accountResolution.accountOwnerIdFromLookup;
+  const accountWorkflowStageId = accountResolution.accountWorkflowStageId;
   const step1Source = accountResolution.step1Source;
   const step1Status = accountResolution.step1Status;
   let step1Ok = accountResolution.step1Ok;
@@ -2199,7 +2204,10 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     // 3a: account/update — set workflow stage (once per appointment).
     // Guarded so the repeated new_appointment/update_appointment deliveries don't
     // spam the account history with duplicate "Stage: Appointment" entries.
-    if (appointmentStageId && await acquireAppointmentStageLock(enerfloAppointmentId)) {
+    const shouldSetAppointmentStage =
+      Boolean(appointmentStageId) &&
+      (!accountWorkflowStageId || accountWorkflowStageId !== appointmentStageId);
+    if (shouldSetAppointmentStage && await acquireAppointmentStageLock(enerfloAppointmentId)) {
       try {
         const r = await fetch(`${terrosBase}/account/update`, {
           method: "POST",
@@ -2230,6 +2238,11 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         ok: step3Ok,
         responsePreview: step3Preview,
       });
+    } else if (!shouldSetAppointmentStage && appointmentStageId) {
+      step3Ok = true;
+      step3Status = 200;
+      step3Preview =
+        `skipped: already at Appointment stage (workflowStageId=${accountWorkflowStageId ?? "none"})`;
     }
 
     // 3b: account/upsert — set closerId using the accountId we already resolved in step 1.
