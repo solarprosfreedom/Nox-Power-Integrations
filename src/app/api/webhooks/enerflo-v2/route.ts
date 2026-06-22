@@ -619,7 +619,7 @@ async function handleProjectSubmitted(
 
   // ── Step 2 [best-effort]: Resolve Terros userId by rep email ─────────────
   let terrosUserId: string | null = null;
-  const repEmailToResolve = repEmail || env.defaultOwnerEmail || "";
+  const repEmailToResolve = repEmail || "";
   if (repEmailToResolve) {
     const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, repEmailToResolve);
     terrosUserId = u.userId;
@@ -676,6 +676,7 @@ async function handleProjectSubmitted(
       ...(terrosUserId
         ? { ownerId: terrosUserId, assignedUserId: terrosUserId }
         : {}),
+      ...(terrosUserId ? { actorId: terrosUserId } : {}),
       externalId: dealId,
       sourceStatus: "Project Submitted",
       ...(dealShortCode ? { sourceId: dealShortCode } : {}),
@@ -759,7 +760,14 @@ async function handleProjectSubmitted(
           const stageRes = await fetch(`${terrosBase}/account/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-            body: JSON.stringify({ account: { accountId: upsertedId, id: upsertedId, workflowStageId: fallbackStageId } }),
+            body: JSON.stringify({
+              account: {
+                accountId: upsertedId,
+                id: upsertedId,
+                workflowStageId: fallbackStageId,
+                ...(terrosUserId ? { actorId: terrosUserId } : {}),
+              },
+            }),
           });
           stageStatus = stageRes.status;
           const stageBody = await stageRes.text();
@@ -837,6 +845,7 @@ async function handleProjectSubmitted(
           accountId: upsertedId,
           id: upsertedId,
           ...(closedStage ? { workflowStageId: closedStage } : {}),
+          ...(terrosUserId ? { actorId: terrosUserId } : {}),
           ...(Object.keys(mergedCustomFields).length > 0 ? { customFields: mergedCustomFields } : {}),
           // Terros requires a phone number before allowing stage transition to Closed
           ...(cleanPhoneForClosed ? { resident: { phone: cleanPhoneForClosed } } : {}),
@@ -1171,10 +1180,10 @@ async function handleCustomerCreated(
   // Field mapping for Enerflo-originated leads (business rule):
   //   Enerflo Setter              → Terros Owner
   //   Enerflo Lead Owner/SalesRep → Terros Closer
-  // Terros Owner source prefers the setter, falls back to the sales rep when
-  // there's no setter, then to DEFAULT_OWNER_EMAIL (gap detection) when neither
-  // resolves to a Terros user.
-  const terrosOwnerSourceEmail = setterEmailResolved || ownerEmail || env.defaultOwnerEmail || "";
+  // Terros Owner source prefers the setter, then falls back to the sales rep.
+  // We intentionally do not use DEFAULT_OWNER_EMAIL as a hard fallback because
+  // sparse payloads would otherwise assign leads to a generic/default owner.
+  const terrosOwnerSourceEmail = setterEmailResolved || ownerEmail || "";
   _ownerDebug.terrosOwnerSource = terrosOwnerSourceEmail || null;
   _ownerDebug.terrosCloserSource = ownerEmail || null;
   if (terrosOwnerSourceEmail) {
@@ -1203,6 +1212,7 @@ async function handleCustomerCreated(
     sourceStatus: "New Lead",
     ...(terrosOwnerId  ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
     ...(terrosCloserId ? { closerId: terrosCloserId }                               : {}),
+    ...((terrosOwnerId || terrosCloserId) ? { actorId: terrosOwnerId || terrosCloserId } : {}),
     ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
     ...(knockStageId ? { workflowStageId: knockStageId } : {}),
     location,
@@ -1368,7 +1378,7 @@ async function handleCustomerUpdatedV2(
   //   Enerflo Setter              → Terros Owner
   //   Enerflo Lead Owner/SalesRep → Terros Closer
   const terrosOwnerSourceEmail =
-    ownerResolution.setterEmail || ownerResolution.ownerEmail || env.defaultOwnerEmail || "";
+    ownerResolution.setterEmail || ownerResolution.ownerEmail || "";
   let terrosOwnerId: string | null = null;
   let terrosCloserId: string | null = null;
   if (terrosOwnerSourceEmail && terrosKey) {
@@ -1408,6 +1418,7 @@ async function handleCustomerUpdatedV2(
     ...(customerName ? { name: customerName } : {}),
     ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
     ...(terrosCloserId ? { closerId: terrosCloserId } : {}),
+    ...((terrosOwnerId || terrosCloserId) ? { actorId: terrosOwnerId || terrosCloserId } : {}),
     ...(Object.keys(residentUpdate).length > 0 ? { resident: residentUpdate } : {}),
   };
 
@@ -2193,7 +2204,13 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         const r = await fetch(`${terrosBase}/account/update`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: { accountId, workflowStageId: appointmentStageId } }),
+          body: JSON.stringify({
+            account: {
+              accountId,
+              workflowStageId: appointmentStageId,
+              ...(closerUserId ? { actorId: closerUserId } : {}),
+            },
+          }),
         });
         step3Status  = r.status;
         const raw    = await r.text();
@@ -2225,7 +2242,13 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
         const r = await fetch(`${terrosBase}/account/upsert`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: { accountId, closerId: closerUserId } }),
+          body: JSON.stringify({
+            account: {
+              accountId,
+              closerId: closerUserId,
+              actorId: closerUserId,
+            },
+          }),
         });
         step3bStatus  = r.status;
         const raw     = await r.text();
@@ -2390,7 +2413,14 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
         const r = await fetch(`${terrosBase}/account/update`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-          body: JSON.stringify({ account: { accountId, id: accountId, workflowStageId: appointmentStageId } }),
+          body: JSON.stringify({
+            account: {
+              accountId,
+              id: accountId,
+              workflowStageId: appointmentStageId,
+              ...(closerUserId ? { actorId: closerUserId } : {}),
+            },
+          }),
         });
         step3Status  = r.status;
         const raw    = await r.text();
@@ -2428,6 +2458,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           body: JSON.stringify({ account: {
             accountId,
             ...(closerUserId     ? { closerId: closerUserId }     : {}),
+            ...(closerUserId     ? { actorId: closerUserId }      : {}),
             ...(resolvedLocation ? { location: resolvedLocation } : {}),
           } }),
         });
@@ -2816,7 +2847,7 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   let closerId: string | null = null;
 
   if (terrosKey) {
-    const ownerEmailToUse = salesRepEmail || env.defaultOwnerEmail || "";
+    const ownerEmailToUse = salesRepEmail || "";
     if (ownerEmailToUse) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmailToUse);
       ownerId = r.userId;
@@ -2856,6 +2887,7 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     ...(customerName  ? { name: customerName }                          : {}),
     ...(ownerId       ? { ownerId }                                     : {}),
     ...(closerId      ? { closerId }                                    : {}),
+    ...((ownerId || closerId) ? { actorId: ownerId || closerId }       : {}),
     ...(Object.keys(residentFields).length > 0 ? { resident: residentFields } : {}),
   };
 
@@ -2920,6 +2952,7 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
       id: accountId,
       ...(ownerId  ? { ownerId }  : {}),
       ...(closerId ? { closerId } : {}),
+      ...(ownerId || closerId ? { actorId: ownerId || closerId } : {}),
     };
     let step4bOk = false;
     let step4bStatus: number | null = null;
@@ -3003,6 +3036,7 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
               accountId:       updateAccountId,
               id:              updateAccountId,
               workflowStageId: resolvedStageId,
+              ...(ownerId || closerId ? { actorId: ownerId || closerId } : {}),
             },
           }),
         });

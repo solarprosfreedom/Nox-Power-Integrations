@@ -238,18 +238,22 @@ export async function resolveEnerfloCustomerLeadOwner(options: {
   let setterEmail: string | null = v1Row ? extractSetterEmailFromV1Row(v1Row) : null;
 
   let v3Data = v3Provided ?? null;
-  if (!v3Data && matchedNumericId && enerfloKey) {
-    try {
-      const v3Res = await fetch(
-        `${enerfloBase}/api/v3/customers/${encodeURIComponent(matchedNumericId)}`,
-        { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } },
-      );
-      debug.v3Status = v3Res.status;
-      if (v3Res.ok) {
-        v3Data = JSON.parse(await v3Res.text()) as Record<string, unknown>;
+  if (!v3Data && enerfloKey) {
+    const v3LookupId = matchedNumericId || customerUuid || null;
+    if (v3LookupId) {
+      try {
+        const v3Res = await fetch(
+          `${enerfloBase}/api/v3/customers/${encodeURIComponent(v3LookupId)}`,
+          { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } },
+        );
+        debug.v3LookupId = v3LookupId;
+        debug.v3Status = v3Res.status;
+        if (v3Res.ok) {
+          v3Data = JSON.parse(await v3Res.text()) as Record<string, unknown>;
+        }
+      } catch (e) {
+        debug.v3Error = e instanceof Error ? e.message : String(e);
       }
-    } catch (e) {
-      debug.v3Error = e instanceof Error ? e.message : String(e);
     }
   }
 
