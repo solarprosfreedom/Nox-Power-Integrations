@@ -2769,7 +2769,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
  *                   (the v1 payload only has the numeric id).
  *  2 [best-effort]  Query Enerflo GraphQL fetchDealList to get salesRep + setter emails
  *                   for this customer — these are NOT in the webhook payload.
- *  3 [best-effort]  Resolve salesRep email → Terros ownerId, setter email → Terros closerId.
+ *  3 [best-effort]  Resolve Enerflo setter → Terros ownerId, lead owner → Terros closerId.
  *  4 [required]     Upsert Terros account by externalLeadId (customer UUID): update name,
  *                   address, contact info, ownerId, closerId.
  */
@@ -2857,7 +2857,9 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
     }
   }
 
-  // ── Step 2–3: Lead owner (sales rep / agent → setter fallback) → Terros IDs ──
+  // ── Step 2–3: Enerflo assignments → Terros ownerId + closerId ─────────────
+  //   Enerflo Setter              → Terros Owner
+  //   Enerflo Lead Owner/SalesRep → Terros Closer
   const ownerResolution = await resolveEnerfloCustomerLeadOwner({
     enerfloBase,
     enerfloKey,
@@ -2893,9 +2895,9 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   let closerId: string | null = null;
 
   if (terrosKey) {
-    const ownerEmailToUse = salesRepEmail || "";
-    if (ownerEmailToUse) {
-      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, ownerEmailToUse);
+    const terrosOwnerSourceEmail = setterEmail || salesRepEmail || "";
+    if (terrosOwnerSourceEmail) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosOwnerSourceEmail);
       ownerId = r.userId;
       await writeApiLog({
         operation: "webhook:enerflo-v2:update-customer:owner-resolve",
@@ -2908,8 +2910,8 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
         responsePreview: r.preview.slice(0, 400),
       });
     }
-    if (setterEmail && setterEmail !== salesRepEmail) {
-      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
+    if (salesRepEmail && salesRepEmail !== terrosOwnerSourceEmail) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, salesRepEmail);
       closerId = r.userId;
     }
   }

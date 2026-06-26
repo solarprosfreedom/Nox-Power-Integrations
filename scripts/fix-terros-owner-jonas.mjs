@@ -39,6 +39,19 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function nestedEmail(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const user = obj.user && typeof obj.user === "object" ? obj.user : null;
+  const email = normalizeEmail(
+    (user && user.email) || obj.email || obj.Email || "",
+  );
+  return email || null;
+}
+
 async function main() {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
   const envPath = path.join(root, ".env.local");
@@ -63,6 +76,8 @@ async function main() {
 
   const userEmailToId = new Map();
   const enerfloUserEmailCache = new Map();
+  const enerfloCustomerCache = new Map();
+  const enerfloV1SearchCache = new Map();
 
   async function postTerros(endpoint, body) {
     const res = await fetch(`${terrosBase}${endpoint}`, {
@@ -78,11 +93,81 @@ async function main() {
   }
 
   async function fetchEnerfloCustomer(lookupId) {
+    const key = String(lookupId || "").trim();
+    if (!key) return null;
+    if (enerfloCustomerCache.has(key)) return enerfloCustomerCache.get(key);
     const res = await fetch(`${enerfloBase}/api/v3/customers/${encodeURIComponent(lookupId)}`, {
       headers: { "api-key": enerfloKey, "Content-Type": "application/json" },
     });
-    if (!res.ok) return null;
-    return JSON.parse(await res.text());
+    if (!res.ok) {
+      enerfloCustomerCache.set(key, null);
+      return null;
+    }
+    const parsed = JSON.parse(await res.text());
+    enerfloCustomerCache.set(key, parsed);
+    return parsed;
+  }
+
+  async function searchEnerfloV1Customers(query) {
+    const q = String(query || "").trim();
+    if (!q) return [];
+    if (enerfloV1SearchCache.has(q)) return enerfloV1SearchCache.get(q);
+    try {
+      const res = await fetch(
+        `${enerfloBase}/api/v1/customers?search=${encodeURIComponent(q)}&pageSize=50`,
+        { headers: { "api-key": enerfloKey, "Content-Type": "application/json" } },
+      );
+      if (!res.ok) {
+        enerfloV1SearchCache.set(q, []);
+        return [];
+      }
+      const parsed = JSON.parse(await res.text());
+      const rows = Array.isArray(parsed?.data) ? parsed.data : [];
+      enerfloV1SearchCache.set(q, rows);
+      return rows;
+    } catch {
+      enerfloV1SearchCache.set(q, []);
+      return [];
+    }
+  }
+
+  function chooseBestV1Row(rows, opts) {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const externalLeadId = String(opts.externalLeadId || "").trim();
+    const residentEmail = normalizeEmail(opts.residentEmail || "");
+    const residentPhone = digitsOnly(opts.residentPhone || "");
+    const residentName = String(opts.residentName || "").trim().toLowerCase();
+
+    const byIntegration = rows.find((r) => {
+      const integrations = r?.integrations;
+      const map = integrations?.["Enerflo V2"];
+      const rec = map?.EnerfloV2Customer;
+      return String(rec?.integration_record_id || "").trim() === externalLeadId;
+    });
+    if (byIntegration) return byIntegration;
+
+    const byNumericId = rows.find((r) => String(r?.id || "").trim() === externalLeadId);
+    if (byNumericId) return byNumericId;
+
+    if (residentEmail) {
+      const byEmail = rows.find((r) => normalizeEmail(r?.email || r?.Email) === residentEmail);
+      if (byEmail) return byEmail;
+    }
+
+    if (residentPhone) {
+      const byPhone = rows.find((r) => digitsOnly(r?.phone || r?.mobile_phone) === residentPhone);
+      if (byPhone) return byPhone;
+    }
+
+    if (residentName) {
+      const byName = rows.find((r) => {
+        const full = `${r?.first_name || ""} ${r?.last_name || ""}`.trim().toLowerCase();
+        return full === residentName;
+      });
+      if (byName) return byName;
+    }
+
+    return rows[0];
   }
 
   async function fetchEnerfloUserEmailById(userId) {
@@ -160,6 +245,10 @@ async function main() {
   for (const acc of candidates) {
     const accountId = pick(acc, ["accountId", "id"]);
     const externalLeadId = pick(acc, ["externalLeadId"]);
+    const resident = (acc?.resident && typeof acc.resident === "object") ? acc.resident : {};
+    const residentEmail = normalizeEmail(resident?.email || "");
+    const residentPhone = digitsOnly(resident?.phone || "");
+    const residentName = `${resident?.firstName || ""} ${resident?.lastName || ""}`.trim() || pick(acc, ["name"]);
     const owner = (acc?.owner && typeof acc.owner === "object") ? acc.owner : {};
     const currentOwnerId = pick(acc, ["ownerId"]) || pick(owner, ["userId", "id"]);
     const currentOwnerEmail = normalizeEmail(owner?.email);
@@ -171,29 +260,68 @@ async function main() {
       continue;
     }
 
-    const customer = await fetchEnerfloCustomer(externalLeadId);
-    if (!customer) {
-      stats.skippedNoEnerfloCustomer += 1;
-      writeAudit({ action: "skip", reason: "enerflo-customer-not-found", accountId, externalLeadId });
-      continue;
+    let customer = await fetchEnerfloCustomer(externalLeadId);
+    let v1Row = null;
+    let v1MatchedBy = null;
+
+    if (!customer || !pick(customer, ["agent_user_id", "agentUserId", "setter_user_id", "setterUserId"])) {
+      const searchQueries = [...new Set([
+        externalLeadId,
+        residentEmail,
+        residentPhone,
+        residentName,
+      ].filter(Boolean))];
+
+      for (const q of searchQueries) {
+        const rows = await searchEnerfloV1Customers(q);
+        if (!rows.length) continue;
+        const best = chooseBestV1Row(rows, { externalLeadId, residentEmail, residentPhone, residentName });
+        if (best) {
+          v1Row = best;
+          v1MatchedBy = q;
+          break;
+        }
+      }
+
+      if (!customer && v1Row && v1Row.id != null) {
+        customer = await fetchEnerfloCustomer(String(v1Row.id));
+      }
     }
 
-    const agentId = pick(customer, ["agent_user_id", "agentUserId"]);
-    const setterId = pick(customer, ["setter_user_id", "setterUserId"]);
-    const ownerEmail = agentId ? await fetchEnerfloUserEmailById(agentId) : null;
-    const setterEmail = setterId ? await fetchEnerfloUserEmailById(setterId) : null;
+    const agentId = pick(customer || {}, ["agent_user_id", "agentUserId"]);
+    const setterId = pick(customer || {}, ["setter_user_id", "setterUserId"]);
+    const ownerEmailFromIds = agentId ? await fetchEnerfloUserEmailById(agentId) : null;
+    const setterEmailFromIds = setterId ? await fetchEnerfloUserEmailById(setterId) : null;
+
+    const ownerEmailFromV1 =
+      (v1Row && nestedEmail(v1Row.owner || v1Row.agent || v1Row.leadOwner)) || null;
+    const setterEmailFromV1 =
+      (v1Row && nestedEmail(v1Row.setter_user || v1Row.setterUser)) || null;
+
+    const ownerEmail = ownerEmailFromIds || ownerEmailFromV1 || null;
+    const setterEmail = setterEmailFromIds || setterEmailFromV1 || null;
     const targetOwnerEmailResolved = setterEmail || ownerEmail || null;
     const targetCloserEmail = ownerEmail && ownerEmail !== targetOwnerEmailResolved ? ownerEmail : null;
 
     if (!targetOwnerEmailResolved) {
-      stats.skippedNoOwnerResolved += 1;
+      if (!customer && !v1Row) {
+        stats.skippedNoEnerfloCustomer += 1;
+      } else {
+        stats.skippedNoOwnerResolved += 1;
+      }
       writeAudit({
         action: "skip",
-        reason: "no-owner-email-resolved",
+        reason: !customer && !v1Row ? "enerflo-customer-not-found" : "no-owner-email-resolved",
         accountId,
         externalLeadId,
         agentId,
         setterId,
+        ownerEmailFromV1,
+        setterEmailFromV1,
+        v1MatchedBy,
+        residentEmail,
+        residentPhone,
+        residentName,
       });
       continue;
     }
@@ -235,6 +363,7 @@ async function main() {
         targetOwnerTerrosId,
         targetCloserEmail,
         targetCloserTerrosId,
+        v1MatchedBy,
       });
       continue;
     }
@@ -261,6 +390,7 @@ async function main() {
       targetOwnerTerrosId,
       targetCloserEmail,
       targetCloserTerrosId,
+      v1MatchedBy,
     });
   }
 

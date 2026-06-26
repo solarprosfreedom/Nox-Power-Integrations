@@ -1,0 +1,21 @@
+-- api_logs is used both for request logging AND as a key/value store for
+-- dedup locks and id-mappings (calendar-event-id-map, customer-account-id-map).
+-- The mapping/lock lookups filter by `operation` and order by `timestamp`, e.g.:
+--
+--   select response_preview from api_logs
+--   where operation = 'calendar-event-id-map'
+--     and response_preview ilike '%"enerfloAppointmentId":1727971%'
+--   order by timestamp desc limit 1;
+--
+-- With no index, Postgres scans the entire table (290k+ rows) and sorts. As the
+-- table grew this began hitting the statement timeout; the lookup helpers catch
+-- the error and return null, so the webhook handlers treat "lookup failed" as
+-- "no existing record" and CREATE A DUPLICATE (duplicate Terros calendar events,
+-- duplicate accounts, etc.).
+--
+-- This composite index lets the planner seek straight to the rows for a given
+-- operation in timestamp order (and scan backward for ascending lock queries),
+-- applying the ilike/eq filter only to that small subset. CONCURRENTLY avoids
+-- locking the table against writes while the index builds.
+create index concurrently if not exists idx_api_logs_operation_timestamp
+  on api_logs (operation, timestamp desc);

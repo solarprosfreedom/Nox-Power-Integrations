@@ -76,11 +76,17 @@ interface TerrosOwner {
   userId?: string;
 }
 
+/** Terros Owner/Setter and Closer use the same user shape in webhooks and account/get. */
+type TerrosUser = TerrosOwner;
+
 interface TerrosAccountWebhookData {
   id?: string;
   address?: TerrosAddress;
   resident?: TerrosResident;
-  owner?: TerrosOwner;
+  owner?: TerrosUser;
+  closer?: TerrosUser;
+  ownerId?: string;
+  closerId?: string;
   externalLeadId?: string;
 }
 
@@ -139,24 +145,22 @@ function stripEmailAlias(email: string): string {
 }
 
 /**
- * Resolve the canonical Enerflo-compatible email for a Terros account owner.
+ * Resolve the canonical Enerflo-compatible email for a Terros user (owner or closer).
  *
  * Strategy:
- *  1. If `owner.email` is present → call Terros `/user/get` with that email to
- *     get the canonical registered email, then strip any +alias suffix so it
- *     matches the rep's Enerflo login email.
- *  2. If only `owner.id` / `owner.userId` is present → call `/user/get` by ID.
- *  3. Falls back to the raw email (alias-stripped) if the API call fails.
+ *  1. If `user.email` is present → strip any +alias suffix so it matches Enerflo login.
+ *  2. If only `user.id` / `user.userId` is present → call `/user/get` by ID.
+ *  3. Falls back to undefined if the API call fails.
  */
-async function resolveTerrosOwnerEmail(
+async function resolveTerrosUserEmail(
   terrosBase: string,
   terrosKey: string,
-  owner: TerrosOwner | undefined
+  user: TerrosUser | undefined
 ): Promise<string | undefined> {
-  if (!owner) return undefined;
+  if (!user) return undefined;
 
-  const rawEmail = owner.email?.trim();
-  const ownerId = (owner.id ?? owner.userId)?.trim();
+  const rawEmail = user.email?.trim();
+  const ownerId = (user.id ?? user.userId)?.trim();
 
   if (!rawEmail && !ownerId) return undefined;
 
@@ -200,6 +204,22 @@ async function resolveTerrosOwnerEmail(
   return undefined;
 }
 
+/** @deprecated Use resolveTerrosUserEmail — kept as alias for readability at call sites. */
+const resolveTerrosOwnerEmail = resolveTerrosUserEmail;
+
+function terrosUserFromAccount(
+  full: Record<string, unknown>,
+  role: "owner" | "closer"
+): TerrosUser | undefined {
+  const nested = full[role] as TerrosUser | undefined;
+  if (nested && (nested.email || nested.id || nested.userId)) return nested;
+  const userId = full[`${role}Id`];
+  if (typeof userId === "string" && userId.trim()) {
+    return { userId: userId.trim(), id: userId.trim() };
+  }
+  return undefined;
+}
+
 function mapAddress(a?: TerrosAddress): {
   address: string;
   city: string;
@@ -212,6 +232,32 @@ function mapAddress(a?: TerrosAddress): {
   const state = (a.countrySubd ?? "").trim();
   const zip = a.postal1 != null ? String(a.postal1).trim() : "";
   return { address: line1, city, state, zip };
+}
+
+async function resolveTerrosAssignmentEmails(
+  terrosBase: string,
+  terrosKey: string,
+  data: TerrosAccountWebhookData,
+  fullAccount?: Record<string, unknown> | null
+): Promise<{ setterEmail?: string; leadOwnerEmail?: string }> {
+  const ownerRef =
+    data.owner ??
+    (fullAccount ? terrosUserFromAccount(fullAccount, "owner") : undefined) ??
+    (data.ownerId ? { userId: data.ownerId, id: data.ownerId } : undefined);
+  const closerRef =
+    data.closer ??
+    (fullAccount ? terrosUserFromAccount(fullAccount, "closer") : undefined) ??
+    (data.closerId ? { userId: data.closerId, id: data.closerId } : undefined);
+
+  const [setterEmail, leadOwnerEmail] = await Promise.all([
+    terrosKey ? resolveTerrosUserEmail(terrosBase, terrosKey, ownerRef) : Promise.resolve(undefined),
+    terrosKey ? resolveTerrosUserEmail(terrosBase, terrosKey, closerRef) : Promise.resolve(undefined),
+  ]);
+
+  return {
+    ...(setterEmail ? { setterEmail } : {}),
+    ...(leadOwnerEmail ? { leadOwnerEmail } : {}),
+  };
 }
 
 /** POST /account/get — request shape varies; try common variants. */
@@ -571,8 +617,10 @@ async function resolveEnerfloNumericCustomerId(
 function buildEnerfloPayloadFromTerros(
   account: TerrosAccountWebhookData,
   terrosAccountId: string,
-  resolvedOwnerEmail?: string
+  assignments?: { setterEmail?: string; leadOwnerEmail?: string }
 ): Record<string, unknown> {
+  const setterEmail = assignments?.setterEmail?.trim();
+  const leadOwnerEmail = assignments?.leadOwnerEmail?.trim();
   const r = account.resident ?? {};
   // Resident name: prefer combined first+last, fall back to full name string
   const residentFirst = (r.firstName ?? "").trim();
@@ -609,19 +657,25 @@ function buildEnerfloPayloadFromTerros(
   };
   if (email) lead.email = email;
   if (phone) lead.mobile = phone;
-  if (resolvedOwnerEmail) {
-    lead.assign_to_email = resolvedOwnerEmail;
-    // Account create only — same rep as Terros owner; updates do not touch setter.
-    lead.setter_email = resolvedOwnerEmail;
-  }
+  // Terros Owner/Setter → Enerflo Setter; Terros Closer → Enerflo Lead Owner / Sales Rep
+  if (setterEmail) lead.setter_email = setterEmail;
+  if (leadOwnerEmail) lead.assign_to_email = leadOwnerEmail;
   return { lead };
 }
 
 function buildEnerfloUpdatePayload(
   account: TerrosAccountWebhookData,
-  resolvedOwnerEmail?: string,
-  ownerUserId?: number | null
+  assignments?: {
+    setterEmail?: string;
+    leadOwnerEmail?: string;
+    setterUserId?: number | null;
+    agentUserId?: number | null;
+  }
 ): Record<string, unknown> {
+  const setterEmail = assignments?.setterEmail?.trim();
+  const leadOwnerEmail = assignments?.leadOwnerEmail?.trim();
+  const setterUserId = assignments?.setterUserId;
+  const agentUserId = assignments?.agentUserId;
   const r = account.resident ?? {};
   // Prefer combined firstName+lastName (sent by Terros update payloads);
   // fall back to the flat name string for older/add payloads.
@@ -647,13 +701,12 @@ function buildEnerfloUpdatePayload(
   if (city) body.city = city;
   if (state) body.state = state;
   if (zip) body.zip = zip;
-  // Owner / sales-rep reassignment on the v3 customers endpoint uses the numeric
-  // `agent_user_id` field (mirrors `setter_user_id`). The v1 `assign_to_email`
-  // field is silently ignored by v3 PUT, which is why changing the owner in
-  // Terros never propagated. Send the numeric id when we could resolve it; keep
-  // assign_to_email too as a harmless hint for any endpoint that honors it.
-  if (ownerUserId != null) body.agent_user_id = ownerUserId;
-  if (resolvedOwnerEmail) body.assign_to_email = resolvedOwnerEmail;
+  // Terros Owner/Setter → Enerflo setter_user_id; Terros Closer → Enerflo agent_user_id
+  // (Lead Owner / Sales Rep). v3 PUT ignores assign_to_email / setter_email strings.
+  if (setterUserId != null) body.setter_user_id = setterUserId;
+  if (agentUserId != null) body.agent_user_id = agentUserId;
+  if (setterEmail) body.setter_email = setterEmail;
+  if (leadOwnerEmail) body.assign_to_email = leadOwnerEmail;
   return body;
 }
 
@@ -668,7 +721,7 @@ export async function GET() {
       { entity: "Event",   actions: ["add"] },
     ],
     outbound: [
-      "Account add: Creates an Enerflo customer via lead/add; sets assign_to_email and setter_email from the Terros account owner. Account update: assign_to_email only (does not overwrite setter). Links Terros externalLeadId after create.",
+      "Account add/update: Terros Owner → Enerflo Setter (setter_user_id / setter_email); Terros Closer → Enerflo Lead Owner (agent_user_id / assign_to_email). Links Terros externalLeadId after create.",
       "Event add: Creates an Enerflo appointment via POST /api/v1/appointments; resolves numeric customer ID from externalLeadId and numeric user ID from owner.email. Stamps [Enerflo:ID] back onto the Terros event notes.",
     ],
   });
@@ -884,18 +937,22 @@ async function handleAdd(
   // which reduces the race-condition window for the follow-up update webhook.
   const rawOwnerEmail = data.owner?.email?.trim();
   const ownerEmailForLookup = rawOwnerEmail
-    ?? (terrosKey ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, data.owner) : undefined);
+    ?? (terrosKey ? await resolveTerrosUserEmail(terrosBase, terrosKey, data.owner) : undefined);
 
   const [full, verifiedOwnerEmailResult] = await Promise.all([
     terrosKey ? fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId) : Promise.resolve(null),
     ownerEmailForLookup ? findEnerfloUserByEmail(ownerEmailForLookup) : Promise.resolve(undefined),
   ]);
 
-  let verifiedOwnerEmail: string | undefined = verifiedOwnerEmailResult ?? undefined;
+  let verifiedSetterEmail: string | undefined = verifiedOwnerEmailResult ?? undefined;
   // Fall back to default owner (X Lead) if no owner could be resolved
-  if (!verifiedOwnerEmail && env.defaultOwnerEmail) {
-    verifiedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
+  if (!verifiedSetterEmail && env.defaultOwnerEmail) {
+    verifiedSetterEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
   }
+
+  const assignmentEmails = await resolveTerrosAssignmentEmails(terrosBase, terrosKey, data, full);
+  const setterEmail = assignmentEmails.setterEmail ?? verifiedSetterEmail;
+  const leadOwnerEmail = assignmentEmails.leadOwnerEmail;
 
   const enrichedData: TerrosAccountWebhookData = {
     ...data,
@@ -905,11 +962,16 @@ async function handleAdd(
             ...terrosResidentFromAccount(full),
             ...data.resident, // webhook data takes precedence if it has values
           },
+          owner: data.owner ?? terrosUserFromAccount(full, "owner"),
+          closer: data.closer ?? terrosUserFromAccount(full, "closer"),
         }
       : {}),
   };
 
-  const createBody = buildEnerfloPayloadFromTerros(enrichedData, terrosAccountId, verifiedOwnerEmail);
+  const createBody = buildEnerfloPayloadFromTerros(enrichedData, terrosAccountId, {
+    setterEmail,
+    leadOwnerEmail,
+  });
 
   const log = await enerfloRequest({
     operation: "webhook:terros:create-enerflo-customer",
@@ -981,7 +1043,8 @@ async function handleAdd(
     debug: {
       rawOwnerEmail: rawOwnerEmail ?? null,
       emailForLookup: ownerEmailForLookup ?? null,
-      verifiedOwnerEmail: verifiedOwnerEmail ?? null,
+      setterEmail: setterEmail ?? null,
+      leadOwnerEmail: leadOwnerEmail ?? null,
     },
   });
 }
@@ -1069,7 +1132,13 @@ async function handleUpdate(
     // try a lead/add upsert: Enerflo matches existing leads by integration_record_id
     // and returns "Lead Updated" with the existing ID — no duplicate is created.
     // This self-heals old unmapped accounts on their next Terros update.
-    const upsertBody = buildEnerfloPayloadFromTerros(merged, terrosAccountId);
+    const fallbackAssignments = await resolveTerrosAssignmentEmails(
+      terrosBase,
+      terrosKey,
+      merged,
+      terrosKey ? await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId) : null
+    );
+    const upsertBody = buildEnerfloPayloadFromTerros(merged, terrosAccountId, fallbackAssignments);
     const upsertLog = await enerfloRequest({
       operation: "webhook:terros:update-enerflo-customer",
       method: "POST",
@@ -1138,21 +1207,26 @@ async function handleUpdate(
     await terrosAccountUpdateExternalLeadId(terrosBase, terrosKey, terrosAccountId, customerUuid);
   }
 
-  // Resolve canonical owner email (handles +alias mismatches and ID-only owner payloads)
-  const ownerData = merged.owner ?? webhookData.owner;
-  let resolvedOwnerEmail = terrosKey
-    ? await resolveTerrosOwnerEmail(terrosBase, terrosKey, ownerData)
-    : undefined;
-  // Fall back to default owner (X Lead) if no owner could be resolved
-  if (!resolvedOwnerEmail && env.defaultOwnerEmail) {
-    resolvedOwnerEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
+  // Resolve Terros assignments → Enerflo setter + lead owner
+  const assignmentEmails = await resolveTerrosAssignmentEmails(
+    terrosBase,
+    terrosKey,
+    merged,
+    terrosKey ? await fetchTerrosAccountById(terrosBase, terrosKey, terrosAccountId) : null
+  );
+  let setterEmail = assignmentEmails.setterEmail;
+  const leadOwnerEmail = assignmentEmails.leadOwnerEmail;
+  if (!setterEmail && env.defaultOwnerEmail) {
+    setterEmail = await findEnerfloUserByEmail(env.defaultOwnerEmail) ?? env.defaultOwnerEmail;
   }
-  // Resolve the numeric Enerflo user id so the v3 customers PUT can reassign the
-  // owner via agent_user_id (assign_to_email alone is ignored by v3).
-  const ownerUserId = resolvedOwnerEmail
-    ? await findEnerfloUserIdByEmail(resolvedOwnerEmail)
-    : null;
-  const updateBody = buildEnerfloUpdatePayload(merged, resolvedOwnerEmail, ownerUserId);
+  const setterUserId = setterEmail ? await findEnerfloUserIdByEmail(setterEmail) : null;
+  const agentUserId = leadOwnerEmail ? await findEnerfloUserIdByEmail(leadOwnerEmail) : null;
+  const updateBody = buildEnerfloUpdatePayload(merged, {
+    setterEmail,
+    leadOwnerEmail,
+    setterUserId,
+    agentUserId,
+  });
   if (Object.keys(updateBody).length === 0) {
     await writeApiLog({
       operation: "webhook:terros:update-enerflo-customer-skipped",
@@ -1227,11 +1301,10 @@ async function handleUpdate(
   let updatePath = "v3-customer-put";
   if (!log.ok && log.status === 403) {
     // Record is still a lead — use lead/add upsert via integration_record_id.
-    const leadUpsertBody = buildEnerfloPayloadFromTerros(
-      merged,
-      terrosAccountId,
-      resolvedOwnerEmail
-    );
+    const leadUpsertBody = buildEnerfloPayloadFromTerros(merged, terrosAccountId, {
+      setterEmail,
+      leadOwnerEmail,
+    });
     log = await enerfloRequest({
       operation: "webhook:terros:update-enerflo-customer",
       method: "POST" as const,
