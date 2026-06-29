@@ -13,6 +13,7 @@ export interface TerrosSummary {
   zip: string;
   addressFull: string;
   ownerEmail: string;
+  closerEmail: string;
   externalLeadId: string;
 }
 
@@ -41,6 +42,7 @@ export function parseTerrosAccountRow(acc: Record<string, unknown>): TerrosSumma
   const resident = acc.resident as Record<string, unknown> | undefined;
   const loc = (acc.location ?? acc.address) as Record<string, unknown> | undefined;
   const owner = acc.owner as Record<string, unknown> | undefined;
+  const closer = acc.closer as Record<string, unknown> | undefined;
   const line1 = String(loc?.line1 ?? "").trim();
   const city = String(loc?.locality ?? "").trim();
   const state = String(loc?.countrySubd ?? "").trim();
@@ -67,6 +69,7 @@ export function parseTerrosAccountRow(acc: Record<string, unknown>): TerrosSumma
     zip,
     addressFull: oneLine,
     ownerEmail: String(owner?.email ?? "").trim(),
+    closerEmail: String(closer?.email ?? "").trim(),
     externalLeadId: String(acc.externalLeadId ?? "").trim(),
   };
 }

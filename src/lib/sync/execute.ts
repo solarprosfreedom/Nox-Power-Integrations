@@ -17,6 +17,13 @@ import {
   resolveEmailFromUserList,
   resolveTerrosUserIdFromList,
 } from "@/lib/sync/terros-users";
+import {
+  pickTerrosOwnerEmailFromEnerflo,
+  pickTerrosCloserEmailFromEnerflo,
+  pickEnerfloSetterEmailFromTerros,
+  pickEnerfloLeadOwnerEmailFromTerros,
+} from "@/lib/sync/terros-enerflo-assignments";
+import { resolveEnerfloCustomerLeadOwner } from "@/lib/sync/enerflo-lead-owner";
 import { postTerros } from "@/lib/sync/terros-api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -115,11 +122,15 @@ export async function executeE2T(rows: E2TRow[]): Promise<ExecuteResultRow[]> {
 
   for (const row of rows) {
     try {
-      // Resolve Terros owner — strip +alias from both sides to handle mismatches
-      let terrosOwnerId: string | null = null;
-      if (row.salesRepEmail) {
-        terrosOwnerId = resolveTerrosUserIdFromList(row.salesRepEmail, terrosUsers);
-      }
+      // Enerflo Setter → Terros Owner; Lead Owner → Terros Closer
+      const terrosOwnerEmail = pickTerrosOwnerEmailFromEnerflo(row.setterEmail, row.salesRepEmail);
+      const terrosCloserEmail = pickTerrosCloserEmailFromEnerflo(row.setterEmail, row.salesRepEmail);
+      const terrosOwnerId = terrosOwnerEmail
+        ? resolveTerrosUserIdFromList(terrosOwnerEmail, terrosUsers)
+        : null;
+      const terrosCloserId = terrosCloserEmail
+        ? resolveTerrosUserIdFromList(terrosCloserEmail, terrosUsers)
+        : null;
 
       // Fetch real deal counts from Enerflo to backfill Net Deals + Installs
       const { netDeals, installs } = await fetchDealCounts(enerfloBase, enerfloKey, row.enerfloId);
@@ -141,6 +152,7 @@ export async function executeE2T(rows: E2TRow[]): Promise<ExecuteResultRow[]> {
         externalId:     row.enerfloId,
         sourceStatus:   "New Lead",
         ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
+        ...(terrosCloserId ? { closerId: terrosCloserId } : {}),
         ...(workflowId ? { workflowId } : {}),
         ...(stageId    ? { workflowStageId: stageId } : {}),
         ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
@@ -224,8 +236,11 @@ export async function executeT2E(rows: T2ERow[]): Promise<ExecuteResultRow[]> {
 
   for (const row of rows) {
     try {
-      const assignToEmail = row.ownerEmail ? findEnerfloOwnerEmail(row.ownerEmail) : undefined;
       const { firstName, lastName } = splitName(row.name);
+      const setterEmail = pickEnerfloSetterEmailFromTerros(row.ownerEmail);
+      const leadOwnerEmail = pickEnerfloLeadOwnerEmailFromTerros(row.closerEmail);
+      const resolvedSetterEmail = setterEmail ? findEnerfloOwnerEmail(setterEmail) : undefined;
+      const resolvedLeadOwnerEmail = leadOwnerEmail ? findEnerfloOwnerEmail(leadOwnerEmail) : undefined;
 
       const lead: Record<string, unknown> = {
         first_name: firstName,
@@ -239,7 +254,8 @@ export async function executeT2E(rows: T2ERow[]): Promise<ExecuteResultRow[]> {
       };
       if (row.email)     lead.email          = row.email;
       if (row.phone)     lead.mobile         = row.phone;
-      if (assignToEmail) lead.assign_to_email = assignToEmail;
+      if (resolvedSetterEmail) lead.setter_email = resolvedSetterEmail;
+      if (resolvedLeadOwnerEmail) lead.assign_to_email = resolvedLeadOwnerEmail;
 
       const res = await fetch(`${enerfloBase}/api/v1/partner/action/lead/add`, {
         method: "POST",
@@ -325,6 +341,7 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
     row: InstallsRow,
     customFields: Record<string, unknown>,
     ownerId: string | null,
+    closerId: string | null,
     stageId: string,
   ): Promise<{ ok: boolean; text: string }> {
     const mergedCfs = await mergeExistingCustomFields(accountId, customFields);
@@ -335,7 +352,9 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
       id: accountId,
       ...(workflowId ? { workflowId } : {}),
       ...(stageId ? { workflowStageId: stageId } : {}),
-      ...(ownerId ? { ownerId, assignedUserId: ownerId, closerId: ownerId } : {}),
+      ...(ownerId ? { ownerId, assignedUserId: ownerId } : {}),
+      ...(closerId ? { closerId } : {}),
+      ...(ownerId || closerId ? { actorId: ownerId || closerId } : {}),
       ...(Object.keys(mergedCfs).length > 0 ? { customFields: mergedCfs } : {}),
       resident: {
         name: row.name || `${fn} ${ln}`.trim(),
@@ -401,7 +420,20 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
           row.installIds[0]!,
         );
       }
-      const terrosOwnerId = salesRepEmail ? resolveTerrosOwner(salesRepEmail) : null;
+      const assignment = await resolveEnerfloCustomerLeadOwner({
+        enerfloBase,
+        enerfloKey,
+        customerEmail: row.email,
+        customerUuid: uuid || undefined,
+        v3Customer: Object.keys(customerRecord).length > 0 ? customerRecord : null,
+        v1NumericId: numericId || null,
+      });
+      const setterEmail = assignment.setterEmail ?? null;
+      const leadOwnerEmail = assignment.ownerEmail ?? salesRepEmail;
+      const terrosOwnerEmail = pickTerrosOwnerEmailFromEnerflo(setterEmail, leadOwnerEmail);
+      const terrosCloserEmail = pickTerrosCloserEmailFromEnerflo(setterEmail, leadOwnerEmail);
+      const terrosOwnerId = terrosOwnerEmail ? resolveTerrosOwner(terrosOwnerEmail) : null;
+      const terrosCloserId = terrosCloserEmail ? resolveTerrosOwner(terrosCloserEmail) : null;
 
       if (resolvedAccountId) {
         const { ok, text } = await updateTerrosAccount(
@@ -409,6 +441,7 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
           row,
           customFields,
           terrosOwnerId,
+          terrosCloserId,
           stageId,
         );
 
@@ -435,6 +468,7 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
         externalId:     externalLeadId,
         sourceStatus:   "Project Submitted",
         ...(terrosOwnerId ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId } : {}),
+        ...(terrosCloserId ? { closerId: terrosCloserId } : {}),
         ...(workflowId ? { workflowId } : {}),
         ...(stageId    ? { workflowStageId: stageId } : {}),
         ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
@@ -469,6 +503,7 @@ export async function executeInstallsResync(rows: InstallsRow[]): Promise<Execut
             row,
             customFields,
             terrosOwnerId,
+            terrosCloserId,
             stageId,
           );
           if (!ok) {

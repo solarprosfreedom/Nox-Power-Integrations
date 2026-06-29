@@ -24,6 +24,10 @@ import {
 } from "@/lib/sync/account-matcher";
 import { env } from "@/lib/env";
 import { resolveEnerfloCustomerLeadOwner } from "@/lib/sync/enerflo-lead-owner";
+import {
+  pickTerrosCloserEmailFromEnerflo,
+  pickTerrosOwnerEmailFromEnerflo,
+} from "@/lib/sync/terros-enerflo-assignments";
 import { createTerrosSearchCache } from "@/lib/sync/terros-accounts";
 import { resolveTerrosUserIdByEmail } from "@/lib/sync/terros-users";
 
@@ -360,7 +364,7 @@ export async function POST(req: NextRequest) {
  * Flow (steps 1-2 are best-effort and will NOT stop account creation):
  *  1b [best-effort] Rep email: GET survey by deal id → numeric agent → user email,
  *                   else match salesRep / initiatedBy UUIDs against /api/v3/users
- *  2  [best-effort] Resolve Terros userId by rep email → ownerId on account
+ *  2  [best-effort] Resolve Enerflo setter → Terros ownerId, lead owner → Terros closerId
  *  3a [best-effort] Check if Terros account already exists for this deal
  *  3b [required]    Create or update Terros account (payload name/address/deal id)
  */
@@ -506,9 +510,9 @@ async function handleProjectSubmitted(
     });
   }
 
-  // ── Step 1b [best-effort]: Resolve rep / owner email from Enerflo ─────────
-  // Priority: Lead Owner (v1 owner.email) → agent → setter; avoid initiatedBy (API user).
-  let repEmail: string | null = null;
+  // ── Step 1b [best-effort]: Resolve Enerflo setter + lead owner emails ───────
+  let setterEmail: string | null = null;
+  let salesRepEmail: string | null = null;
   let repResolvedFrom = "";
   let resolveStatus: number | null = null;
   let resolvePreview = "";
@@ -520,17 +524,17 @@ async function handleProjectSubmitted(
       customerEmail,
       customerUuid: customerId,
     });
-    if (leadOwner.ownerEmail) {
-      repEmail = leadOwner.ownerEmail;
-      repResolvedFrom = leadOwner.ownerResolvedFrom;
-      resolvePreview = JSON.stringify(leadOwner.debug).slice(0, 300);
-    }
+    setterEmail = leadOwner.setterEmail;
+    salesRepEmail = leadOwner.ownerEmail;
+    repResolvedFrom = leadOwner.ownerResolvedFrom;
+    resolvePreview = JSON.stringify(leadOwner.debug).slice(0, 300);
   }
 
+  let repEmail: string | null = salesRepEmail;
   if (!repEmail && repLookupId.includes("@")) {
     repEmail = repLookupId;
     repResolvedFrom = "email-inline";
-  } else if (!repEmail) {
+  } else if (!setterEmail && !salesRepEmail) {
     // customerAgentId from v3 customer fetch — often owner.user.email (Lead Owner)
     const uuidCandidates = [customerAgentId, salesRepUuid].filter(
       (id, i, arr) => id && arr.indexOf(id) === i,
@@ -541,6 +545,7 @@ async function handleProjectSubmitted(
       resolvePreview = r.lastPreview;
       if (r.email) {
         repEmail = r.email;
+        salesRepEmail = salesRepEmail || r.email;
         repResolvedFrom = lookupId.includes("@")
           ? "customer:owner.email"
           : `users-list:${lookupId.slice(0, 8)}…`;
@@ -580,7 +585,10 @@ async function handleProjectSubmitted(
             resolvePreview = ubody;
             if (ures.ok) {
               repEmail = parseUserEmailFromJsonBody(ubody);
-              if (repEmail) repResolvedFrom = `survey→user/${numericId}`;
+              if (repEmail) {
+                salesRepEmail = salesRepEmail || repEmail;
+                repResolvedFrom = `survey→user/${numericId}`;
+              }
             }
           }
         }
@@ -596,39 +604,53 @@ async function handleProjectSubmitted(
       resolvePreview = r.lastPreview;
       if (r.email) {
         repEmail = r.email;
+        salesRepEmail = salesRepEmail || r.email;
         repResolvedFrom = "initiatedBy:last-resort";
       }
     }
   }
 
   steps.push({
-    step: "1b [best-effort] — Resolve rep email from Enerflo",
-    ok: Boolean(repEmail),
+    step: "1b [best-effort] — Resolve Enerflo setter + lead owner emails",
+    ok: Boolean(setterEmail || salesRepEmail || repEmail),
     status: resolveStatus,
-    data: repEmail
-      ? { repEmail, salesRepUuid: salesRepUuid || null, initiatedBy, repResolvedFrom }
+    data: setterEmail || salesRepEmail || repEmail
+      ? { setterEmail, salesRepEmail, repEmail, salesRepUuid: salesRepUuid || null, initiatedBy, repResolvedFrom }
       : {
           salesRepUuid: salesRepUuid || null,
           initiatedBy,
           note: "No email: webhook has UUIDs only; survey agent id or user-list match failed",
         },
-    error: repEmail
+    error: setterEmail || salesRepEmail || repEmail
       ? undefined
-      : "Terros account will be created without ownerId until rep email resolves",
+      : "Terros account will be created without ownerId/closerId until rep email resolves",
   });
 
-  // ── Step 2 [best-effort]: Resolve Terros userId by rep email ─────────────
-  let terrosUserId: string | null = null;
-  const repEmailToResolve = repEmail || "";
-  if (repEmailToResolve) {
-    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, repEmailToResolve);
-    terrosUserId = u.userId;
+  // ── Step 2 [best-effort]: Enerflo assignments → Terros ownerId + closerId ─
+  let terrosOwnerId: string | null = null;
+  let terrosCloserId: string | null = null;
+  const terrosOwnerSourceEmail = pickTerrosOwnerEmailFromEnerflo(setterEmail, salesRepEmail || repEmail);
+  const terrosCloserSourceEmail = pickTerrosCloserEmailFromEnerflo(setterEmail, salesRepEmail || repEmail);
+  if (terrosOwnerSourceEmail && terrosKey) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosOwnerSourceEmail);
+    terrosOwnerId = u.userId;
     steps.push({
-      step: "2 [best-effort] — Resolve Terros userId by rep email",
-      ok: u.ok && Boolean(terrosUserId),
+      step: "2 [best-effort] — Resolve Terros ownerId (Enerflo setter)",
+      ok: u.ok && Boolean(terrosOwnerId),
       status: u.status,
-      data: terrosUserId ? { terrosUserId, usedDefault: !repEmail || undefined } : undefined,
-      error: u.ok && terrosUserId ? undefined : logPreview(u.preview),
+      data: terrosOwnerId ? { terrosOwnerId, terrosOwnerSourceEmail } : undefined,
+      error: u.ok && terrosOwnerId ? undefined : logPreview(u.preview),
+    });
+  }
+  if (terrosCloserSourceEmail && terrosKey) {
+    const u = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosCloserSourceEmail);
+    terrosCloserId = u.userId;
+    steps.push({
+      step: "2b [best-effort] — Resolve Terros closerId (Enerflo lead owner)",
+      ok: u.ok && Boolean(terrosCloserId),
+      status: u.status,
+      data: terrosCloserId ? { terrosCloserId, terrosCloserSourceEmail } : undefined,
+      error: u.ok && terrosCloserId ? undefined : logPreview(u.preview),
     });
   }
 
@@ -672,11 +694,11 @@ async function handleProjectSubmitted(
 
     const accountFields: Record<string, unknown> = {
       name: accountName,
-      // Terros OpenAPI uses ownerId for Owner/Setter; keep assignedUserId for compatibility
-      ...(terrosUserId
-        ? { ownerId: terrosUserId, assignedUserId: terrosUserId }
+      ...(terrosOwnerId
+        ? { ownerId: terrosOwnerId, assignedUserId: terrosOwnerId }
         : {}),
-      ...(terrosUserId ? { actorId: terrosUserId } : {}),
+      ...(terrosCloserId ? { closerId: terrosCloserId } : {}),
+      ...((terrosOwnerId || terrosCloserId) ? { actorId: terrosOwnerId || terrosCloserId } : {}),
       externalId: dealId,
       sourceStatus: "Project Submitted",
       ...(dealShortCode ? { sourceId: dealShortCode } : {}),
@@ -765,7 +787,7 @@ async function handleProjectSubmitted(
                 accountId: upsertedId,
                 id: upsertedId,
                 workflowStageId: fallbackStageId,
-                ...(terrosUserId ? { actorId: terrosUserId } : {}),
+                ...(terrosOwnerId || terrosCloserId ? { actorId: terrosOwnerId || terrosCloserId } : {}),
               },
             }),
           });
@@ -845,7 +867,7 @@ async function handleProjectSubmitted(
           accountId: upsertedId,
           id: upsertedId,
           ...(closedStage ? { workflowStageId: closedStage } : {}),
-          ...(terrosUserId ? { actorId: terrosUserId } : {}),
+          ...(terrosOwnerId || terrosCloserId ? { actorId: terrosOwnerId || terrosCloserId } : {}),
           ...(Object.keys(mergedCustomFields).length > 0 ? { customFields: mergedCustomFields } : {}),
           // Terros requires a phone number before allowing stage transition to Closed
           ...(cleanPhoneForClosed ? { resident: { phone: cleanPhoneForClosed } } : {}),
@@ -912,7 +934,8 @@ async function handleProjectSubmitted(
     repUserId: repLookupId,
     repResolvedFrom: repResolvedFrom || null,
     repEmail,
-    terrosUserId,
+    terrosOwnerId,
+    terrosCloserId,
     systemSizeKw,
     terrosCustomFields: {
       keysSent: terrosCfKeysSent,
@@ -1236,39 +1259,46 @@ async function handleCustomerCreated(
     existingTerrosAccountId = await getTerrosAccountIdByEnerfloNumericId(resolvedNumericId);
   }
   if (!existingTerrosAccountId && terrosKey) {
-    const dedupQueries = [
-      resolvedNumericId ? String(resolvedNumericId) : "",
-      customerId,
-      customerEmail,
-      sanitizePhone(customerPhone) ?? "",
-    ];
-    for (const q of dedupQueries) {
-      if (!q) continue;
-      const hit = await searchTerrosAccountByQuery(terrosBase, terrosKey, q);
-      if (hit) {
-        existingTerrosAccountId = String(hit.accountId ?? hit.id ?? "").trim() || null;
-        if (existingTerrosAccountId) break;
-      }
-    }
+    existingTerrosAccountId = await findExistingTerrosAccountForCustomer(
+      terrosBase,
+      terrosKey,
+      [
+        resolvedNumericId ? String(resolvedNumericId) : "",
+        customerId,
+        customerEmail,
+        sanitizePhone(customerPhone) ?? "",
+        line1ForTerros !== "Address pending" ? line1ForTerros : "",
+      ],
+      sanitizePhone(customerPhone),
+    );
   }
   if (existingTerrosAccountId) {
-    // Persist the mapping so future updates resolve instantly, then skip the add.
     if (resolvedNumericId) {
       await saveCustomerAccountMapping(existingTerrosAccountId, Number(resolvedNumericId));
     }
+    const canonicalExternalLeadId = customerId || (resolvedNumericId ? String(resolvedNumericId) : null);
+    const syncResult = terrosKey
+      ? await syncTerrosAccountAssignments(terrosBase, terrosKey, existingTerrosAccountId, {
+          ownerId: terrosOwnerId,
+          closerId: terrosCloserId,
+          externalLeadId: canonicalExternalLeadId,
+        })
+      : { ok: false, status: null, preview: "no terros key" };
     await writeApiLog({
-      operation: "webhook:enerflo-v2:add-terros-account-from-customer-created",
+      operation: "webhook:enerflo-v2:customer-created:existing-account-sync",
       vendor: "terros",
       method: "POST",
-      url: `${terrosBase}/account/add`,
+      url: `${terrosBase}/account/update`,
       hadApiKey: Boolean(terrosKey),
-      status: 200,
-      ok: true,
+      status: syncResult.status,
+      ok: syncResult.ok,
       responsePreview: JSON.stringify({
-        skipped: "existing-terros-account",
         terrosAccountId: existingTerrosAccountId,
         enerfloNumericId: resolvedNumericId ?? null,
         customerId,
+        terrosOwnerId,
+        terrosCloserId,
+        preview: syncResult.preview,
       }).slice(0, 400),
     });
     return NextResponse.json({
@@ -1276,8 +1306,35 @@ async function handleCustomerCreated(
       event: "customer.created",
       customerId,
       skipped: true,
-      reason: "existing-terros-account",
+      reason: "existing-terros-account-updated",
       terrosAccountId: existingTerrosAccountId,
+      assignmentSyncOk: syncResult.ok,
+    });
+  }
+
+  // Never create a Terros account without a resolved rep — otherwise Terros assigns the API key user.
+  if (!terrosOwnerId) {
+    await writeApiLog({
+      operation: "webhook:enerflo-v2:customer-created:skipped",
+      vendor: "enerflo",
+      method: "POST",
+      url: "/api/webhooks/enerflo-v2",
+      hadApiKey: false,
+      status: 200,
+      ok: true,
+      responsePreview: JSON.stringify({
+        reason: "no-owner-resolved",
+        customerId,
+        ownerEmail,
+        setterEmailResolved,
+      }).slice(0, 300),
+    });
+    return NextResponse.json({
+      received: true,
+      event: "customer.created",
+      customerId,
+      skipped: true,
+      reason: "no-owner-resolved",
     });
   }
 
@@ -1844,26 +1901,121 @@ async function fetchTerrosAccountRecord(
   }
 }
 
+async function searchTerrosAccountsByQuery(
+  terrosBase: string,
+  terrosKey: string,
+  query: string,
+): Promise<Record<string, unknown>[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  try {
+    const r = await fetch(`${terrosBase}/account/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
+      body: JSON.stringify({ size: 20, searchInput: { query: trimmed } }),
+    });
+    const raw = await r.text();
+    if (!r.ok || !terrosJsonBodyIndicatesSuccess(raw)) return [];
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const accounts = parsed.accounts as Record<string, unknown>[] | undefined;
+    return Array.isArray(accounts) ? accounts : [];
+  } catch {
+    return [];
+  }
+}
+
 async function searchTerrosAccountByQuery(
   terrosBase: string,
   terrosKey: string,
   query: string,
 ): Promise<Record<string, unknown> | null> {
-  const trimmed = query.trim();
-  if (!trimmed) return null;
+  const accounts = await searchTerrosAccountsByQuery(terrosBase, terrosKey, query);
+  return accounts.length > 0 ? accounts[0]! : null;
+}
+
+function terrosAccountPhone(acc: Record<string, unknown>): string {
+  const resident = acc.resident as Record<string, unknown> | undefined;
+  return sanitizePhone(String(resident?.phone ?? "")) ?? "";
+}
+
+/** Prefer a row whose resident phone matches when deduping by address/name search. */
+function pickBestTerrosDedupMatch(
+  accounts: Record<string, unknown>[],
+  phone: string | null | undefined,
+): Record<string, unknown> | null {
+  if (!accounts.length) return null;
+  const normalizedPhone = sanitizePhone(phone ?? "");
+  if (normalizedPhone) {
+    const byPhone = accounts.find((acc) => terrosAccountPhone(acc) === normalizedPhone);
+    if (byPhone) return byPhone;
+  }
+  return accounts[0]!;
+}
+
+async function findExistingTerrosAccountForCustomer(
+  terrosBase: string,
+  terrosKey: string,
+  queries: string[],
+  phone?: string | null,
+): Promise<string | null> {
+  const seen = new Set<string>();
+  for (const q of queries) {
+    const trimmed = q.trim();
+    if (!trimmed) continue;
+    const accounts = await searchTerrosAccountsByQuery(terrosBase, terrosKey, trimmed);
+    const best = pickBestTerrosDedupMatch(accounts, phone);
+    if (!best) continue;
+    const accountId = String(best.accountId ?? best.id ?? "").trim();
+    if (accountId && !seen.has(accountId)) {
+      seen.add(accountId);
+      return accountId;
+    }
+  }
+  return null;
+}
+
+async function syncTerrosAccountAssignments(
+  terrosBase: string,
+  terrosKey: string,
+  accountId: string,
+  fields: {
+    ownerId?: string | null;
+    closerId?: string | null;
+    externalLeadId?: string | null;
+  },
+): Promise<{ ok: boolean; status: number | null; preview: string }> {
+  const ownerId = fields.ownerId?.trim() || null;
+  const closerId = fields.closerId?.trim() || null;
+  const externalLeadId = fields.externalLeadId?.trim() || null;
+  const actorId = ownerId || closerId;
+
+  const updateBody: Record<string, unknown> = {
+    accountId,
+    id: accountId,
+    ...(ownerId ? { ownerId, assignedUserId: ownerId } : {}),
+    ...(closerId ? { closerId } : {}),
+    ...(actorId ? { actorId } : {}),
+    ...(externalLeadId ? { externalLeadId, externalId: externalLeadId } : {}),
+  };
+
   try {
-    const r = await fetch(`${terrosBase}/account/list`, {
+    const r = await fetch(`${terrosBase}/account/update`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
-      body: JSON.stringify({ size: 10, searchInput: { query: trimmed } }),
+      body: JSON.stringify({ account: updateBody }),
     });
     const raw = await r.text();
-    if (!r.ok || !terrosJsonBodyIndicatesSuccess(raw)) return null;
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const accounts = parsed.accounts as Record<string, unknown>[] | undefined;
-    return Array.isArray(accounts) && accounts.length > 0 ? accounts[0]! : null;
-  } catch {
-    return null;
+    return {
+      ok: r.ok && terrosJsonBodyIndicatesSuccess(raw),
+      status: r.status,
+      preview: raw.slice(0, 300),
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      status: null,
+      preview: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
@@ -1914,7 +2066,9 @@ function buildTerrosAccountFieldsFromAppointment(
 
   if (!customerName && !customerEmail && !customerPhone && !location) return null;
 
-  const externalLeadId = customerNumericId || customerUuid;
+  // Prefer Enerflo V2 UUID so customer.created and appointment handlers converge on one account.
+  const v2Uuid = customerUuid ?? getEnerfloIntegrationExternalId(v3Customer);
+  const externalLeadId = v2Uuid || customerNumericId;
   if (!externalLeadId) return null;
 
   const resident: Record<string, string> = {};
@@ -1926,6 +2080,7 @@ function buildTerrosAccountFieldsFromAppointment(
 
   return {
     externalLeadId,
+    externalId: externalLeadId,
     ...(customerName ? { name: customerName } : {}),
     ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
     ...(Object.keys(resident).length > 0 ? { resident } : {}),
@@ -2005,6 +2160,19 @@ async function resolveTerrosAccountForAppointment(
     if (!accountId && emailForSearch) {
       const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, emailForSearch);
       if (acc) applyAccountMatch(acc, "list:email");
+    }
+
+    if (!accountId && phoneForSearch) {
+      const accounts = await searchTerrosAccountsByQuery(terrosBase, terrosKey, phoneForSearch);
+      const acc = pickBestTerrosDedupMatch(accounts, phoneForSearch);
+      if (acc) applyAccountMatch(acc, "list:phone");
+    }
+
+    if (!accountId && payload.customer?.address?.street) {
+      const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, payload.customer.address.street);
+      if (acc && (!phoneForSearch || terrosAccountPhone(acc) === phoneForSearch)) {
+        applyAccountMatch(acc, "list:address");
+      }
     }
 
     if (!accountId && customerNumericId) {
@@ -2146,18 +2314,16 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
   const enerfloSetterNumericId = accountResolution.enerfloSetterNumericId;
   const enerfloAgentNumericId = accountResolution.enerfloAgentNumericId;
 
-  // Resolve setter (or agent) → Terros ownerId for the calendar event "Setter" field
+  // Enerflo Setter → Terros ownerId for calendar event + account Owner field
   let eventOwnerIdFromSetter: string | null = null;
-  if (terrosKey && enerfloKey && (enerfloSetterNumericId || enerfloAgentNumericId)) {
-    const setterEmail = enerfloSetterNumericId
-      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloSetterNumericId)
-      : null;
-    const agentEmail  = enerfloAgentNumericId
-      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloAgentNumericId)
-      : null;
-    const emailToUse  = setterEmail || agentEmail;
-    if (emailToUse) {
-      const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToUse);
+  if (terrosKey && enerfloKey && enerfloSetterNumericId) {
+    const setterEmail = await fetchEnerfloUserEmailByNumericId(
+      enerfloBase,
+      enerfloKey,
+      enerfloSetterNumericId,
+    );
+    if (setterEmail) {
+      const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
       eventOwnerIdFromSetter = resolved.userId;
     }
   }
@@ -2247,7 +2413,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
 
     // 3b: account/upsert — set closerId using the accountId we already resolved in step 1.
     // Using accountId (not externalLeadId) prevents creating duplicate accounts.
-    if (closerUserId && accountId) {
+    if ((closerUserId || eventOwnerIdFromSetter) && accountId) {
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2258,8 +2424,13 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
           body: JSON.stringify({
             account: {
               accountId,
-              closerId: closerUserId,
-              actorId: closerUserId,
+              ...(eventOwnerIdFromSetter
+                ? { ownerId: eventOwnerIdFromSetter, assignedUserId: eventOwnerIdFromSetter }
+                : {}),
+              ...(closerUserId ? { closerId: closerUserId } : {}),
+              ...(eventOwnerIdFromSetter || closerUserId
+                ? { actorId: eventOwnerIdFromSetter || closerUserId }
+                : {}),
             },
           }),
         });
@@ -2366,18 +2537,16 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
   const enerfloSetterNumericId = accountResolution.enerfloSetterNumericId;
   const enerfloAgentNumericId = accountResolution.enerfloAgentNumericId;
 
-  // Resolve setter (or agent) → Terros ownerId for the calendar event "Setter" field
+  // Enerflo Setter → Terros ownerId for calendar event + account Owner field
   let eventOwnerIdFromSetter: string | null = null;
-  if (terrosKey && enerfloKey && (enerfloSetterNumericId || enerfloAgentNumericId)) {
-    const setterEmail = enerfloSetterNumericId
-      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloSetterNumericId)
-      : null;
-    const agentEmail  = enerfloAgentNumericId
-      ? await fetchEnerfloUserEmailByNumericId(enerfloBase, enerfloKey, enerfloAgentNumericId)
-      : null;
-    const emailToUse  = setterEmail || agentEmail;
-    if (emailToUse) {
-      const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, emailToUse);
+  if (terrosKey && enerfloKey && enerfloSetterNumericId) {
+    const setterEmail = await fetchEnerfloUserEmailByNumericId(
+      enerfloBase,
+      enerfloKey,
+      enerfloSetterNumericId,
+    );
+    if (setterEmail) {
+      const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
       eventOwnerIdFromSetter = resolved.userId;
     }
   }
@@ -2460,7 +2629,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     // externalLeadId stored in Terros (numeric) doesn't match what we'd look up (UUID or string).
     // account/update alone doesn't persist closerId in the Assignment panel, so we also call
     // account/upsert but with accountId to guarantee we're touching the right record.
-    if ((closerUserId || resolvedLocation) && accountId) {
+    if ((closerUserId || eventOwnerIdFromSetter || resolvedLocation) && accountId) {
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2470,8 +2639,13 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
           headers: { "Content-Type": "application/json", Authorization: `ApiKey ${terrosKey}` },
           body: JSON.stringify({ account: {
             accountId,
-            ...(closerUserId     ? { closerId: closerUserId }     : {}),
-            ...(closerUserId     ? { actorId: closerUserId }      : {}),
+            ...(eventOwnerIdFromSetter
+              ? { ownerId: eventOwnerIdFromSetter, assignedUserId: eventOwnerIdFromSetter }
+              : {}),
+            ...(closerUserId ? { closerId: closerUserId } : {}),
+            ...(eventOwnerIdFromSetter || closerUserId
+              ? { actorId: eventOwnerIdFromSetter || closerUserId }
+              : {}),
             ...(resolvedLocation ? { location: resolvedLocation } : {}),
           } }),
         });
@@ -2895,7 +3069,8 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
   let closerId: string | null = null;
 
   if (terrosKey) {
-    const terrosOwnerSourceEmail = setterEmail || salesRepEmail || "";
+    const terrosOwnerSourceEmail = pickTerrosOwnerEmailFromEnerflo(setterEmail, salesRepEmail);
+    const terrosCloserSourceEmail = pickTerrosCloserEmailFromEnerflo(setterEmail, salesRepEmail);
     if (terrosOwnerSourceEmail) {
       const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosOwnerSourceEmail);
       ownerId = r.userId;
@@ -2910,8 +3085,8 @@ async function handleUpdateCustomer(payload: UpdateCustomerPayload): Promise<Nex
         responsePreview: r.preview.slice(0, 400),
       });
     }
-    if (salesRepEmail && salesRepEmail !== terrosOwnerSourceEmail) {
-      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, salesRepEmail);
+    if (terrosCloserSourceEmail) {
+      const r = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, terrosCloserSourceEmail);
       closerId = r.userId;
     }
   }

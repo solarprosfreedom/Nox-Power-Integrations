@@ -35,6 +35,7 @@ export interface E2TRow {
   stateCode: string;
   zip: string;
   addressFull: string;
+  setterEmail: string | null;
   salesRepEmail: string | null;
   dealStatus: DealStatus;
 }
@@ -50,6 +51,7 @@ export interface T2ERow {
   zip: string;
   addressFull: string;
   ownerEmail: string | null;
+  closerEmail: string | null;
 }
 
 /** A customer with submitted projects — always synced to Closed stage with full counters. */
@@ -515,11 +517,14 @@ export async function buildE2TPreview(): Promise<{ rows: E2TRow[]; errors: strin
     const zip = String(c.zip ?? "").trim();
     const addressFull = [addressLine1, city, stateCode, zip].filter(Boolean).join(", ");
     const ownerObj = c.owner as Record<string, unknown> | undefined;
+    const setterObj = c.setter as Record<string, unknown> | undefined;
     const salesRepEmail = String(ownerObj?.email ?? "").trim() || null;
+    const setterEmail = String(setterObj?.email ?? "").trim() || null;
 
     rows.push({
       enerfloId, name, email, phone,
       addressLine1, city, stateCode, zip, addressFull,
+      setterEmail,
       salesRepEmail,
       dealStatus: "unknown",
     });
@@ -559,6 +564,7 @@ export async function buildT2EPreview(): Promise<{ rows: T2ERow[]; errors: strin
       zip: acc.zip,
       addressFull: acc.addressFull,
       ownerEmail: acc.ownerEmail || null,
+      closerEmail: acc.closerEmail || null,
     }));
 
   return { rows, errors: enerfloResult.errs };
