@@ -27,6 +27,8 @@ export function sequifiUserFromApi(raw: Record<string, unknown>): SequifiUserRec
     office_name: raw.office_name != null ? String(raw.office_name) : null,
     worker_type: raw.worker_type != null ? String(raw.worker_type) : null,
     status_id: typeof raw.status_id === "number" ? raw.status_id : null,
+    onboarding_complete:
+      typeof raw.onboarding_complete === "number" ? raw.onboarding_complete : null,
     created_at: raw.created_at != null ? String(raw.created_at) : null,
     updated_at: raw.updated_at != null ? String(raw.updated_at) : null,
     raw,

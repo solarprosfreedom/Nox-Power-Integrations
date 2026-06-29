@@ -92,6 +92,9 @@ export const env = {
   sequifiRefreshToken: opt("SEQUIFI_REFRESH_TOKEN"),
   /** ISO date — only process Sequifi users created on/after this (avoids backfill). */
   onboardingGoLiveAt: opt("ONBOARDING_GO_LIVE_AT"),
+  /** When true (default), only provision reps with Sequifi onboarding_complete = 1. */
+  onboardingRequireSequifiComplete:
+    opt("ONBOARDING_REQUIRE_SEQUIFI_COMPLETE", "true") !== "false",
   /** When true, log actions but do not create accounts or send email. */
   onboardingDryRun: opt("ONBOARDING_DRY_RUN", "true") === "true",
   /** When true, assign Microsoft 365 license after user create (default false for testing). */

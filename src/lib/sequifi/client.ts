@@ -121,3 +121,19 @@ export function filterUsersByGoLive(users: SequifiUserRecord[]): SequifiUserReco
     return !Number.isNaN(t) && t >= cutoff;
   });
 }
+
+/** Sequifi GET /v1/users field — integer 1 when onboarding is marked complete. */
+export function isSequifiOnboardingComplete(user: SequifiUserRecord): boolean {
+  const raw = user.onboarding_complete ?? user.raw.onboarding_complete;
+  if (raw === 1 || raw === true) return true;
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes";
+  }
+  return false;
+}
+
+export function filterUsersByOnboardingComplete(users: SequifiUserRecord[]): SequifiUserRecord[] {
+  if (!env.onboardingRequireSequifiComplete) return users;
+  return users.filter(isSequifiOnboardingComplete);
+}

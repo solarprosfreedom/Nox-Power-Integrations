@@ -20,6 +20,8 @@ export interface SequifiUserRecord {
   office_name?: string | null;
   worker_type?: string | null;
   status_id?: number | null;
+  /** Sequifi GET /v1/users — 1 when onboarding paperwork is complete. */
+  onboarding_complete?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
   raw: Record<string, unknown>;
@@ -59,6 +61,8 @@ export interface OnboardingJob {
 
 export interface OnboardingRunSummary {
   polled: number;
+  /** Active users skipped because onboarding_complete !== 1 in Sequifi. */
+  onboardingCompleteFiltered: number;
   /** Hired users skipped via temporary test blocklist in exclude.ts. */
   excludeFiltered: number;
   /** Hired Sequifi users missing a member @noxpwr.com account. */

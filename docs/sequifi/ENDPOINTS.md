@@ -22,7 +22,7 @@ POST {SEQUIFI_API_BASE_URL}/v1/users
 POST {SEQUIFI_API_BASE_URL}/v1/users/termination
 ```
 
-Use-case: **after hire**, active users appear in `/v1/users?status=active` (`status_id = 1`). Our middleware polls this list every 5 minutes (Vercel cron) and provisions Microsoft + Enerflo + Terros for reps missing a member `@noxpwr.com` account, then appends each new Microsoft account to the Google Sheets **EMPWR** roster tab. Inactive users are excluded.
+Use-case: **after hire**, active users appear in `/v1/users?status=active` (`status_id = 1`). Auto-provisioning only runs when **`onboarding_complete = 1`** (unless `ONBOARDING_REQUIRE_SEQUIFI_COMPLETE=false`). Our middleware polls this list every 5 minutes (Vercel cron) and provisions Microsoft + Enerflo + Terros for eligible reps missing a member `@noxpwr.com` account, then appends each new Microsoft account to the Google Sheets **EMPWR** roster tab. Inactive users are excluded.
 
 ---
 

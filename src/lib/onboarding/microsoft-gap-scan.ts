@@ -6,7 +6,7 @@ import {
 } from "@/lib/microsoft/graph-users";
 import { env } from "@/lib/env";
 import { filterExcludedSequifiUsers } from "@/lib/onboarding/exclude";
-import { fetchAllSequifiUsers, filterUsersByGoLive } from "@/lib/sequifi/client";
+import { fetchAllSequifiUsers, filterUsersByGoLive, filterUsersByOnboardingComplete } from "@/lib/sequifi/client";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 
 export type MicrosoftGapStatus = "member" | "guest_only" | "missing" | "error";
@@ -30,6 +30,8 @@ export interface SequifiMicrosoftGapScanResult {
   goLiveFiltered: number;
   /** Rows removed by temporary test blocklist in exclude.ts. */
   excludeFiltered: number;
+  /** Active users skipped because onboarding_complete !== 1 in Sequifi. */
+  onboardingCompleteFiltered: number;
   memberCount: number;
   guestOnlyCount: number;
   missingCount: number;
@@ -169,7 +171,8 @@ export async function scanSequifiMicrosoftGaps(): Promise<SequifiMicrosoftGapSca
   try {
     const all = await fetchAllSequifiUsers();
     const afterGoLive = filterUsersByGoLive(all);
-    const users = filterExcludedSequifiUsers(afterGoLive);
+    const afterOnboardingComplete = filterUsersByOnboardingComplete(afterGoLive);
+    const users = filterExcludedSequifiUsers(afterOnboardingComplete);
     const rows = await mapWithConcurrency(users, u => classifyMicrosoftForSequifiUser(u), 5);
 
     const memberCount = rows.filter(r => r.status === "member").length;
@@ -193,7 +196,8 @@ export async function scanSequifiMicrosoftGaps(): Promise<SequifiMicrosoftGapSca
     return {
       scanned: rows.length,
       goLiveFiltered: all.length - afterGoLive.length,
-      excludeFiltered: afterGoLive.length - users.length,
+      onboardingCompleteFiltered: afterGoLive.length - afterOnboardingComplete.length,
+      excludeFiltered: afterOnboardingComplete.length - users.length,
       memberCount,
       guestOnlyCount,
       missingCount,
@@ -207,6 +211,7 @@ export async function scanSequifiMicrosoftGaps(): Promise<SequifiMicrosoftGapSca
     return {
       scanned: 0,
       goLiveFiltered: 0,
+      onboardingCompleteFiltered: 0,
       excludeFiltered: 0,
       memberCount: 0,
       guestOnlyCount: 0,

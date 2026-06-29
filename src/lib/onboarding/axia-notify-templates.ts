@@ -24,6 +24,8 @@ export function renderAxiaOnboardingNotification(
   const email =
     job.microsoft_upn?.trim() ||
     buildWorkUpn(job.first_name ?? "", job.last_name ?? "", domain);
+  const raw = job.raw_sequifi_payload ?? {};
+  const position = String(raw.position_name ?? "").trim() || "—";
   const { enerfloRoles } = resolveRoleMappingFromSequifi(sequifiPositionContextFromJob(job));
 
   return {
@@ -33,6 +35,7 @@ First Name: ${firstName}
 Last Name: ${lastName}
 Mobile Number: ${mobile}
 Email: ${email}
+Position: ${position}
 Manager (Input YES): ${enerfloRolesIncludeManager(enerfloRoles) ? "YES" : ""}
 `,
   };

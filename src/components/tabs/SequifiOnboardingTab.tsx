@@ -215,6 +215,9 @@ export default function SequifiOnboardingTab() {
       const result = await runHiredOnboardingNow();
       const parts = [
         `${result.gapNeed} need provisioning of ${result.polled} hired`,
+        result.onboardingCompleteFiltered > 0
+          ? `${result.onboardingCompleteFiltered} skipped (onboarding incomplete)`
+          : null,
         result.excludeFiltered > 0 ? `${result.excludeFiltered} excluded` : null,
         `new jobs ${result.newJobs}`,
         result.dryRun ? "(dry run — queued only)" : `completed ${result.completed}, partial ${result.partial}, failed ${result.failed}`,
@@ -301,6 +304,9 @@ export default function SequifiOnboardingTab() {
           `${result.gapRows.length} without member @noxpwr.com (${result.missingCount} missing, ${result.guestOnlyCount} guest only) · ${result.scanned} hired scanned` +
             (result.goLiveFiltered > 0
               ? ` · ${result.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT`
+              : "") +
+            (result.onboardingCompleteFiltered > 0
+              ? ` · ${result.onboardingCompleteFiltered} skipped (onboarding_complete !== 1)`
               : "") +
             (result.excludeFiltered > 0 ? ` · ${result.excludeFiltered} excluded (test blocklist)` : ""),
         );
@@ -392,6 +398,15 @@ export default function SequifiOnboardingTab() {
           Uses first + last name when Sequifi only has a personal email.
         </p>
       </div>
+
+      {config?.requireSequifiComplete && (
+        <div className="rounded-lg border border-gray-700 bg-gray-900/60 px-4 py-3 text-sm text-gray-300">
+          Only Sequifi users with <code className="text-gray-100">onboarding_complete = 1</code> are
+          eligible for auto-provisioning. Set{" "}
+          <code className="text-gray-100">ONBOARDING_REQUIRE_SEQUIFI_COMPLETE=false</code> to
+          disable.
+        </div>
+      )}
 
       {config?.dryRun && (
         <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
@@ -540,6 +555,8 @@ export default function SequifiOnboardingTab() {
                 {gapScan.guestOnlyCount} guest only)
                 {gapScan.goLiveFiltered > 0 &&
                   ` · ${gapScan.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT`}
+                {gapScan.onboardingCompleteFiltered > 0 &&
+                  ` · ${gapScan.onboardingCompleteFiltered} skipped (onboarding_complete !== 1)`}
                 {gapScan.excludeFiltered > 0 &&
                   ` · ${gapScan.excludeFiltered} excluded (test blocklist)`}
                 {gapScan.errorCount > 0 && ` · ${gapScan.errorCount} scan errors`}
@@ -608,10 +625,16 @@ export default function SequifiOnboardingTab() {
       {preview && !preview.error && (
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
           <p className="text-sm text-gray-300">
-            Sequifi hired users (after go-live filter):{" "}
+            Sequifi hired users (after go-live + onboarding-complete filters):{" "}
             <strong className="text-white">{preview.users.length}</strong>
             {preview.goLiveFiltered > 0 && (
               <span className="text-gray-500"> · {preview.goLiveFiltered} hidden by ONBOARDING_GO_LIVE_AT</span>
+            )}
+            {preview.onboardingCompleteFiltered > 0 && (
+              <span className="text-gray-500">
+                {" "}
+                · {preview.onboardingCompleteFiltered} skipped (onboarding_complete !== 1)
+              </span>
             )}
           </p>
         </div>

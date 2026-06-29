@@ -41,7 +41,7 @@ import {
   resolveUpnForUser,
 } from "@/lib/microsoft/graph-users";
 import { sendMailAsUser, isGraphMailConfigured } from "@/lib/microsoft/graph-mail";
-import { fetchAllSequifiUsers, fetchSequifiUserById, filterUsersByGoLive } from "@/lib/sequifi/client";
+import { fetchAllSequifiUsers, fetchSequifiUserById, filterUsersByGoLive, filterUsersByOnboardingComplete, isSequifiOnboardingComplete } from "@/lib/sequifi/client";
 import {
   appendSequifiUserToInstallerRosterSheets,
   sequifiUserFromOnboardingJob,
@@ -114,17 +114,20 @@ async function ensureJobForSequifiUser(user: SequifiUserRecord): Promise<Onboard
 export async function getSequifiUsersNeedingProvisioning(): Promise<{
   polled: number;
   goLiveFiltered: number;
+  onboardingCompleteFiltered: number;
   excludeFiltered: number;
   users: SequifiUserRecord[];
 }> {
   const all = await fetchAllSequifiUsers();
   const hired = filterUsersByGoLive(all);
-  const eligible = filterExcludedSequifiUsers(hired);
+  const afterOnboardingComplete = filterUsersByOnboardingComplete(hired);
+  const eligible = filterExcludedSequifiUsers(afterOnboardingComplete);
   const users = await filterSequifiUsersNeedingProvisioning(eligible);
   return {
-    polled: hired.length,
+    polled: afterOnboardingComplete.length,
     goLiveFiltered: all.length - hired.length,
-    excludeFiltered: hired.length - eligible.length,
+    onboardingCompleteFiltered: hired.length - afterOnboardingComplete.length,
+    excludeFiltered: afterOnboardingComplete.length - eligible.length,
     users,
   };
 }
@@ -150,9 +153,20 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
   }
 
   try {
-    const all = filterUsersByGoLive(await fetchAllSequifiUsers());
+    const all = filterUsersByOnboardingComplete(filterUsersByGoLive(await fetchAllSequifiUsers()));
     const user = all.find(u => u.id === sequifiUserId);
     if (!user) {
+      const hired = filterUsersByGoLive(await fetchAllSequifiUsers());
+      const found = hired.find(u => u.id === sequifiUserId);
+      if (found && !isSequifiOnboardingComplete(found) && env.onboardingRequireSequifiComplete) {
+        return {
+          sequifiUserId,
+          ok: false,
+          skipped: true,
+          reason: "Sequifi onboarding not complete (onboarding_complete !== 1)",
+          job: null,
+        };
+      }
       return {
         sequifiUserId,
         ok: false,
@@ -710,6 +724,7 @@ export async function runOnboardingCycle(options?: {
 }): Promise<OnboardingRunSummary> {
   const summary: OnboardingRunSummary = {
     polled: 0,
+    onboardingCompleteFiltered: 0,
     excludeFiltered: 0,
     gapNeed: 0,
     newJobs: 0,
@@ -734,9 +749,11 @@ export async function runOnboardingCycle(options?: {
   }
 
   try {
-    const { polled, excludeFiltered, users: gapUsers } = await getSequifiUsersNeedingProvisioning();
+    const { polled, excludeFiltered, onboardingCompleteFiltered, users: gapUsers } =
+      await getSequifiUsersNeedingProvisioning();
     summary.polled = polled;
     summary.excludeFiltered = excludeFiltered;
+    summary.onboardingCompleteFiltered = onboardingCompleteFiltered;
     summary.gapNeed = gapUsers.length;
 
     const ids = gapUsers.map(u => String(u.id));
@@ -820,18 +837,21 @@ export async function previewOnboardingFromSequifi(): Promise<{
   jobs: OnboardingJob[];
   jobsTableReady?: boolean;
   goLiveFiltered: number;
+  onboardingCompleteFiltered: number;
   dryRun: boolean;
   error?: string;
 }> {
   try {
     const all = await fetchAllSequifiUsers();
-    const filtered = filterUsersByGoLive(all);
+    const afterGoLive = filterUsersByGoLive(all);
+    const filtered = filterUsersByOnboardingComplete(afterGoLive);
     const jobResult = await listOnboardingJobsSafe(200);
     return {
       users: filtered,
       jobs: jobResult.jobs,
       jobsTableReady: jobResult.tableReady,
-      goLiveFiltered: all.length - filtered.length,
+      goLiveFiltered: all.length - afterGoLive.length,
+      onboardingCompleteFiltered: afterGoLive.length - filtered.length,
       dryRun: env.onboardingDryRun,
     };
   } catch (e) {
@@ -839,6 +859,7 @@ export async function previewOnboardingFromSequifi(): Promise<{
       users: [],
       jobs: [],
       goLiveFiltered: 0,
+      onboardingCompleteFiltered: 0,
       dryRun: env.onboardingDryRun,
       error: e instanceof Error ? e.message : String(e),
     };
