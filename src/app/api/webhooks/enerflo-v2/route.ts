@@ -1938,18 +1938,23 @@ function terrosAccountPhone(acc: Record<string, unknown>): string {
   return sanitizePhone(String(resident?.phone ?? "")) ?? "";
 }
 
-/** Prefer a row whose resident phone matches when deduping by address/name search. */
+/** Prefer phone match, then a row that already has an Enerflo externalLeadId link. */
 function pickBestTerrosDedupMatch(
   accounts: Record<string, unknown>[],
   phone: string | null | undefined,
 ): Record<string, unknown> | null {
   if (!accounts.length) return null;
+  let candidates = accounts;
   const normalizedPhone = sanitizePhone(phone ?? "");
   if (normalizedPhone) {
-    const byPhone = accounts.find((acc) => terrosAccountPhone(acc) === normalizedPhone);
-    if (byPhone) return byPhone;
+    const byPhone = accounts.filter((acc) => terrosAccountPhone(acc) === normalizedPhone);
+    if (byPhone.length) candidates = byPhone;
   }
-  return accounts[0]!;
+  const linked = candidates.find((acc) => {
+    const ext = String(acc.externalLeadId ?? acc.externalId ?? "").trim();
+    return Boolean(ext);
+  });
+  return linked ?? candidates[0]!;
 }
 
 async function findExistingTerrosAccountForCustomer(
@@ -2054,6 +2059,11 @@ function buildTerrosAccountFieldsFromAppointment(
   customerUuid: string | null,
   customerNumericId: string,
   terrosWorkflowId: string,
+  opts?: {
+    ownerId?: string | null;
+    closerId?: string | null;
+    appointmentStageId?: string | null;
+  },
 ): Record<string, unknown> | null {
   const firstName = String(payload.customer?.first_name ?? v3Customer.first_name ?? "").trim();
   const lastName = String(payload.customer?.last_name ?? v3Customer.last_name ?? "").trim();
@@ -2078,11 +2088,20 @@ function buildTerrosAccountFieldsFromAppointment(
   if (customerEmail) resident.email = customerEmail;
   if (customerPhone) resident.phone = customerPhone;
 
+  const ownerId = opts?.ownerId?.trim() || null;
+  const closerId = opts?.closerId?.trim() || null;
+  const appointmentStageId = opts?.appointmentStageId?.trim() || null;
+  const actorId = ownerId || closerId;
+
   return {
     externalLeadId,
     externalId: externalLeadId,
     ...(customerName ? { name: customerName } : {}),
     ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
+    ...(appointmentStageId ? { workflowStageId: appointmentStageId } : {}),
+    ...(ownerId ? { ownerId, assignedUserId: ownerId } : {}),
+    ...(closerId ? { closerId } : {}),
+    ...(actorId ? { actorId } : {}),
     ...(Object.keys(resident).length > 0 ? { resident } : {}),
     ...(location ? { location } : {}),
   };
@@ -2099,6 +2118,7 @@ async function resolveTerrosAccountForAppointment(
   terrosBase: string,
   terrosKey: string,
   terrosWorkflowId: string,
+  appointmentStageId: string,
 ): Promise<AppointmentAccountResolution> {
   const customerNumericId = String(payload.customer?.id ?? "");
   const customerEmail = String(payload.customer?.email ?? "").trim();
@@ -2158,7 +2178,8 @@ async function resolveTerrosAccountForAppointment(
     }
 
     if (!accountId && emailForSearch) {
-      const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, emailForSearch);
+      const accounts = await searchTerrosAccountsByQuery(terrosBase, terrosKey, emailForSearch);
+      const acc = pickBestTerrosDedupMatch(accounts, phoneForSearch);
       if (acc) applyAccountMatch(acc, "list:email");
     }
 
@@ -2169,10 +2190,9 @@ async function resolveTerrosAccountForAppointment(
     }
 
     if (!accountId && payload.customer?.address?.street) {
-      const acc = await searchTerrosAccountByQuery(terrosBase, terrosKey, payload.customer.address.street);
-      if (acc && (!phoneForSearch || terrosAccountPhone(acc) === phoneForSearch)) {
-        applyAccountMatch(acc, "list:address");
-      }
+      const accounts = await searchTerrosAccountsByQuery(terrosBase, terrosKey, payload.customer.address.street);
+      const acc = pickBestTerrosDedupMatch(accounts, phoneForSearch);
+      if (acc) applyAccountMatch(acc, "list:address");
     }
 
     if (!accountId && customerNumericId) {
@@ -2213,12 +2233,62 @@ async function resolveTerrosAccountForAppointment(
     }
 
     if (!accountId) {
+      const consolidatedId = await findExistingTerrosAccountForCustomer(
+        terrosBase,
+        terrosKey,
+        [
+          customerUuid ?? "",
+          customerNumericId,
+          emailForSearch,
+          phoneForSearch,
+          payload.customer?.address?.street ?? "",
+        ],
+        phoneForSearch,
+      );
+      if (consolidatedId) {
+        const acc = await fetchTerrosAccountRecord(terrosBase, terrosKey, consolidatedId);
+        if (acc) applyAccountMatch(acc, "dedup:consolidated");
+      }
+    }
+
+    if (!accountId) {
+      // Resolve Enerflo setter → Terros owner before create (mirrors customer.created guard).
+      let terrosOwnerIdForCreate: string | null = null;
+      let terrosCloserIdForCreate: string | null = null;
+      const assigneeEmail = payload.assignee?.email?.trim() ?? "";
+
+      if (enerfloSetterNumericId && enerfloKey && terrosKey) {
+        const setterEmail = await fetchEnerfloUserEmailByNumericId(
+          enerfloBase,
+          enerfloKey,
+          enerfloSetterNumericId,
+        );
+        if (setterEmail) {
+          const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, setterEmail);
+          terrosOwnerIdForCreate = resolved.userId;
+        }
+      }
+      if (assigneeEmail && terrosKey) {
+        const resolved = await resolveTerrosUserIdByEmail(terrosBase, terrosKey, assigneeEmail);
+        terrosCloserIdForCreate = resolved.userId;
+      }
+
+      if (!terrosOwnerIdForCreate) {
+        step1Source = "skipped:no-owner-for-create";
+        step1Preview =
+          "No Terros owner resolved from Enerflo setter — refusing to create account without owner.";
+      } else {
       const accountFields = buildTerrosAccountFieldsFromAppointment(
         payload,
         v3Customer,
         customerUuid,
         customerNumericId,
         terrosWorkflowId,
+        {
+          ownerId: terrosOwnerIdForCreate,
+          closerId: terrosCloserIdForCreate,
+          appointmentStageId,
+        },
       );
       if (accountFields) {
         try {
@@ -2244,6 +2314,7 @@ async function resolveTerrosAccountForAppointment(
       } else {
         step1Source = "skipped:no-customer-data";
         step1Preview = "No Terros account found and insufficient customer data to create one safely.";
+      }
       }
     }
   }
@@ -2302,6 +2373,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     terrosBase,
     terrosKey,
     terrosWorkflowId,
+    appointmentStageId,
   );
   let accountId = accountResolution.accountId;
   let accountOwnerIdFromLookup = accountResolution.accountOwnerIdFromLookup;
@@ -2382,6 +2454,7 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
             account: {
               accountId,
               workflowStageId: appointmentStageId,
+              ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
               ...(closerUserId ? { actorId: closerUserId } : {}),
             },
           }),
@@ -2414,6 +2487,8 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
     // 3b: account/upsert — set closerId using the accountId we already resolved in step 1.
     // Using accountId (not externalLeadId) prevents creating duplicate accounts.
     if ((closerUserId || eventOwnerIdFromSetter) && accountId) {
+      const canonicalExternalLeadId =
+        customerUuid || (customerNumericId ? String(customerNumericId) : null);
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2430,6 +2505,9 @@ async function handleNewAppointment(payload: NewAppointmentPayload): Promise<Nex
               ...(closerUserId ? { closerId: closerUserId } : {}),
               ...(eventOwnerIdFromSetter || closerUserId
                 ? { actorId: eventOwnerIdFromSetter || closerUserId }
+                : {}),
+              ...(canonicalExternalLeadId
+                ? { externalLeadId: canonicalExternalLeadId, externalId: canonicalExternalLeadId }
                 : {}),
             },
           }),
@@ -2528,6 +2606,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     terrosBase,
     terrosKey,
     terrosWorkflowId,
+    appointmentStageId,
   );
   const accountId = accountResolution.accountId;
   const accountOwnerIdFromLookup = accountResolution.accountOwnerIdFromLookup;
@@ -2600,6 +2679,7 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
               accountId,
               id: accountId,
               workflowStageId: appointmentStageId,
+              ...(terrosWorkflowId ? { workflowId: terrosWorkflowId } : {}),
               ...(closerUserId ? { actorId: closerUserId } : {}),
             },
           }),
@@ -2630,6 +2710,10 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
     // account/update alone doesn't persist closerId in the Assignment panel, so we also call
     // account/upsert but with accountId to guarantee we're touching the right record.
     if ((closerUserId || eventOwnerIdFromSetter || resolvedLocation) && accountId) {
+      const canonicalExternalLeadId =
+        customerUuid ||
+        getEnerfloIntegrationExternalId(accountResolution.v3Customer) ||
+        (customerNumericId ? String(customerNumericId) : null);
       let step3bOk = false;
       let step3bStatus: number | null = null;
       let step3bPreview = "";
@@ -2647,6 +2731,9 @@ async function handleUpdateAppointment(payload: NewAppointmentPayload): Promise<
               ? { actorId: eventOwnerIdFromSetter || closerUserId }
               : {}),
             ...(resolvedLocation ? { location: resolvedLocation } : {}),
+            ...(canonicalExternalLeadId
+              ? { externalLeadId: canonicalExternalLeadId, externalId: canonicalExternalLeadId }
+              : {}),
           } }),
         });
         step3bStatus  = r.status;
