@@ -1104,17 +1104,32 @@ async function handleCustomerCreated(
 
   const c = payload.customer;
   const customerId  = c.id ?? "";
-  const customerName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "Unknown";
+  const rawCustomerName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
+  const customerName = rawCustomerName || "Unknown";
   const customerEmail = c.email?.trim() ?? "";
   const customerPhone = (c.mobile?.trim() || c.phone?.trim()) ?? "";
 
+  const addr = c.address;
+  const addrTrim  = addr?.fullAddress?.trim() ?? [addr?.line1, addr?.line2, addr?.line3].filter(Boolean).join(" ");
+  const line1ForTerros =
+    addr?.line1?.trim() ||
+    (addrTrim ? addrTrim.split(",")[0]?.trim() : "") ||
+    "Address pending";
+  const hasRealAddress = line1ForTerros !== "Address pending";
+  const hasRealName = Boolean(rawCustomerName);
+
   // ── Junk-delivery guard ───────────────────────────────────────────────────
   // Enerflo fires customer.created 2-3× per customer, and some deliveries in the
-  // burst arrive with no usable customer data (empty email/phone, name "Unknown").
-  // Those empty deliveries can't resolve an owner, so they fall back to the
-  // default owner and create a junk Terros account wrongly assigned to the API
-  // user. A real lead always has at least an email or a phone — skip the rest.
-  if (!customerEmail && !customerPhone) {
+  // burst arrive with no usable customer data (empty email/phone, name "Unknown",
+  // no address). Those empty deliveries can't resolve an owner or a dedup match,
+  // so they'd fall back to the default owner and create a junk Terros account
+  // wrongly assigned to the API user — skip those.
+  // D2D-canvassed leads are a legitimate exception: they often have a real name
+  // and address but no email/phone yet (captured door-to-door before contact
+  // info is collected). Let those through so the name+address dedup match below
+  // can find and link an existing Terros account instead of leaving this
+  // Enerflo customer orphaned as an undetected duplicate.
+  if (!customerEmail && !customerPhone && !(hasRealName && hasRealAddress)) {
     await writeApiLog({
       operation: "webhook:enerflo-v2:customer-created:skipped",
       vendor: "enerflo",
@@ -1157,13 +1172,6 @@ async function handleCustomerCreated(
       reason: "duplicate-delivery-lock",
     });
   }
-
-  const addr = c.address;
-  const addrTrim  = addr?.fullAddress?.trim() ?? [addr?.line1, addr?.line2, addr?.line3].filter(Boolean).join(" ");
-  const line1ForTerros =
-    addr?.line1?.trim() ||
-    (addrTrim ? addrTrim.split(",")[0]?.trim() : "") ||
-    "Address pending";
 
   const location: Record<string, unknown> = {
     line1: line1ForTerros,
