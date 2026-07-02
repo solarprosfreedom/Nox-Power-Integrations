@@ -1363,6 +1363,87 @@ function terrosResidentFromAccount(full: Record<string, unknown>): TerrosResiden
   };
 }
 
+/**
+ * Push the Terros account's current owner/closer to Enerflo setter_user_id /
+ * agent_user_id. Called from handleEventAdd because appointment scheduling can
+ * set the Terros Closer without triggering an "Account update" webhook — see
+ * the call site for the full explanation. Safe to call redundantly: it diffs
+ * against the live Enerflo customer and only PUTs when a value actually changed.
+ */
+async function syncAssignmentsFromAccount(
+  terrosBase: string,
+  terrosKey: string,
+  accountId: string,
+  enerfloNumericId: string,
+  terrosEventId: string
+): Promise<void> {
+  try {
+    const fullAccount = await fetchTerrosAccountById(terrosBase, terrosKey, accountId);
+    if (!fullAccount) return;
+
+    const assignments = await resolveTerrosAssignmentEmails(terrosBase, terrosKey, {}, fullAccount);
+    const setterEmail = assignments.setterEmail;
+    const leadOwnerEmail = assignments.leadOwnerEmail;
+    if (!setterEmail && !leadOwnerEmail) return;
+
+    const [setterUserId, agentUserId] = await Promise.all([
+      setterEmail ? findEnerfloUserIdByEmail(setterEmail) : Promise.resolve(null),
+      leadOwnerEmail ? findEnerfloUserIdByEmail(leadOwnerEmail) : Promise.resolve(null),
+    ]);
+    if (setterUserId == null && agentUserId == null) return;
+
+    const { ok: getOk, data: customer } = await enerfloRequestParsed<Record<string, unknown>>({
+      operation: "webhook:terros:event-add-assignment-sync:fetch-customer",
+      method: "GET",
+      path: `/api/v3/customers/${encodeURIComponent(enerfloNumericId)}`,
+    });
+    if (!getOk || !customer) return;
+
+    const currentSetterId = customer.setter_user_id != null ? Number(customer.setter_user_id) : null;
+    const currentAgentId = customer.agent_user_id != null ? Number(customer.agent_user_id) : null;
+
+    const body: Record<string, unknown> = {};
+    if (setterUserId != null && setterUserId !== currentSetterId) body.setter_user_id = setterUserId;
+    if (agentUserId != null && agentUserId !== currentAgentId) body.agent_user_id = agentUserId;
+    if (Object.keys(body).length === 0) return;
+
+    const log = await enerfloRequest({
+      operation: "webhook:terros:event-add-assignment-sync",
+      method: "PUT",
+      path: `/api/v3/customers/${encodeURIComponent(enerfloNumericId)}`,
+      body,
+    });
+    await writeApiLog({
+      operation: "webhook:terros:event-add-assignment-sync-result",
+      vendor: "enerflo",
+      method: "PUT",
+      url: `/api/v3/customers/${enerfloNumericId}`,
+      hadApiKey: true,
+      status: log.status,
+      ok: log.ok,
+      responsePreview: JSON.stringify({
+        terrosEventId,
+        accountId,
+        enerfloNumericId,
+        setterEmail,
+        leadOwnerEmail,
+        putBody: body,
+      }).slice(0, 400),
+    });
+  } catch (e) {
+    await writeApiLog({
+      operation: "webhook:terros:event-add-assignment-sync-error",
+      vendor: "terros",
+      method: "POST",
+      url: `/api/webhooks/terros`,
+      hadApiKey: Boolean(terrosKey),
+      status: 500,
+      ok: false,
+      responsePreview: logPreview(e instanceof Error ? e.message : String(e)),
+    });
+  }
+}
+
 // ── handleEventAdd ────────────────────────────────────────────────────────────
 /**
  * Called when Terros fires entity:"Event" action:"add".
@@ -1668,6 +1749,17 @@ async function handleEventAdd(
       terrosEventId,
       accountId,
     });
+  }
+
+  // ── Assignment sync (owner/closer → setter/lead owner) ───────────────────
+  // Scheduling an appointment sets the Terros Closer (closerHistory) but Terros
+  // does NOT fire a separate "Account update" webhook for that change — only
+  // this "Event add" webhook fires. Without this, handleUpdate's owner/closer
+  // → setter/agent sync never runs, and the Closer set at scheduling time is
+  // silently lost (Enerflo Lead Owner stays blank forever). Push current
+  // owner/closer here too, whenever we have a numeric Enerflo customer id.
+  if (accountId && terrosKey && /^\d+$/.test(enerfloCustomer)) {
+    await syncAssignmentsFromAccount(terrosBase, terrosKey, accountId, enerfloCustomer, terrosEventId);
   }
 
   // ── Step 2: POST /v1/appointments (with lock — prevent concurrent duplicates) ──
