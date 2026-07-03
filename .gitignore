@@ -43,3 +43,13 @@ next-env.d.ts
 # local data storage (logs, etc.)
 /data/
 customers.json
+
+# generated integration exports and backfill audit artifacts
+/exports/
+terros-enerflo-assignment-audit-*
+terros-owner-fix-audit-*
+terros-owner-fix-updated-*.csv
+terros-jonas-owned-accounts.csv
+setter-backfill-audit-*.jsonl
+setter-backfill*.log
+setter-backfill-checkpoint.txt

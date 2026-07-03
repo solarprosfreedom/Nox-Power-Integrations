@@ -16,6 +16,16 @@
  *     equals this value exactly. Prefer the Enerflo v2 UUID, not the numeric customer id.
  *   TARGET_TERROS_ACCOUNT_ID=Account.xxx  — fetch one Terros account via /account/get (skips
  *     full account/list pagination; best for single-lead live runs).
+ *   INPUT_CSV=exports/sync-confirm-would-overwrite-*.csv  — process only terrosAccountId
+ *     rows from a prior dry-run export (skips full account/list pagination).
+ *   REQUIRE_EXTERNAL_LEAD_ID=0  — with INPUT_CSV: also process accounts where Terros has no
+ *     externalLeadId recorded; Enerflo customer is resolved via live email/phone/name search.
+ *   MATCH_MODE=name-email  — match Terros ↔ Enerflo by normalized name + resident email;
+ *     updates every Enerflo customer with that exact name+email (duplicate Enerflo leads included).
+ *   TERROS_EXPORT / ENERFLO_EXPORT  — CSV paths for MATCH_MODE=name-email (defaults: latest in exports/)
+ *   USE_EXPORT_ASSIGNMENTS=1  — with MATCH_MODE=name-email: use Terros export owner/closer emails;
+ *     skip /account/get (Enerflo GET + PUT only).
+ *   RESUME_AUDIT=path/to/prior-audit.jsonl  — skip terrosAccountIds already logged in a prior run.
  *   BLOCKED_ASSIGNMENT_EMAILS=jonaslim@noxpwr.com  — never assign these reps (comma-separated)
  *
  * Duplicate Terros accounts: when the same Enerflo customer has both a UUID externalLeadId
@@ -100,6 +110,188 @@ function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
+function normalizeName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function readExportCsvRows(csvPath, columns) {
+  const raw = fs.readFileSync(csvPath, "utf8");
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const header = lines[0].split(",");
+  const idx = (name) => header.indexOf(name);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",");
+    const row = {};
+    for (const col of columns) {
+      row[col] = idx(col) >= 0 ? (cols[idx(col)] ?? "").trim() : "";
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** AccountIds already handled in a prior audit (for resume). Comma-separated paths OK. */
+function loadResumeSkipSet(auditPathOrPaths) {
+  const skip = new Set();
+  const paths = String(auditPathOrPaths || "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  for (const auditPath of paths) {
+    const raw = fs.readFileSync(auditPath, "utf8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const o = JSON.parse(line);
+        const id = o.accountId;
+        if (!id || !String(id).startsWith("Account.")) continue;
+        if (o.reason === "name-email-ambiguous") continue;
+        skip.add(String(id));
+      } catch {
+        /* ignore malformed lines */
+      }
+    }
+  }
+  return skip;
+}
+
+function buildAccountFromExportRow(row) {
+  const parts = String(row.customerName || "").trim().split(/\s+/);
+  const firstName = parts[0] || "";
+  const lastName = parts.slice(1).join(" ") || "";
+  const ownerEmail = normalizeEmail(row.ownerEmail);
+  const closerEmail = normalizeEmail(row.closerEmail);
+  return {
+    accountId: row.accountId,
+    id: row.accountId,
+    name: row.customerName,
+    externalLeadId: row.externalLeadId || "",
+    ownerId: row.ownerId || "",
+    closerId: row.closerId || "",
+    owner: ownerEmail ? { email: ownerEmail } : {},
+    closer: closerEmail ? { email: closerEmail } : {},
+    resident: {
+      email: row.residentEmail,
+      firstName,
+      lastName,
+    },
+  };
+}
+
+function latestExportFile(exportsDir, prefix) {
+  return fs
+    .readdirSync(exportsDir)
+    .filter((f) => f.startsWith(prefix) && f.endsWith(".csv"))
+    .sort()
+    .pop();
+}
+
+/** Unique Terros ↔ Enerflo pairs where resident email and normalized name both match. */
+function buildNameEmailUniqueMatches(terrosPath, enerfloPath) {
+  const terros = readExportCsvRows(terrosPath, [
+    "accountId",
+    "customerName",
+    "nameKey",
+    "residentEmail",
+    "externalLeadId",
+    "ownerId",
+    "ownerEmail",
+    "closerId",
+    "closerEmail",
+  ]);
+  const enerflo = readExportCsvRows(enerfloPath, [
+    "customerId",
+    "customerUuid",
+    "customerName",
+    "nameKey",
+    "email",
+  ]);
+
+  const enerfloByEmailName = new Map();
+  for (const row of enerflo) {
+    const email = normalizeEmail(row.email);
+    const nameKey = row.nameKey || normalizeName(row.customerName);
+    if (!email || !nameKey) continue;
+    const key = `${email}::${nameKey}`;
+    if (!enerfloByEmailName.has(key)) enerfloByEmailName.set(key, []);
+    enerfloByEmailName.get(key).push(row);
+  }
+
+  const unique = [];
+  let multiEnerfloTerros = 0;
+  const seenTerros = new Set();
+
+  for (const t of terros) {
+    const accountId = t.accountId?.trim();
+    const email = normalizeEmail(t.residentEmail);
+    const nameKey = t.nameKey || normalizeName(t.customerName);
+    if (!accountId || !accountId.startsWith("Account.") || !email || !nameKey) continue;
+    if (seenTerros.has(accountId)) continue;
+
+    const key = `${email}::${nameKey}`;
+    const candidates = enerfloByEmailName.get(key) ?? [];
+    if (!candidates.length) continue;
+
+    seenTerros.add(accountId);
+    if (candidates.length > 1) multiEnerfloTerros += 1;
+    const enerfloCustomerIds = candidates.map((c) => c.customerId);
+    unique.push({
+      accountId,
+      customerName: t.customerName,
+      residentEmail: email,
+      nameKey,
+      externalLeadId: t.externalLeadId,
+      ownerId: t.ownerId,
+      ownerEmail: normalizeEmail(t.ownerEmail),
+      closerId: t.closerId,
+      closerEmail: normalizeEmail(t.closerEmail),
+      enerfloCustomerId: candidates[0].customerId,
+      enerfloCustomerUuid: candidates[0].customerUuid,
+      enerfloCustomerIds,
+      enerfloMatches: candidates.map((c) => ({
+        customerId: c.customerId,
+        customerUuid: c.customerUuid,
+      })),
+    });
+  }
+
+  return { unique, multiEnerfloTerros };
+}
+
+/** Read rows from a sync-confirm dry-run CSV. */
+function loadRowsFromCsv(csvPath) {
+  const raw = fs.readFileSync(csvPath, "utf8");
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const header = lines[0].split(",");
+  const idx = (name) => header.indexOf(name);
+  const accountCol = idx("terrosAccountId");
+  const externalCol = idx("externalLeadId");
+  const numericCol = idx("enerfloCustomerId");
+  const rows = [];
+  const seen = new Set();
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",");
+    const accountId = (accountCol >= 0 ? cols[accountCol] : cols[0])?.trim();
+    if (!accountId || !accountId.startsWith("Account.") || seen.has(accountId)) continue;
+    seen.add(accountId);
+    rows.push({
+      accountId,
+      externalLeadId: externalCol >= 0 ? (cols[externalCol] ?? "").trim() : "",
+      enerfloCustomerId: numericCol >= 0 ? (cols[numericCol] ?? "").trim() : "",
+    });
+  }
+  return rows;
+}
+
 async function main() {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
   const envPath = path.join(root, ".env.local");
@@ -119,9 +311,36 @@ async function main() {
   const limit = limitRaw != null && Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : null;
   const targetExternalLeadId = process.env.TARGET_EXTERNAL_LEAD_ID?.trim() || "";
   const targetTerrosAccountId = process.env.TARGET_TERROS_ACCOUNT_ID?.trim() || "";
+  const inputCsvPath = process.env.INPUT_CSV?.trim()
+    ? path.resolve(root, process.env.INPUT_CSV.trim())
+    : "";
+  const matchMode = (process.env.MATCH_MODE || "").trim().toLowerCase();
+  const useExportAssignments =
+    process.env.USE_EXPORT_ASSIGNMENTS === "1" || process.env.USE_EXPORT_ASSIGNMENTS === "true";
+  // With INPUT_CSV: when "0", process accounts even if Terros itself has no externalLeadId
+  // recorded (e.g. accounts linked to Enerflo without the back-reference ever being written).
+  // Enerflo customer resolution then falls back to live email/phone/name search.
+  const REQUIRE_EXTERNAL_LEAD_ID = process.env.REQUIRE_EXTERNAL_LEAD_ID !== "0";
+  const resumeAuditRaw = process.env.RESUME_AUDIT?.trim() || "";
+  const resumeAuditPaths = resumeAuditRaw
+    ? resumeAuditRaw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => path.resolve(root, p))
+    : [];
+  const resumeAuditPath = resumeAuditPaths.length ? resumeAuditPaths.join(",") : "";
+  const exportsDir = path.join(root, "exports");
+  const terrosExportPath = process.env.TERROS_EXPORT?.trim()
+    ? path.resolve(root, process.env.TERROS_EXPORT.trim())
+    : path.join(exportsDir, latestExportFile(exportsDir, "terros-accounts-") || "");
+  const enerfloExportPath = process.env.ENERFLO_EXPORT?.trim()
+    ? path.resolve(root, process.env.ENERFLO_EXPORT.trim())
+    : path.join(exportsDir, latestExportFile(exportsDir, "enerflo-leads-") || "");
 
   const auditPath = path.join(root, `terros-enerflo-assignment-audit-${Date.now()}.jsonl`);
   const revertCsvPath = auditPath.replace(/\.jsonl$/, "-revert.csv");
+  const ambiguousCsvPath = auditPath.replace(/\.jsonl$/, "-ambiguous-skipped.csv");
   const audit = fs.createWriteStream(auditPath, { flags: "a" });
   const revertCsv = fs.createWriteStream(revertCsvPath, { flags: "a" });
   revertCsv.write(
@@ -170,6 +389,10 @@ async function main() {
   const enerfloUserIdToEmail = new Map();
   const enerfloCustomerCache = new Map();
   const enerfloV1SearchCache = new Map();
+  /** @type {Map<string, string>} terrosAccountId → enerflo numeric customer id from INPUT_CSV / name-email match */
+  const csvNumericByAccountId = new Map();
+  /** @type {Map<string, { accountId: string, residentEmail: string, nameKey: string, enerfloCustomerId: string }>} */
+  const nameEmailMeta = new Map();
 
   let lastStart = 0;
   let chain = Promise.resolve();
@@ -275,22 +498,49 @@ async function main() {
     return rows;
   }
 
+  // Generic/placeholder resident emails shared by many unrelated customers (junk-data lead
+  // capture defaults) — never trust an email-only match against one of these.
+  const GENERIC_EMAIL_RE = /^(noemail|no-email|noemail1|unknown|none|na|n\/a|test|customer|placeholder|donotreply|do-not-reply)@/i;
+  function isGenericEmail(email) {
+    return !email || GENERIC_EMAIL_RE.test(String(email).trim());
+  }
+
+  function rowPhone(r) {
+    return digitsOnly(r?.mobile || r?.phone || r?.mobile_phone);
+  }
+  function rowName(r) {
+    return `${r?.first_name || ""} ${r?.last_name || ""}`.trim().toLowerCase();
+  }
+  function rowEmail(r) {
+    return normalizeEmail(r?.email || r?.Email);
+  }
+
+  /**
+   * Never guess: only return a row when exactly one candidate uniquely satisfies the strongest
+   * available signal. A shared/placeholder email (e.g. "noemail@gmail.com") is explicitly
+   * distrusted on its own — it must be corroborated by phone or name to disambiguate.
+   */
   function chooseBestV1Row(rows, opts) {
     if (!Array.isArray(rows) || rows.length === 0) return null;
     const externalLeadId = String(opts.externalLeadId || "").trim();
     const residentEmail = normalizeEmail(opts.residentEmail || "");
     const residentPhone = digitsOnly(opts.residentPhone || "");
     const residentName = String(opts.residentName || "").trim().toLowerCase();
+    const emailIsGeneric = isGenericEmail(residentEmail);
 
-    const byIntegration = rows.find((r) => {
-      const integrations = r?.integrations;
-      const map = integrations?.["Enerflo V2"];
-      const rec = map?.EnerfloV2Customer;
-      return String(rec?.integration_record_id || "").trim() === externalLeadId;
-    });
+    const byIntegration = externalLeadId
+      ? rows.find((r) => {
+          const integrations = r?.integrations;
+          const map = integrations?.["Enerflo V2"];
+          const rec = map?.EnerfloV2Customer;
+          return String(rec?.integration_record_id || "").trim() === externalLeadId;
+        })
+      : null;
     if (byIntegration) return byIntegration;
 
-    const byNumericId = rows.find((r) => String(r?.id || "").trim() === externalLeadId);
+    const byNumericId = externalLeadId
+      ? rows.find((r) => String(r?.id || "").trim() === externalLeadId)
+      : null;
     if (byNumericId) return byNumericId;
 
     if (UUID_RE.test(externalLeadId)) {
@@ -301,25 +551,58 @@ async function main() {
       if (byUuid) return byUuid;
     }
 
-    if (residentEmail) {
-      const byEmail = rows.find((r) => normalizeEmail(r?.email || r?.Email) === residentEmail);
-      if (byEmail) return byEmail;
+    const emailMatches = residentEmail ? rows.filter((r) => rowEmail(r) === residentEmail) : [];
+
+    if (residentEmail && !emailIsGeneric) {
+      if (emailMatches.length === 1) return emailMatches[0];
+      // Multiple rows share this (non-generic but still ambiguous) email — disambiguate.
+      if (emailMatches.length > 1) {
+        if (residentPhone) {
+          const hit = emailMatches.filter((r) => rowPhone(r) === residentPhone);
+          if (hit.length === 1) return hit[0];
+        }
+        if (residentName) {
+          const hit = emailMatches.filter((r) => rowName(r) === residentName);
+          if (hit.length === 1) return hit[0];
+        }
+        return null; // ambiguous — do not guess
+      }
     }
 
     if (residentPhone) {
-      const byPhone = rows.find((r) => digitsOnly(r?.phone || r?.mobile_phone) === residentPhone);
-      if (byPhone) return byPhone;
+      const phoneMatches = rows.filter((r) => rowPhone(r) === residentPhone);
+      if (phoneMatches.length === 1) return phoneMatches[0];
+      if (phoneMatches.length > 1) {
+        if (residentName) {
+          const hit = phoneMatches.filter((r) => rowName(r) === residentName);
+          if (hit.length === 1) return hit[0];
+        }
+        if (residentEmail && !emailIsGeneric) {
+          const hit = phoneMatches.filter((r) => rowEmail(r) === residentEmail);
+          if (hit.length === 1) return hit[0];
+        }
+        return null; // multiple people share this phone — do not guess
+      }
     }
 
     if (residentName) {
-      const byName = rows.find((r) => {
-        const full = `${r?.first_name || ""} ${r?.last_name || ""}`.trim().toLowerCase();
-        return full === residentName;
-      });
-      if (byName) return byName;
+      const nameMatches = rows.filter((r) => rowName(r) === residentName);
+      if (nameMatches.length === 1) return nameMatches[0];
+      if (nameMatches.length > 1) {
+        if (residentPhone) {
+          const hit = nameMatches.filter((r) => rowPhone(r) === residentPhone);
+          if (hit.length === 1) return hit[0];
+        }
+        if (residentEmail && !emailIsGeneric) {
+          const hit = nameMatches.filter((r) => rowEmail(r) === residentEmail);
+          if (hit.length === 1) return hit[0];
+        }
+        return null; // multiple people share this exact name — do not guess
+      }
     }
 
-    return rows[0];
+    // Generic/placeholder email alone (no phone/name corroboration) — never trust it.
+    return null;
   }
 
   function getEnerfloNumericIdFromRow(row) {
@@ -346,6 +629,9 @@ async function main() {
   }
 
   async function resolveEnerfloNumericCustomerId(externalLeadId, terrosAccountId, residentEmail) {
+    const cached = terrosAccountId ? csvNumericByAccountId.get(terrosAccountId) : null;
+    if (cached) return cached;
+
     const ref = String(externalLeadId || "").trim();
     if (/^\d+$/.test(ref)) return ref;
 
@@ -474,7 +760,11 @@ async function main() {
   // ── Bootstrap caches ────────────────────────────────────────────────────────
   console.log(
     `Mode: ${isRun ? "RUN" : "DRY RUN"}${limit ? ` (limit=${limit})` : ""}${
-      targetTerrosAccountId ? ` (terrosAccount=${targetTerrosAccountId})` : ""
+      matchMode === "name-email" ? " (match=name+email unique)" : ""
+    }${useExportAssignments ? " (export-assignments)" : ""}${
+      resumeAuditPath ? ` (resume=${path.basename(resumeAuditPath)})` : ""
+    }${inputCsvPath ? ` (inputCsv=${path.basename(inputCsvPath)})` : ""
+    }${targetTerrosAccountId ? ` (terrosAccount=${targetTerrosAccountId})` : ""
     }${targetExternalLeadId ? ` (externalLeadId=${targetExternalLeadId})` : ""}`,
   );
   if (BLOCKED_ASSIGNMENT_EMAILS.size) {
@@ -510,7 +800,14 @@ async function main() {
     skippedOwnerEmailNotInEnerflo: 0,
     skippedCloserEmailNotInEnerflo: 0,
     skippedBlockedEmail: 0,
+    skippedJonasAccount: 0,
     skippedSupersededDuplicate: 0,
+    skippedNameEmailAmbiguous: 0,
+    skippedIdentityMismatch: 0,
+    nameEmailMultiEnerfloTerros: 0,
+    enerfloTargetsProcessed: 0,
+    skippedNameEmailLiveMismatch: 0,
+    skippedResumePreviouslyProcessed: 0,
     failedUpdate: 0,
     pages: 0,
   };
@@ -550,8 +847,153 @@ async function main() {
 
   /** @type {Record<string, unknown>[]} */
   const linkedAccounts = [];
+  /** @type {{ accountId: string, externalLeadId: string, enerfloCustomerId: string }[]} */
+  const inputCsvRows = [];
 
-  if (targetTerrosAccountId) {
+  if (matchMode === "name-email") {
+    if (!fs.existsSync(terrosExportPath) || !fs.existsSync(enerfloExportPath)) {
+      throw new Error(
+        `MATCH_MODE=name-email requires TERROS_EXPORT and ENERFLO_EXPORT CSVs (got terros=${terrosExportPath}, enerflo=${enerfloExportPath})`,
+      );
+    }
+    const { unique, multiEnerfloTerros } = buildNameEmailUniqueMatches(terrosExportPath, enerfloExportPath);
+    stats.nameEmailMultiEnerfloTerros = multiEnerfloTerros;
+
+    const multiMatchCsv = fs.createWriteStream(ambiguousCsvPath, { flags: "a" });
+    multiMatchCsv.write(
+      "terrosAccountId,customerName,residentEmail,nameKey,externalLeadId,enerfloCustomerIds\n",
+    );
+    for (const row of unique) {
+      if ((row.enerfloCustomerIds?.length ?? 0) <= 1) continue;
+      multiMatchCsv.write(
+        [
+          row.accountId,
+          row.customerName,
+          row.residentEmail,
+          row.nameKey,
+          row.externalLeadId,
+          row.enerfloCustomerIds.join("|"),
+        ].map((v) => csvEscape(v)).join(",") + "\n",
+      );
+    }
+    multiMatchCsv.end();
+    console.log(
+      `Name+email matches: ${unique.length} Terros account(s) (${multiEnerfloTerros} with 2+ Enerflo hits)`,
+    );
+    console.log(`Terros export: ${path.basename(terrosExportPath)}`);
+    console.log(`Enerflo export: ${path.basename(enerfloExportPath)}`);
+
+    for (const row of unique) {
+      csvNumericByAccountId.set(row.accountId, row.enerfloCustomerId);
+      nameEmailMeta.set(row.accountId, row);
+    }
+
+    const resumeSkip = resumeAuditPaths.length
+      ? loadResumeSkipSet(resumeAuditPaths.join(","))
+      : new Set();
+    if (resumeSkip.size) {
+      console.log(
+        `Resume: skipping ${resumeSkip.size} account(s) from ${resumeAuditPaths.length} prior audit(s)`,
+      );
+    }
+
+    const workList = unique.filter((row) => {
+      if (!resumeSkip.has(row.accountId)) return true;
+      stats.skippedResumePreviouslyProcessed += 1;
+      writeAudit({
+        action: "skip",
+        reason: "resume-already-processed",
+        accountId: row.accountId,
+        resumeAudit: path.basename(resumeAuditPath),
+      });
+      return false;
+    });
+
+    if (useExportAssignments) {
+      console.log(
+        `Using Terros export assignments (no /account/get) for ${workList.length} account(s)…`,
+      );
+      for (const row of workList) {
+        stats.scanned += 1;
+        if (targetExternalLeadId && row.externalLeadId !== targetExternalLeadId) continue;
+        linkedAccounts.push(buildAccountFromExportRow(row));
+      }
+      console.log(`  loaded ${linkedAccounts.length} account(s) from export`);
+    } else {
+      console.log(`Loading ${workList.length} Terros accounts via /account/get…`);
+      for (let i = 0; i < workList.length; i++) {
+        const { accountId: id } = workList[i];
+        stats.scanned += 1;
+        const acc = await fetchTerrosAccountById(id);
+        if (!acc) {
+          writeAudit({ action: "skip", reason: "terros-account-not-found", accountId: id });
+          continue;
+        }
+        const resident = acc?.resident && typeof acc.resident === "object" ? acc.resident : {};
+        const liveEmail = normalizeEmail(resident.email);
+        const liveNameKey =
+          normalizeName(`${resident.firstName || ""} ${resident.lastName || ""}`) ||
+          normalizeName(pick(acc, ["name"]));
+        const meta = nameEmailMeta.get(id);
+        if (!meta || liveEmail !== meta.residentEmail || liveNameKey !== meta.nameKey) {
+          stats.skippedNameEmailLiveMismatch += 1;
+          writeAudit({
+            action: "skip",
+            reason: "name-email-terros-live-mismatch",
+            accountId: id,
+            exportEmail: meta?.residentEmail,
+            liveEmail,
+            exportNameKey: meta?.nameKey,
+            liveNameKey,
+          });
+          continue;
+        }
+        if (targetExternalLeadId) {
+          const externalLeadId = pick(acc, ["externalLeadId"]);
+          if (externalLeadId !== targetExternalLeadId) continue;
+        }
+        linkedAccounts.push(acc);
+        if ((i + 1) % 200 === 0 || i + 1 === workList.length) {
+          console.log(
+            `  fetched ${i + 1}/${workList.length} accounts (${linkedAccounts.length} verified)`,
+          );
+        }
+      }
+    }
+  } else if (inputCsvPath) {
+    if (!fs.existsSync(inputCsvPath)) {
+      throw new Error(`INPUT_CSV not found: ${inputCsvPath}`);
+    }
+    inputCsvRows.push(...loadRowsFromCsv(inputCsvPath));
+    for (const row of inputCsvRows) {
+      if (row.enerfloCustomerId) {
+        csvNumericByAccountId.set(row.accountId, row.enerfloCustomerId);
+      }
+    }
+    console.log(
+      `Loading ${inputCsvRows.length} Terros accounts from CSV via /account/get (skipped full pagination)`,
+    );
+    for (let i = 0; i < inputCsvRows.length; i++) {
+      const { accountId: id } = inputCsvRows[i];
+      stats.scanned += 1;
+      const acc = await fetchTerrosAccountById(id);
+      if (!acc) {
+        writeAudit({ action: "skip", reason: "terros-account-not-found", accountId: id });
+        continue;
+      }
+      const externalLeadId = pick(acc, ["externalLeadId"]);
+      if (!externalLeadId && REQUIRE_EXTERNAL_LEAD_ID) {
+        stats.skippedNoExternalLeadId += 1;
+        writeAudit({ action: "skip", reason: "no-externalLeadId", accountId: id });
+        continue;
+      }
+      if (targetExternalLeadId && externalLeadId !== targetExternalLeadId) continue;
+      linkedAccounts.push(acc);
+      if ((i + 1) % 100 === 0 || i + 1 === inputCsvRows.length) {
+        console.log(`  fetched ${i + 1}/${inputCsvRows.length} accounts (${linkedAccounts.length} linked)`);
+      }
+    }
+  } else if (targetTerrosAccountId) {
     const acc = await fetchTerrosAccountById(targetTerrosAccountId);
     if (!acc) {
       throw new Error(`Terros /account/get failed for ${targetTerrosAccountId}`);
@@ -589,15 +1031,47 @@ async function main() {
   // Prefer UUID externalLeadId (Enerflo v2 customer id). Skip numeric-only duplicates when
   // another Terros account links the same Enerflo customer via UUID.
   const canonicalUuidAccountByNumericId = new Map();
-  for (const acc of linkedAccounts) {
-    const externalLeadId = pick(acc, ["externalLeadId"]);
-    if (!UUID_RE.test(externalLeadId)) continue;
-    const accountId = pick(acc, ["accountId", "id"]);
-    const resident = acc?.resident && typeof acc.resident === "object" ? acc.resident : {};
-    const residentEmail = normalizeEmail(resident?.email || "");
-    const numericId = await resolveEnerfloNumericCustomerId(externalLeadId, accountId, residentEmail);
-    if (numericId) {
-      canonicalUuidAccountByNumericId.set(numericId, accountId);
+  if (inputCsvRows.length) {
+    for (const row of inputCsvRows) {
+      if (row.accountId && row.enerfloCustomerId && UUID_RE.test(row.externalLeadId || "")) {
+        canonicalUuidAccountByNumericId.set(String(row.enerfloCustomerId), row.accountId);
+      }
+    }
+    console.log(`Built Enerflo id map from CSV (${canonicalUuidAccountByNumericId.size} entries, no API lookup)`);
+  } else if (matchMode === "name-email") {
+    for (const [, meta] of nameEmailMeta) {
+      for (const match of meta.enerfloMatches ?? []) {
+        if (match.customerUuid && UUID_RE.test(match.customerUuid)) {
+          canonicalUuidAccountByNumericId.set(String(match.customerId), meta.accountId);
+        }
+      }
+    }
+    for (const acc of linkedAccounts) {
+      const externalLeadId = pick(acc, ["externalLeadId"]);
+      if (!UUID_RE.test(externalLeadId)) continue;
+      const accountId = pick(acc, ["accountId", "id"]);
+      const numericId = csvNumericByAccountId.get(accountId);
+      if (numericId) canonicalUuidAccountByNumericId.set(String(numericId), accountId);
+    }
+    console.log(
+      `Built Enerflo id map from name-email exports (${canonicalUuidAccountByNumericId.size} entries)`,
+    );
+  } else {
+    let resolveCount = 0;
+    for (const acc of linkedAccounts) {
+      const externalLeadId = pick(acc, ["externalLeadId"]);
+      if (!UUID_RE.test(externalLeadId)) continue;
+      const accountId = pick(acc, ["accountId", "id"]);
+      const resident = acc?.resident && typeof acc.resident === "object" ? acc.resident : {};
+      const residentEmail = normalizeEmail(resident?.email || "");
+      const numericId = await resolveEnerfloNumericCustomerId(externalLeadId, accountId, residentEmail);
+      if (numericId) {
+        canonicalUuidAccountByNumericId.set(numericId, accountId);
+      }
+      resolveCount += 1;
+      if (resolveCount % 100 === 0) {
+        console.log(`  resolving Enerflo ids ${resolveCount}/${linkedAccounts.length}...`);
+      }
     }
   }
 
@@ -605,9 +1079,13 @@ async function main() {
   for (const acc of linkedAccounts) {
     const accountId = pick(acc, ["accountId", "id"]);
     const externalLeadId = pick(acc, ["externalLeadId"]);
-    if (!isNumericExternalLeadId(externalLeadId)) continue;
-    const canonicalAccountId = canonicalUuidAccountByNumericId.get(externalLeadId);
+    const enerfloNumericId = isNumericExternalLeadId(externalLeadId)
+      ? externalLeadId
+      : csvNumericByAccountId.get(accountId) || null;
+    if (!enerfloNumericId) continue;
+    const canonicalAccountId = canonicalUuidAccountByNumericId.get(String(enerfloNumericId));
     if (!canonicalAccountId || canonicalAccountId === accountId) continue;
+    if (UUID_RE.test(externalLeadId || "")) continue;
     if (targetExternalLeadId === externalLeadId) continue;
     supersededAccountIds.add(accountId);
     stats.skippedSupersededDuplicate += 1;
@@ -617,7 +1095,7 @@ async function main() {
       accountId,
       externalLeadId,
       canonicalTerrosAccountId: canonicalAccountId,
-      enerfloNumericId: externalLeadId,
+      enerfloNumericId,
     });
   }
 
@@ -632,6 +1110,7 @@ async function main() {
       if (supersededAccountIds.has(accountId)) continue;
 
       const externalLeadId = pick(acc, ["externalLeadId"]);
+      const matchMeta = nameEmailMeta.get(accountId) || null;
       const name = pick(acc, ["name"]);
       const resident = acc?.resident && typeof acc.resident === "object" ? acc.resident : {};
       const residentEmail = normalizeEmail(resident?.email || "");
@@ -650,6 +1129,22 @@ async function main() {
       const terrosOwnerEmail = resolveTerrosUserEmail(terrosOwnerId, owner);
       const terrosCloserEmail = resolveTerrosUserEmail(terrosCloserId, closer);
 
+      if (
+        (terrosOwnerEmail && isBlockedAssignmentEmail(terrosOwnerEmail)) ||
+        (terrosCloserEmail && isBlockedAssignmentEmail(terrosCloserEmail))
+      ) {
+        stats.skippedJonasAccount += 1;
+        writeAudit({
+          action: "skip",
+          reason: "jonas-owner-or-closer",
+          accountId,
+          externalLeadId,
+          terrosOwnerEmail,
+          terrosCloserEmail,
+        });
+        continue;
+      }
+
       if (!terrosOwnerEmail && !terrosCloserEmail) {
         stats.skippedNoOwnerOrCloser += 1;
         writeAudit({
@@ -662,62 +1157,6 @@ async function main() {
         });
         continue;
       }
-
-      let customer = await fetchEnerfloCustomer(externalLeadId);
-      let v1Row = null;
-      let v1MatchedBy = null;
-
-      if (!customer) {
-        const searchQueries = [...new Set([externalLeadId, residentEmail, residentPhone, residentName].filter(Boolean))];
-        for (const q of searchQueries) {
-          const rows = await searchEnerfloV1Customers(q);
-          if (!rows.length) continue;
-          const best = chooseBestV1Row(rows, { externalLeadId, residentEmail, residentPhone, residentName });
-          if (best) {
-            v1Row = best;
-            v1MatchedBy = q;
-            break;
-          }
-        }
-        if (v1Row?.id != null) {
-          customer = await fetchEnerfloCustomer(String(v1Row.id));
-        }
-      }
-
-      if (!customer && !v1Row) {
-        stats.skippedNoEnerfloCustomer += 1;
-        writeAudit({
-          action: "skip",
-          reason: "no-enerflo-customer",
-          accountId,
-          externalLeadId,
-          terrosOwnerEmail,
-          terrosCloserEmail,
-        });
-        continue;
-      }
-
-      const numericId = await resolveEnerfloNumericCustomerId(externalLeadId, accountId, residentEmail);
-      if (!numericId) {
-        stats.skippedNoNumericId += 1;
-        writeAudit({
-          action: "skip",
-          reason: "no-numeric-id",
-          accountId,
-          externalLeadId,
-          terrosOwnerEmail,
-          terrosCloserEmail,
-          v1MatchedBy,
-        });
-        continue;
-      }
-
-      if (!customer || String(customer.id ?? "") !== numericId) {
-        customer = await fetchEnerfloCustomer(numericId);
-      }
-
-      const currentSetterUserId = parseUserId(customer?.setter_user_id ?? customer?.setterUserId);
-      const currentAgentUserId = parseUserId(customer?.agent_user_id ?? customer?.agentUserId);
 
       let targetSetterUserId = null;
       let targetAgentUserId = null;
@@ -734,7 +1173,6 @@ async function main() {
             accountId,
             externalLeadId,
             terrosOwnerEmail,
-            numericId,
           });
         } else {
           targetSetterUserId = enerfloEmailToUserId.get(normalizeEmail(terrosOwnerEmail)) ?? null;
@@ -747,7 +1185,6 @@ async function main() {
               externalLeadId,
               terrosOwnerEmail,
               terrosCloserEmail,
-              numericId,
             });
           }
         }
@@ -763,7 +1200,6 @@ async function main() {
             accountId,
             externalLeadId,
             terrosCloserEmail,
-            numericId,
           });
         } else {
           targetAgentUserId = enerfloEmailToUserId.get(normalizeEmail(terrosCloserEmail)) ?? null;
@@ -776,7 +1212,6 @@ async function main() {
               externalLeadId,
               terrosOwnerEmail,
               terrosCloserEmail,
-              numericId,
             });
           }
         }
@@ -794,135 +1229,303 @@ async function main() {
           externalLeadId,
           terrosOwnerEmail,
           terrosCloserEmail,
-          numericId,
         });
         continue;
       }
 
-      const setterDiff = targetSetterUserId != null && currentSetterUserId !== targetSetterUserId;
-      const agentDiff = targetAgentUserId != null && currentAgentUserId !== targetAgentUserId;
-      const needsUpdate = setterDiff || agentDiff;
-
-      if (!needsUpdate) {
-        stats.alreadyInSync += 1;
-        writeAudit({
-          action: "skip",
-          reason: "already-in-sync",
-          accountId,
-          externalLeadId,
-          numericId,
-          currentSetterUserId,
-          currentAgentUserId,
-          targetSetterUserId,
-          targetAgentUserId,
-          terrosOwnerEmail,
-          terrosCloserEmail,
-        });
-        continue;
+      /** @type {string[]} */
+      let enerfloTargetIds = [];
+      if (matchMeta?.enerfloCustomerIds?.length) {
+        enerfloTargetIds = [...new Set(matchMeta.enerfloCustomerIds.map(String))];
+      } else {
+        let v1Row = null;
+        let v1MatchedBy = null;
+        let customer = externalLeadId ? await fetchEnerfloCustomer(externalLeadId) : null;
+        if (!customer) {
+          // A generic/shared email (e.g. "noemail@gmail.com") returns an arbitrary ~50-row
+          // page out of what can be 100+ matches — "unique within this page" is meaningless
+          // and was previously causing false-positive matches. Drop it from search entirely.
+          const searchEmail = residentEmail && !isGenericEmail(residentEmail) ? residentEmail : "";
+          const searchQueries = [...new Set([externalLeadId, searchEmail, residentPhone, residentName].filter(Boolean))];
+          // Merge results across all queries into one deduped pool before disambiguating —
+          // a candidate that's ambiguous within a single query's page (e.g. two people sharing
+          // a phone number, one of whom doesn't appear in that page) must still be checked
+          // against every other signal we have, not just the rows returned by whichever query
+          // happened to include it.
+          const poolById = new Map();
+          for (const q of searchQueries) {
+            const rows = await searchEnerfloV1Customers(q);
+            for (const row of rows) {
+              const id = row?.id;
+              if (id != null && !poolById.has(String(id))) poolById.set(String(id), row);
+            }
+          }
+          if (poolById.size) {
+            const pool = [...poolById.values()];
+            const best = chooseBestV1Row(pool, {
+              externalLeadId,
+              residentEmail: searchEmail,
+              residentPhone,
+              residentName,
+            });
+            if (best) {
+              v1Row = best;
+              v1MatchedBy = "merged-pool";
+            }
+          }
+          if (v1Row?.id != null) {
+            customer = await fetchEnerfloCustomer(String(v1Row.id));
+          }
+        }
+        if (!customer && !v1Row) {
+          stats.skippedNoEnerfloCustomer += 1;
+          writeAudit({
+            action: "skip",
+            reason: "no-enerflo-customer",
+            accountId,
+            externalLeadId,
+            terrosOwnerEmail,
+            terrosCloserEmail,
+          });
+          continue;
+        }
+        let singleId = csvNumericByAccountId.get(accountId) || null;
+        if (!singleId) {
+          singleId = await resolveEnerfloNumericCustomerId(externalLeadId, accountId, residentEmail);
+        }
+        if (!singleId && customer?.id != null) singleId = String(customer.id);
+        if (!singleId) {
+          stats.skippedNoNumericId += 1;
+          writeAudit({
+            action: "skip",
+            reason: "no-numeric-id",
+            accountId,
+            externalLeadId,
+            terrosOwnerEmail,
+            terrosCloserEmail,
+            v1MatchedBy,
+          });
+          continue;
+        }
+        enerfloTargetIds = [String(singleId)];
       }
 
-      if (!isRun) {
-        stats.wouldUpdate += 1;
-        writeAudit({
-          action: "dry-run",
-          accountId,
-          externalLeadId,
+      for (const numericId of enerfloTargetIds) {
+        stats.enerfloTargetsProcessed += 1;
+
+        let customer = await fetchEnerfloCustomer(numericId);
+        if (!customer) {
+          stats.skippedNoEnerfloCustomer += 1;
+          writeAudit({
+            action: "skip",
+            reason: "no-enerflo-customer",
+            accountId,
+            externalLeadId,
+            numericId,
+            terrosOwnerEmail,
+            terrosCloserEmail,
+          });
+          continue;
+        }
+
+        if (matchMeta && !useExportAssignments) {
+          const liveEnerfloEmail = normalizeEmail(customer?.email);
+          const liveEnerfloName = normalizeName(
+            `${customer?.first_name || ""} ${customer?.last_name || ""}`,
+          );
+          if (liveEnerfloEmail !== matchMeta.residentEmail || liveEnerfloName !== matchMeta.nameKey) {
+            stats.skippedNameEmailLiveMismatch += 1;
+            writeAudit({
+              action: "skip",
+              reason: "name-email-enerflo-live-mismatch",
+              accountId,
+              enerfloCustomerId: numericId,
+              exportEmail: matchMeta.residentEmail,
+              liveEmail: liveEnerfloEmail,
+              exportNameKey: matchMeta.nameKey,
+              liveNameKey: liveEnerfloName,
+            });
+            continue;
+          }
+        }
+
+        // Universal identity sanity check — protects against a *stale/wrong* Terros
+        // externalLeadId pointing at an unrelated Enerflo customer (discovered in the wild:
+        // Terros account for "Wayne Warren" carried externalLeadId of an Enerflo customer that
+        // is actually "Adan Flores"). Require at least one strong signal (name, phone, or a
+        // non-generic email) to agree before ever touching setter/agent fields.
+        if (!matchMeta) {
+          const liveEnerfloEmail = normalizeEmail(customer?.email);
+          const liveEnerfloPhone = digitsOnly(customer?.phone || customer?.mobile || "");
+          const liveEnerfloName = normalizeName(
+            `${customer?.first_name || ""} ${customer?.last_name || ""}` || customer?.name || "",
+          );
+          const nameMatches = residentName && liveEnerfloName && normalizeName(residentName) === liveEnerfloName;
+          const phoneMatches = residentPhone && liveEnerfloPhone && residentPhone === liveEnerfloPhone;
+          const emailMatches =
+            residentEmail && liveEnerfloEmail && !isGenericEmail(residentEmail) && residentEmail === liveEnerfloEmail;
+          const haveAnySignal = Boolean(residentName || residentPhone || (residentEmail && !isGenericEmail(residentEmail)));
+          if (haveAnySignal && !nameMatches && !phoneMatches && !emailMatches) {
+            stats.skippedIdentityMismatch = (stats.skippedIdentityMismatch || 0) + 1;
+            writeAudit({
+              action: "skip",
+              reason: "identity-mismatch",
+              accountId,
+              externalLeadId,
+              numericId,
+              terrosName: residentName,
+              terrosPhone: residentPhone,
+              terrosEmail: residentEmail,
+              enerfloName: `${customer?.first_name || ""} ${customer?.last_name || ""}`.trim() || customer?.name,
+              enerfloPhone: customer?.phone || customer?.mobile,
+              enerfloEmail: customer?.email,
+            });
+            continue;
+          }
+        }
+
+        const currentSetterUserId = parseUserId(customer?.setter_user_id ?? customer?.setterUserId);
+        const currentAgentUserId = parseUserId(customer?.agent_user_id ?? customer?.agentUserId);
+
+        const setterDiff = targetSetterUserId != null && currentSetterUserId !== targetSetterUserId;
+        const agentDiff = targetAgentUserId != null && currentAgentUserId !== targetAgentUserId;
+        const needsUpdate = setterDiff || agentDiff;
+
+        if (!needsUpdate) {
+          stats.alreadyInSync += 1;
+          writeAudit({
+            action: "skip",
+            reason: "already-in-sync",
+            accountId,
+            externalLeadId,
+            numericId,
+            currentSetterUserId,
+            currentAgentUserId,
+            targetSetterUserId,
+            targetAgentUserId,
+            terrosOwnerEmail,
+            terrosCloserEmail,
+          });
+          continue;
+        }
+
+        if (!isRun) {
+          stats.wouldUpdate += 1;
+          writeAudit({
+            action: "dry-run",
+            accountId,
+            externalLeadId,
+            numericId,
+            terrosOwnerEmail,
+            terrosCloserEmail,
+            currentSetterUserId,
+            currentAgentUserId,
+            targetSetterUserId,
+            targetAgentUserId,
+            putBody,
+          });
+          if (limit != null && stats.wouldUpdate >= limit) stopEarly = true;
+          continue;
+        }
+
+        const result = await applyEnerfloUpdate(
           numericId,
-          terrosOwnerEmail,
-          terrosCloserEmail,
-          currentSetterUserId,
-          currentAgentUserId,
-          targetSetterUserId,
-          targetAgentUserId,
           putBody,
-          v1MatchedBy,
-        });
-        if (limit != null && stats.wouldUpdate >= limit) stopEarly = true;
-        continue;
-      }
+          accountId,
+          terrosOwnerEmail,
+          terrosCloserEmail,
+          resident,
+        );
 
-      const result = await applyEnerfloUpdate(
-        numericId,
-        putBody,
-        accountId,
-        terrosOwnerEmail,
-        terrosCloserEmail,
-        resident,
-      );
+        if (!result.ok) {
+          stats.failedUpdate += 1;
+          writeAudit({
+            action: "update-failed",
+            accountId,
+            externalLeadId,
+            numericId,
+            status: result.status,
+            path: result.path,
+            response: result.text,
+            putBody,
+          });
+          continue;
+        }
 
-      if (!result.ok) {
-        stats.failedUpdate += 1;
+        stats.updated += 1;
+        if (stats.updated % 50 === 0) {
+          console.log(`  updated ${stats.updated} Enerflo customers...`);
+        }
+        const beforeSetterEmail = resolveEnerfloUserEmail(currentSetterUserId);
+        const beforeAgentEmail = resolveEnerfloUserEmail(currentAgentUserId);
+        const afterSetterUserId = putBody.setter_user_id ?? null;
+        const afterAgentUserId = putBody.agent_user_id ?? null;
         writeAudit({
-          action: "update-failed",
+          action: "updated",
           accountId,
           externalLeadId,
           numericId,
-          status: result.status,
           path: result.path,
-          response: result.text,
           putBody,
+          terrosOwnerEmail,
+          terrosCloserEmail,
+          beforeSetterUserId: currentSetterUserId,
+          beforeSetterEmail,
+          beforeAgentUserId: currentAgentUserId,
+          beforeAgentEmail,
+          afterSetterUserId,
+          afterSetterEmail: afterSetterUserId != null ? terrosOwnerEmail : null,
+          afterAgentUserId,
+          afterAgentEmail: afterAgentUserId != null ? terrosCloserEmail : null,
+          revertBody: {
+            ...(currentSetterUserId != null ? { setter_user_id: currentSetterUserId } : {}),
+            ...(currentAgentUserId != null ? { agent_user_id: currentAgentUserId } : {}),
+          },
         });
-        continue;
+        writeRevertRow({
+          accountId,
+          externalLeadId,
+          numericId,
+          customerName: name,
+          residentEmail,
+          beforeSetterUserId: currentSetterUserId,
+          beforeSetterEmail,
+          beforeAgentUserId: currentAgentUserId,
+          beforeAgentEmail,
+          afterSetterUserId,
+          afterSetterEmail: afterSetterUserId != null ? terrosOwnerEmail : "",
+          afterAgentUserId,
+          afterAgentEmail: afterAgentUserId != null ? terrosCloserEmail : "",
+          revertSetterUserId: currentSetterUserId,
+          revertAgentUserId: currentAgentUserId,
+        });
+        if (limit != null && stats.updated >= limit) stopEarly = true;
       }
 
-      stats.updated += 1;
-      const beforeSetterEmail = resolveEnerfloUserEmail(currentSetterUserId);
-      const beforeAgentEmail = resolveEnerfloUserEmail(currentAgentUserId);
-      const afterSetterUserId = putBody.setter_user_id ?? null;
-      const afterAgentUserId = putBody.agent_user_id ?? null;
-      writeAudit({
-        action: "updated",
-        accountId,
-        externalLeadId,
-        numericId,
-        path: result.path,
-        putBody,
-        terrosOwnerEmail,
-        terrosCloserEmail,
-        beforeSetterUserId: currentSetterUserId,
-        beforeSetterEmail,
-        beforeAgentUserId: currentAgentUserId,
-        beforeAgentEmail,
-        afterSetterUserId,
-        afterSetterEmail: afterSetterUserId != null ? terrosOwnerEmail : null,
-        afterAgentUserId,
-        afterAgentEmail: afterAgentUserId != null ? terrosCloserEmail : null,
-        revertBody: {
-          ...(currentSetterUserId != null ? { setter_user_id: currentSetterUserId } : {}),
-          ...(currentAgentUserId != null ? { agent_user_id: currentAgentUserId } : {}),
-        },
-      });
-      writeRevertRow({
-        accountId,
-        externalLeadId,
-        numericId,
-        customerName: name,
-        residentEmail,
-        beforeSetterUserId: currentSetterUserId,
-        beforeSetterEmail,
-        beforeAgentUserId: currentAgentUserId,
-        beforeAgentEmail,
-        afterSetterUserId,
-        afterSetterEmail: afterSetterUserId != null ? terrosOwnerEmail : "",
-        afterAgentUserId,
-        afterAgentEmail: afterAgentUserId != null ? terrosCloserEmail : "",
-        revertSetterUserId: currentSetterUserId,
-        revertAgentUserId: currentAgentUserId,
-      });
-      if (limit != null && stats.updated >= limit) stopEarly = true;
       if (matchedTarget) stopEarly = true;
 
     if (stopEarly) break;
   }
 
   console.log(
-    `done | scanned ${stats.scanned} | linked ${stats.linked} | superseded ${stats.skippedSupersededDuplicate} | wouldUpdate ${stats.wouldUpdate} | alreadyInSync ${stats.alreadyInSync}`,
+    `done | scanned ${stats.scanned} | linked ${stats.linked} | resumeSkipped ${stats.skippedResumePreviouslyProcessed} | skippedJonas ${stats.skippedJonasAccount} | superseded ${stats.skippedSupersededDuplicate} | nameEmailMismatch ${stats.skippedNameEmailLiveMismatch} | wouldUpdate ${stats.wouldUpdate} | updated ${stats.updated} | alreadyInSync ${stats.alreadyInSync}`,
   );
 
   audit.end();
   revertCsv.end();
   console.log(
-    JSON.stringify({ mode: isRun ? "run" : "dry", auditPath, revertCsvPath, ...stats }, null, 2),
+    JSON.stringify(
+      {
+        mode: isRun ? "run" : "dry",
+        matchMode: matchMode || "externalLeadId",
+        auditPath,
+        revertCsvPath,
+        ...(matchMode === "name-email" ? { ambiguousCsvPath } : {}),
+        ...stats,
+      },
+      null,
+      2,
+    ),
   );
 }
 
