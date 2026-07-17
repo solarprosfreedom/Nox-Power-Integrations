@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { renderAxiaOnboardingNotification } from "@/lib/onboarding/axia-notify-templates";
 import { updateJobStep } from "@/lib/onboarding/repository";
+import { isApptSetterName, sequifiPositionContextFromJob } from "@/lib/onboarding/role-map";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 import { isGraphMailConfigured, sendMailAsUser } from "@/lib/microsoft/graph-mail";
@@ -24,6 +25,14 @@ export async function sendAxiaOnboardingNotification(
   if (job.status !== "completed") return "skipped";
   if (!parseSequifiFields(job.raw_sequifi_payload ?? {}).onboardAxia) return "skipped";
   if (axiaNotifyAlreadySent(job)) return "skipped";
+
+  // Skip Setter reps — "Setter" and "Appt Setter" are the same category — using the
+  // same "Position" value shown in the email itself (sub_position_name, since that's
+  // what Sequifi's own UI displays). This applies even to hybrids flagged "May act as
+  // both Setter and Closer" — Axia only cares about the displayed Position.
+  const ctx = sequifiPositionContextFromJob(job);
+  const displayedPosition = ctx.subPositionName || ctx.positionName;
+  if (isApptSetterName(displayedPosition)) return "skipped";
 
   if (!isGraphMailConfigured()) return "skipped";
 

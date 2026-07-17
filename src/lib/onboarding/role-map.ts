@@ -26,7 +26,8 @@ function trim(s: string | null | undefined): string {
   return (s ?? "").trim();
 }
 
-function isApptSetterName(name: string): boolean {
+/** "Setter" and "Appt Setter" are treated as the same category. */
+export function isApptSetterName(name: string): boolean {
   return /^(appt\s*setter|setter)$/i.test(name.trim());
 }
 
