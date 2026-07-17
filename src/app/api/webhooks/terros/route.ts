@@ -34,7 +34,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Terros often uses HTTP 200 even when the JSON body is `{ "type": "error", ... }`. */
-function terrosJsonBodyIndicatesSuccess(responseText: string): boolean {
+export function terrosJsonBodyIndicatesSuccess(responseText: string): boolean {
   try {
     const j = JSON.parse(responseText) as Record<string, unknown>;
     if (j.type === "error") return false;
@@ -121,12 +121,12 @@ interface TerrosEventWebhookBody {
   data?: TerrosEventData;
 }
 
-function logPreview(body: string, max = 2000): string {
+export function logPreview(body: string, max = 2000): string {
   if (body.length <= max) return body;
   return `${body.slice(0, max)}…`;
 }
 
-function splitName(full: string): { first_name: string; last_name: string } {
+export function splitName(full: string): { first_name: string; last_name: string } {
   const t = full.trim();
   if (!t) return { first_name: "Terros", last_name: "Account" };
   const parts = t.split(/\s+/);
@@ -140,7 +140,7 @@ function splitName(full: string): { first_name: string; last_name: string } {
  * e.g. "charlielespier+axia@solarpros.io" → "charlielespier@solarpros.io"
  * Safe to call on any email; returns the input unchanged when no alias is present.
  */
-function stripEmailAlias(email: string): string {
+export function stripEmailAlias(email: string): string {
   return email.replace(/\+[^@]*(@)/, "$1");
 }
 
@@ -207,7 +207,7 @@ async function resolveTerrosUserEmail(
 /** @deprecated Use resolveTerrosUserEmail — kept as alias for readability at call sites. */
 const resolveTerrosOwnerEmail = resolveTerrosUserEmail;
 
-function terrosUserFromAccount(
+export function terrosUserFromAccount(
   full: Record<string, unknown>,
   role: "owner" | "closer"
 ): TerrosUser | undefined {
@@ -220,7 +220,7 @@ function terrosUserFromAccount(
   return undefined;
 }
 
-function mapAddress(a?: TerrosAddress): {
+export function mapAddress(a?: TerrosAddress): {
   address: string;
   city: string;
   state: string;
@@ -249,10 +249,16 @@ async function resolveTerrosAssignmentEmails(
     (fullAccount ? terrosUserFromAccount(fullAccount, "closer") : undefined) ??
     (data.closerId ? { userId: data.closerId, id: data.closerId } : undefined);
 
-  const [setterEmail, leadOwnerEmail] = await Promise.all([
+  const [setterEmail, resolvedCloserEmail] = await Promise.all([
     terrosKey ? resolveTerrosUserEmail(terrosBase, terrosKey, ownerRef) : Promise.resolve(undefined),
     terrosKey ? resolveTerrosUserEmail(terrosBase, terrosKey, closerRef) : Promise.resolve(undefined),
   ]);
+
+  // Mirror Owner/Setter into the Lead Owner slot while Terros has no Closer yet, so
+  // Enerflo always has a Lead Owner instead of leaving it blank. Once a Closer is set
+  // on the Terros account, it takes over here and overwrites whatever Lead Owner was
+  // previously pushed (including a mirrored Owner value).
+  const leadOwnerEmail = resolvedCloserEmail ?? setterEmail;
 
   return {
     ...(setterEmail ? { setterEmail } : {}),
@@ -333,7 +339,7 @@ async function terrosAccountUpdateExternalLeadId(
   }
 }
 
-function pickExternalLeadId(account: Record<string, unknown>): string | null {
+export function pickExternalLeadId(account: Record<string, unknown>): string | null {
   const raw = account.externalLeadId;
   if (typeof raw === "string" && UUID_RE.test(raw.trim())) return raw.trim();
   return null;
@@ -344,7 +350,7 @@ function pickExternalLeadId(account: Record<string, unknown>): string | null {
  *   { status: "success", customer_id: 12345 }
  * The ID is a numeric Enerflo v1 customer id (not a UUID). We store it as a string.
  */
-function parseEnerfloCreateCustomerId(responseText: string): string | null {
+export function parseEnerfloCreateCustomerId(responseText: string): string | null {
   try {
     const j = JSON.parse(responseText) as Record<string, unknown>;
     // lead/add: customer_id is a number
@@ -614,7 +620,7 @@ async function resolveEnerfloNumericCustomerId(
   return null;
 }
 
-function buildEnerfloPayloadFromTerros(
+export function buildEnerfloPayloadFromTerros(
   account: TerrosAccountWebhookData,
   terrosAccountId: string,
   assignments?: { setterEmail?: string; leadOwnerEmail?: string }
@@ -663,7 +669,7 @@ function buildEnerfloPayloadFromTerros(
   return { lead };
 }
 
-function buildEnerfloUpdatePayload(
+export function buildEnerfloUpdatePayload(
   account: TerrosAccountWebhookData,
   assignments?: {
     setterEmail?: string;
@@ -721,7 +727,7 @@ export async function GET() {
       { entity: "Event",   actions: ["add"] },
     ],
     outbound: [
-      "Account add/update: Terros Owner → Enerflo Setter (setter_user_id / setter_email); Terros Closer → Enerflo Lead Owner (agent_user_id / assign_to_email). Links Terros externalLeadId after create.",
+      "Account add/update: Terros Owner → Enerflo Setter (setter_user_id / setter_email); Terros Closer → Enerflo Lead Owner (agent_user_id / assign_to_email), mirroring the Owner into Lead Owner too when there's no Closer yet (overwritten once a Closer is set). Links Terros externalLeadId after create.",
       "Event add: Creates an Enerflo appointment via POST /api/v1/appointments; resolves numeric customer ID from externalLeadId and numeric user ID from owner.email. Stamps [Enerflo:ID] back onto the Terros event notes.",
     ],
   });
