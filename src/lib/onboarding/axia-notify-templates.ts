@@ -24,9 +24,18 @@ export function renderAxiaOnboardingNotification(
   const email =
     job.microsoft_upn?.trim() ||
     buildWorkUpn(job.first_name ?? "", job.last_name ?? "", domain);
+  const ctx = sequifiPositionContextFromJob(job);
+  // Sequifi's own UI shows sub_position_name as the "Position" label (e.g. "Appt
+  // Setter"), with position_name ("Closer") only surfacing as a separate "May act
+  // as both Setter and Closer" flag — match that convention here.
+  const position = ctx.subPositionName || ctx.positionName || "—";
+  const { enerfloRoles } = resolveRoleMappingFromSequifi(ctx);
   const raw = job.raw_sequifi_payload ?? {};
-  const position = String(raw.position_name ?? "").trim() || "—";
-  const { enerfloRoles } = resolveRoleMappingFromSequifi(sequifiPositionContextFromJob(job));
+  // Sequifi's GET /v1/users response has never included a team field for any rep
+  // we've onboarded so far — this checks the plausible field names defensively so
+  // it starts populating automatically if/when Sequifi starts returning one.
+  const teamName =
+    String(raw.team_name ?? raw.team ?? raw.department_name ?? raw.department ?? "").trim() || "—";
 
   return {
     subject: `Nox Power — Axia rep onboarded: ${repName}`,
@@ -36,7 +45,8 @@ Last Name: ${lastName}
 Mobile Number: ${mobile}
 Email: ${email}
 Position: ${position}
-Manager (Input YES): ${enerfloRolesIncludeManager(enerfloRoles) ? "YES" : ""}
+Team Name: ${teamName}
+Manager: ${enerfloRolesIncludeManager(enerfloRoles) ? "Yes" : "No"}
 `,
   };
 }
