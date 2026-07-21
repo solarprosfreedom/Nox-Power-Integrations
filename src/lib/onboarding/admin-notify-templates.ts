@@ -15,7 +15,12 @@ export function renderAdminOnboardingNotification(
   const repEmail = job.microsoft_upn?.trim() || "—";
   const repPhone = job.phone?.trim() || "—";
   const raw = job.raw_sequifi_payload ?? {};
-  const repRole = String(raw.position_name ?? "").trim() || "—";
+  // Sequifi displays sub_position_name as the employee's Position (for example,
+  // "Appt Setter"). position_name is a broader capability such as "Closer".
+  const repRole =
+    String(raw.sub_position_name ?? "").trim() ||
+    String(raw.position_name ?? "").trim() ||
+    "—";
   const installerTabs = parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs;
   const installersBlock =
     installerTabs.length ?
