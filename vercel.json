@@ -12,5 +12,11 @@
       "path": "/api/cron/install-sheet-sync",
       "schedule": "*/15 * * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/cron/sequifi-onboarding/route.ts": {
+      "memory": 1536,
+      "maxDuration": 300
+    }
+  }
 }
