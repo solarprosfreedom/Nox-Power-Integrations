@@ -37,19 +37,47 @@ export function isSequifiYes(value: string | null | undefined): boolean {
   return String(value ?? "").trim().toLowerCase() === "yes";
 }
 
-const INSTALLER_DROPDOWNS: { fieldName: string; tabName: string }[] = [
-  { fieldName: "Onboard to Axia?", tabName: "Axia" },
-  { fieldName: "Onboard to Empwr?", tabName: "EMPWR" },
-  { fieldName: "Onboard to Good Pwr?", tabName: "GoodPWR" },
-  { fieldName: "Onboard to Tron?", tabName: "Tron" },
-  { fieldName: "Onboard to Better Earth?", tabName: "Better Earth" },
+/**
+ * Sequifi has, at least once (Axia, around 2026-07-17), silently renamed a
+ * custom-field question's label — the short "Onboard to Axia?" became
+ * "Please select which installer(s) the user needs to be onboarded to.
+ * Must select at least one. Would you like to onboard the user to Axia?"
+ * An exact-match lookup on the old label then silently drops the answer
+ * for anyone whose form rendered the new one (confirmed: 4 real reps had
+ * their "Yes" answer invisible to us this way).
+ *
+ * To survive future relabels without needing a code change every time,
+ * fall back to a fuzzy match: any admin-only dropdown field whose name
+ * contains "onboard" plus every word of the installer's name (e.g. both
+ * "good" and "pwr" for "Good Pwr") is treated as that installer's
+ * question, regardless of the exact surrounding sentence.
+ */
+function getSequifiInstallerFieldValue(raw: Record<string, unknown>, installerName: string): string {
+  const exact = getSequifiFieldValue(raw, `Onboard to ${installerName}?`);
+  if (exact) return exact;
+
+  const words = installerName.toLowerCase().split(/\s+/).filter(Boolean);
+  const fields = readFieldArray(raw, "employee_admin_only_fields");
+  const fuzzy = fields.find(f => {
+    const name = String(f.field_name ?? "").toLowerCase();
+    return name.includes("onboard") && words.every(word => name.includes(word));
+  });
+  return String(fuzzy?.value ?? "").trim();
+}
+
+const INSTALLER_DROPDOWNS: { installerName: string; tabName: string }[] = [
+  { installerName: "Axia", tabName: "Axia" },
+  { installerName: "Empwr", tabName: "EMPWR" },
+  { installerName: "Good Pwr", tabName: "GoodPWR" },
+  { installerName: "Tron", tabName: "Tron" },
+  { installerName: "Better Earth", tabName: "Better Earth" },
 ];
 
 export function parseSequifiFields(raw: Record<string, unknown>): ParsedSequifiFields {
   const installerTabs: string[] = [];
 
-  for (const { fieldName, tabName } of INSTALLER_DROPDOWNS) {
-    if (isSequifiYes(getSequifiFieldValue(raw, fieldName))) {
+  for (const { installerName, tabName } of INSTALLER_DROPDOWNS) {
+    if (isSequifiYes(getSequifiInstallerFieldValue(raw, installerName))) {
       installerTabs.push(tabName);
     }
   }
@@ -72,7 +100,7 @@ export function parseSequifiFields(raw: Record<string, unknown>): ParsedSequifiF
     getSequifiFieldValue(raw, "CA HIS Number");
 
   return {
-    onboardAxia: isSequifiYes(getSequifiFieldValue(raw, "Onboard to Axia?")),
+    onboardAxia: isSequifiYes(getSequifiInstallerFieldValue(raw, "Axia")),
     installerTabs: [...new Set(installerTabs)],
     markets,
     caHis,

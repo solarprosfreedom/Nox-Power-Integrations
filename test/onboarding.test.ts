@@ -145,6 +145,41 @@ describe("Sequifi normalization and custom field parsing", () => {
     assert.equal(parsed.hisIssueDate, "2026-01-01");
     assert.equal(parsed.hisExpDate, "2027-01-01");
   });
+
+  test("still recognizes the Axia question after Sequifi silently renamed its label (~2026-07-17)", () => {
+    // Real label seen live on affected reps (Justin Lopez, Charles Liddle,
+    // Lucie Uwimbabazi, Jahsiahia Stewart) — an exact match on the old
+    // "Onboard to Axia?" string missed this and silently dropped their
+    // "Yes" answer (no Enerflo account, no Axia notification email).
+    const renamedRaw = {
+      employee_admin_only_fields: [
+        {
+          field_name:
+            "Please select which installer(s) the user needs to be onboarded to. Must select at " +
+            "least one. Would you like to onboard the user to Axia?",
+          value: "Yes",
+        },
+        { field_name: "Onboard to Tron?", value: "No" },
+      ],
+    };
+    const parsed = parseSequifiFields(renamedRaw);
+    assert.equal(parsed.onboardAxia, true);
+    assert.deepEqual(parsed.installerTabs, ["Axia"]);
+  });
+
+  test("renamed-label fallback still respects a 'No' answer and doesn't false-positive other installers", () => {
+    const renamedNo = {
+      employee_admin_only_fields: [
+        {
+          field_name: "Would you like to onboard the user to Axia?",
+          value: "No",
+        },
+      ],
+    };
+    const parsed = parseSequifiFields(renamedNo);
+    assert.equal(parsed.onboardAxia, false);
+    assert.deepEqual(parsed.installerTabs, []);
+  });
 });
 
 describe("installer registry and role mapping", () => {
