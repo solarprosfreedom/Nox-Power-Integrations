@@ -68,15 +68,12 @@ function backoffMs(attempt: number): number {
 }
 
 function allStepsSuccess(job: OnboardingJob): boolean {
-  const installerTabs = parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs;
-  const enerfloOk =
-    installerTabs.length === 0 ?
-      job.enerflo_status === "skipped" || job.enerflo_status === "success"
-    : job.enerflo_status === "success";
-
+  // Every rep gets an Enerflo account regardless of installer tab selection
+  // (same as Terros/Microsoft) — installer tabs (Axia/Tron/EMPWR/GoodPWR/
+  // Better Earth) are recorded for bookkeeping, not a prerequisite.
   return (
     job.microsoft_status === "success" &&
-    enerfloOk &&
+    job.enerflo_status === "success" &&
     job.terros_status === "success" &&
     job.welcome_email_status === "success"
   );
@@ -448,13 +445,10 @@ export async function runOnboardingJob(
     }
   }
 
-  // Enerflo — one account using company work email (same as Microsoft / Terros).
-  if (!installerTabs.length) {
-    if (job.enerflo_status !== "skipped") {
-      await updateJobStep(job.id, { enerflo_status: "skipped" });
-      job = (await loadJobById(jobId)) ?? job;
-    }
-  } else if (job.enerflo_status !== "success" && job.enerflo_status !== "skipped") {
+  // Enerflo — one account using company work email (same as Microsoft /
+  // Terros). Created for EVERY rep regardless of installer tab selection;
+  // installerTabs (if any) just get recorded as per-tab bookkeeping below.
+  if (job.enerflo_status !== "success" && job.enerflo_status !== "skipped") {
     try {
       if (dryRun) {
         await updateJobStep(job.id, { enerflo_status: "skipped" });
@@ -513,7 +507,9 @@ export async function runOnboardingJob(
 
         await updateJobStep(job.id, {
           enerflo_status: "success",
-          enerflo_user_id: primaryEnerfloUserId(accounts) ?? undefined,
+          // primaryEnerfloUserId(accounts) is only populated per-installer-tab;
+          // fall back to enerfloUserId directly for reps with no tabs selected.
+          enerflo_user_id: primaryEnerfloUserId(accounts) ?? enerfloUserId,
           step_errors: stepErrors,
         });
       }
