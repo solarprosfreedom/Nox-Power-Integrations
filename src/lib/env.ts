@@ -171,4 +171,33 @@ export const env = {
    */
   jotformTronFormId: opt("JOTFORM_TRON_FORM_ID", "252994617874071"),
   jotformTronEnabled: opt("JOTFORM_TRON_ENABLED", "false") === "true",
+  /**
+   * GoodPWR partner onboarding — "New Sales Rep Onboarding" Google Form submit.
+   * 9 of 11 fields are auto-fillable (name/email/phone from Sequifi; Sales Org,
+   * Markets, HIS License, Enerflo=Yes are static per the SOP). Preferred Lender
+   * and Preferred TPO are both required by the form but have NO source in
+   * Sequifi today (SOP says "Ask Manager") — resolveGoodPwrLender/TPO() checks a
+   * few plausible custom-field names in case ops adds them later, but as of the
+   * last live check (all active Sequifi users scanned) neither field exists yet.
+   * PENDING: defaults to disabled. A job missing Lender/TPO fails cleanly with a
+   * clear reason (same pattern as Tron's missing-DOB case) instead of silently
+   * submitting an incomplete form. Flip GOODPWR_FORM_ENABLED=true once ops adds
+   * those two custom fields in Sequifi (or another source is agreed on).
+   */
+  googleFormsGoodPwrFormId: opt(
+    "GOODPWR_FORM_ID",
+    "1FAIpQLScKv_hEmeYO_rg75JysNuR8pzX04zvT5bQe_1hb-XOjunCFYA",
+  ),
+  googleFormsGoodPwrEnabled: opt("GOODPWR_FORM_ENABLED", "false") === "true",
+  /** "GoodPWR Links" link-tree URL, sent in the post-onboarding text to the rep. */
+  goodPwrLinksUrl: opt("GOODPWR_LINKS_URL", "https://sites.google.com/goodpwr.com/goodpwr/sales-partners"),
+  /**
+   * GoodPWR partner onboarding — text message to the rep (Step 4 of the SOP).
+   * Uses Twilio. PENDING: defaults to disabled until Twilio credentials are set.
+   */
+  goodPwrSmsEnabled: opt("GOODPWR_SMS_ENABLED", "false") === "true",
+  twilioAccountSid: opt("TWILIO_ACCOUNT_SID"),
+  twilioAuthToken: opt("TWILIO_AUTH_TOKEN"),
+  /** E.164, e.g. +18005551234 */
+  twilioFromNumber: opt("TWILIO_FROM_NUMBER"),
 };

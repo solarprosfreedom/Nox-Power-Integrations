@@ -43,6 +43,16 @@ import {
   resolveTronPlatforms,
   tronJotFormAlreadySent,
 } from "../src/lib/onboarding/tron-jotform";
+import {
+  buildGoodPwrFormBody,
+  buildGoodPwrFormFields,
+  goodPwrFormAlreadySent,
+  jobHasGoodPwrInstallerTab,
+  resolveGoodPwrLender,
+  resolveGoodPwrTpo,
+} from "../src/lib/onboarding/goodpwr-form";
+import { buildGoodPwrTextMessage, goodPwrTextAlreadySent } from "../src/lib/onboarding/goodpwr-text";
+import { toE164UsPhone } from "../src/lib/onboarding/sms";
 
 const sequifiRaw = {
   employee_admin_only_fields: [
@@ -372,5 +382,98 @@ describe("Tron JotForm submission", () => {
       "GroupMe Access",
       "Enfin",
     ]);
+  });
+});
+
+describe("GoodPWR Google Form submission and text message", () => {
+  const goodPwrRaw = {
+    employee_admin_only_fields: [{ field_name: "Onboard to Good Pwr?", value: "Yes" }],
+  };
+
+  test("detects the GoodPWR installer tab and prior sends", () => {
+    const job = onboardingJob({ raw_sequifi_payload: goodPwrRaw });
+    assert.equal(jobHasGoodPwrInstallerTab(job as never), true);
+    assert.equal(jobHasGoodPwrInstallerTab(onboardingJob() as never), false);
+    assert.equal(goodPwrFormAlreadySent(job as never), false);
+    assert.equal(
+      goodPwrFormAlreadySent(onboardingJob({ step_errors: { goodpwr_form: "sent" } }) as never),
+      true,
+    );
+    assert.equal(goodPwrTextAlreadySent(job as never), false);
+    assert.equal(
+      goodPwrTextAlreadySent(onboardingJob({ step_errors: { goodpwr_text: "sent" } }) as never),
+      true,
+    );
+  });
+
+  test("Preferred Lender/TPO have no source in Sequifi today, but pick up a custom field if one is added later", () => {
+    assert.equal(resolveGoodPwrLender({ raw_sequifi_payload: goodPwrRaw } as never), "");
+    assert.equal(resolveGoodPwrTpo({ raw_sequifi_payload: goodPwrRaw } as never), "");
+
+    const withLenderField = {
+      ...goodPwrRaw,
+      employee_personal_detail: [
+        { field_name: "Preferred Lender", value: "GoodLeap" },
+        { field_name: "Preferred TPO", value: "SunRun" },
+      ],
+    };
+    assert.equal(resolveGoodPwrLender({ raw_sequifi_payload: withLenderField } as never), "GoodLeap");
+    assert.equal(resolveGoodPwrTpo({ raw_sequifi_payload: withLenderField } as never), "SunRun");
+  });
+
+  test("builds GoodPWR form fields (static SOP values) and the urlencoded submission body", () => {
+    env.msDefaultDomain = "noxpwr.com";
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      microsoft_upn: "janedoe@noxpwr.com",
+      raw_sequifi_payload: {
+        ...goodPwrRaw,
+        employee_personal_detail: [
+          { field_name: "Preferred Lender", value: "GoodLeap" },
+          { field_name: "Preferred TPO", value: "SunRun" },
+        ],
+      },
+    });
+
+    const fields = buildGoodPwrFormFields(job as never);
+    assert.equal(fields.firstName, "Jane");
+    assert.equal(fields.lastName, "Doe");
+    assert.equal(fields.email, "janedoe@noxpwr.com");
+    assert.equal(fields.phone, "555-111-2222");
+    assert.equal(fields.salesOrganization, "Solar Pros");
+    assert.deepEqual(fields.markets, ["New York", "Oregon", "Illinois"]);
+    assert.equal(fields.hisLicense, "Not selling in these markets");
+    assert.equal(fields.usingEnerflo, "Yes");
+    assert.equal(fields.preferredLender, "GoodLeap");
+    assert.equal(fields.preferredTpo, "SunRun");
+    assert.equal(fields.comments, "");
+
+    const body = buildGoodPwrFormBody(fields);
+    assert.equal(body.get("entry.897722329"), "Jane");
+    assert.equal(body.get("entry.1646665289"), "Doe");
+    assert.equal(body.get("entry.219209550"), "janedoe@noxpwr.com");
+    assert.equal(body.get("entry.41757151"), "555-111-2222");
+    assert.equal(body.get("entry.1235168892"), "Solar Pros");
+    assert.deepEqual(body.getAll("entry.1790700221"), ["New York", "Oregon", "Illinois"]);
+    assert.equal(body.get("entry.1717147781"), "Not selling in these markets");
+    assert.equal(body.get("entry.1551533457"), "Yes");
+    assert.equal(body.get("entry.1667807314"), "GoodLeap");
+    assert.equal(body.get("entry.879013296"), "SunRun");
+  });
+
+  test("builds the exact GoodPWR SOP text message with the links URL", () => {
+    env.goodPwrLinksUrl = "https://sites.google.com/goodpwr.com/goodpwr/sales-partners";
+    const message = buildGoodPwrTextMessage();
+    assert.match(message, /Hello! You have been onboarded for GoodPWR\./);
+    assert.match(message, /https:\/\/sites\.google\.com\/goodpwr\.com\/goodpwr\/sales-partners/);
+    assert.match(message, /Thanks!$/);
+  });
+
+  test("normalizes US phone numbers to E.164 for Twilio", () => {
+    assert.equal(toE164UsPhone("555-111-2222"), "+15551112222");
+    assert.equal(toE164UsPhone("(555) 111-2222"), "+15551112222");
+    assert.equal(toE164UsPhone("15551112222"), "+15551112222");
+    assert.equal(toE164UsPhone("123"), null);
+    assert.equal(toE164UsPhone(null), null);
   });
 });
