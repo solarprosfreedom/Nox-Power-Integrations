@@ -155,12 +155,19 @@ export const env = {
   hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "true") === "true",
   /**
    * Tron partner onboarding — JotForm "Log-In Request Form" submit.
-   * PENDING: defaults to disabled. One unresolved blocker found via live testing:
-   *  - The public (no-API-key) submit endpoint returns a CAPTCHA challenge for
-   *    scripted/server-side POSTs — needs an authenticated JotForm API key instead.
-   * (DOB was previously blocked too — Sequifi's GET /v1/users now returns a
-   * top-level `dob` field, confirmed live, so that source is resolved.)
-   * Flip JOTFORM_TRON_ENABLED=true once the CAPTCHA/API-key blocker is resolved.
+   * Both prior blockers are resolved:
+   *  1. DOB — Sequifi's GET /v1/users now returns a top-level `dob` field
+   *     ("YYYY-MM-DD"), confirmed live against real data.
+   *  2. CAPTCHA — JotForm's public submit endpoint rejects plain scripted POSTs,
+   *     but the integration now drives a real headless browser (puppeteer-core +
+   *     @sparticuz/chromium) to fill and submit the form, which produces the same
+   *     anti-bot signals (jsExecutionTracker, timeToSubmit, etc.) a genuine
+   *     browser session generates. Confirmed live: a manual dry run reached
+   *     JotForm's real "Thank You!" page with no CAPTCHA.
+   * Still defaults to disabled pending one full end-to-end run against a real
+   * onboarded Tron rep (via the cron) to confirm the headless-Chromium path
+   * works the same way on Vercel's serverless runtime as it did locally.
+   * Flip JOTFORM_TRON_ENABLED=true once that's confirmed.
    */
   jotformTronFormId: opt("JOTFORM_TRON_FORM_ID", "252994617874071"),
   jotformTronEnabled: opt("JOTFORM_TRON_ENABLED", "false") === "true",

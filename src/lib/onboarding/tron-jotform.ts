@@ -6,6 +6,7 @@ import {
   sequifiPositionContextFromJob,
 } from "@/lib/onboarding/role-map";
 import { getSequifiFieldValue, parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
+import { submitTronJotFormViaBrowser } from "@/lib/onboarding/tron-jotform-browser";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
 const SENT_FLAG = "sent";
@@ -183,13 +184,14 @@ export function buildTronJotFormBody(fields: TronJotFormFields, formId: string):
   return body;
 }
 
-function submitUrl(): string {
-  const formId = env.jotformTronFormId?.trim() ?? "";
-  return `https://submit.jotform.com/submit/${formId}`;
-}
-
-/** POST rep details to the Tron "Log-In Request Form" (JotForm) when the Sequifi
- * "Onboard to Tron?" tab is set (non-blocking, public submit endpoint — no API key). */
+/**
+ * Submit rep details to the Tron "Log-In Request Form" (JotForm) when the Sequifi
+ * "Onboard to Tron?" tab is set.
+ *
+ * Uses a real headless browser (see tron-jotform-browser.ts), not a plain POST —
+ * JotForm's public submit endpoint returns a CAPTCHA challenge for scripted POSTs,
+ * but reliably accepts a genuine browser session (confirmed via live testing).
+ */
 export async function submitTronJotForm(
   job: OnboardingJob,
   options?: { ignoreDryRun?: boolean },
@@ -212,42 +214,13 @@ export async function submitTronJotForm(
     return "failed";
   }
 
-  const body = buildTronJotFormBody(fields, formId);
+  const result = await submitTronJotFormViaBrowser(fields, formId);
 
-  try {
-    const res = await fetch(submitUrl(), {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    });
-    const text = await res.text();
-
-    // JotForm's public (no-API-key) submit endpoint sometimes returns 200 OK with a
-    // CAPTCHA challenge page instead of actually recording the submission — confirmed
-    // by a live dry-run test where a scripted POST got this instead of a real
-    // confirmation. Treat that as a failure so it isn't silently marked "sent" while
-    // nothing actually reached JotForm.
-    const looksLikeCaptchaChallenge =
-      /name="captcha"/i.test(text) || /Please Complete/i.test(text);
-    if (!res.ok || looksLikeCaptchaChallenge) {
-      const reason = looksLikeCaptchaChallenge
-        ? "JotForm returned a CAPTCHA challenge instead of accepting the submission (bot/anti-spam gate on the public submit endpoint) — needs an authenticated API key (api.jotform.com) instead."
-        : `JotForm ${res.status}: ${text.slice(0, 500)}`;
-      await updateJobStep(job.id, {
-        step_errors: { ...job.step_errors, tron_jotform: reason },
-      });
-      return "failed";
-    }
-
-    await updateJobStep(job.id, {
-      step_errors: { ...job.step_errors, tron_jotform: SENT_FLAG },
-    });
-    return "sent";
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await updateJobStep(job.id, {
-      step_errors: { ...job.step_errors, tron_jotform: msg },
-    });
-    return "failed";
-  }
+  await updateJobStep(job.id, {
+    step_errors: {
+      ...job.step_errors,
+      tron_jotform: result.status === "sent" ? SENT_FLAG : (result.reason ?? "failed"),
+    },
+  });
+  return result.status;
 }
