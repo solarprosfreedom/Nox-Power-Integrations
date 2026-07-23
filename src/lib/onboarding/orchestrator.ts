@@ -30,6 +30,7 @@ import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, Provisio
 import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
 import { sendAxiaOnboardingNotification } from "@/lib/onboarding/axia-notify";
 import { submitEmpwrHubSpotForm } from "@/lib/onboarding/empwr-hubspot";
+import { submitTronJotForm } from "@/lib/onboarding/tron-jotform";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -652,6 +653,8 @@ export async function runOnboardingJob(
     await sendAxiaOnboardingNotification(job);
     job = (await loadJobById(jobId)) ?? job;
     await submitEmpwrHubSpotForm(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await submitTronJotForm(job);
     job = (await loadJobById(jobId)) ?? job;
   }
 

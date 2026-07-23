@@ -153,4 +153,15 @@ export const env = {
   hubspotEmpwrApiBase: opt("HUBSPOT_EMPWR_API_BASE", "https://api-na2.hsforms.com"),
   hubspotEmpwrCompany: opt("HUBSPOT_EMPWR_COMPANY", "Nox Power"),
   hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "true") === "true",
+  /**
+   * Tron partner onboarding — JotForm "Log-In Request Form" submit.
+   * PENDING: defaults to disabled. One unresolved blocker found via live testing:
+   *  - The public (no-API-key) submit endpoint returns a CAPTCHA challenge for
+   *    scripted/server-side POSTs — needs an authenticated JotForm API key instead.
+   * (DOB was previously blocked too — Sequifi's GET /v1/users now returns a
+   * top-level `dob` field, confirmed live, so that source is resolved.)
+   * Flip JOTFORM_TRON_ENABLED=true once the CAPTCHA/API-key blocker is resolved.
+   */
+  jotformTronFormId: opt("JOTFORM_TRON_FORM_ID", "252994617874071"),
+  jotformTronEnabled: opt("JOTFORM_TRON_ENABLED", "false") === "true",
 };

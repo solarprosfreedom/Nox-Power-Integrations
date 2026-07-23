@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --experimental-strip-types --loader ./test/alias-loader.mjs --test \"test/**/*.test.ts\"",
     "fetch-tape-customers": "npx tsx scripts/fetch-tape-customers.ts"
   },
   "dependencies": {
