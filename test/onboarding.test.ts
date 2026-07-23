@@ -53,6 +53,11 @@ import {
 } from "../src/lib/onboarding/goodpwr-form";
 import { buildGoodPwrTextMessage, goodPwrTextAlreadySent } from "../src/lib/onboarding/goodpwr-text";
 import { toE164UsPhone } from "../src/lib/onboarding/sms";
+import {
+  buildTerrosTeamCatalog,
+  canonicalTeamKey,
+  matchTerrosTeamForOffice,
+} from "../src/lib/onboarding/terros-team";
 
 const sequifiRaw = {
   employee_admin_only_fields: [
@@ -475,5 +480,65 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.equal(toE164UsPhone("15551112222"), "+15551112222");
     assert.equal(toE164UsPhone("123"), null);
     assert.equal(toE164UsPhone(null), null);
+  });
+});
+
+describe("Terros team resolution (POST /user/add now requires a team)", () => {
+  // Mirrors the real catalog shape seen live: teams sometimes carry their own
+  // "(Region)" suffix (Prosper), sometimes Sequifi's office_name does
+  // instead (Scarface), and some team names collide outright (Drivin x3).
+  const terrosUsers = [
+    { userId: "U.1", memberOf: [{ teamId: "Team.1rCXqxgG", name: "Beast Coast (Abundance)" }] },
+    { userId: "U.2", memberOf: [{ teamId: "Team.e4SgFcv3", name: "Scarface" }] },
+    { userId: "U.3", memberOf: [{ teamId: "Team.d6YVAlHT", name: "Prosper (Mambas)" }] },
+    { userId: "U.4", memberOf: [{ teamId: "Team.J2GVBUlK", name: "Drivin" }] },
+    { userId: "U.5", memberOf: [{ teamId: "Team.WfKU5obc", name: "Drivin" }] },
+    { userId: "U.6", memberOf: [] },
+    { userId: "U.7" }, // no memberOf at all — must not throw
+  ];
+
+  test("canonicalizes team names by stripping a trailing (Region) suffix", () => {
+    assert.equal(canonicalTeamKey("Beast Coast (Abundance)"), "beast coast");
+    assert.equal(canonicalTeamKey("Scarface"), "scarface");
+    assert.equal(canonicalTeamKey("  Prosper (Mambas)  "), "prosper");
+  });
+
+  test("builds a deduped {name -> teams} catalog from a raw Terros /user/list response", () => {
+    const catalog = buildTerrosTeamCatalog(terrosUsers as never);
+    assert.deepEqual(catalog.get("beast coast"), [
+      { teamId: "Team.1rCXqxgG", teamName: "Beast Coast (Abundance)" },
+    ]);
+    assert.equal(catalog.get("drivin")?.length, 2);
+  });
+
+  test("matches when Sequifi's office_name suffix differs from Terros's own suffix", () => {
+    const catalog = buildTerrosTeamCatalog(terrosUsers as never);
+
+    const exact = matchTerrosTeamForOffice("Beast Coast (Abundance)", catalog);
+    assert.deepEqual(exact, { ok: true, team: { teamId: "Team.1rCXqxgG", teamName: "Beast Coast (Abundance)" } });
+
+    // Sequifi says "Scarface (Envision)"; Terros's team is plain "Scarface".
+    const terrosHasNoSuffix = matchTerrosTeamForOffice("Scarface (Envision)", catalog);
+    assert.deepEqual(terrosHasNoSuffix, { ok: true, team: { teamId: "Team.e4SgFcv3", teamName: "Scarface" } });
+
+    // Sequifi says plain "Prosper"; Terros's team is "Prosper (Mambas)".
+    const sequifiHasNoSuffix = matchTerrosTeamForOffice("Prosper", catalog);
+    assert.deepEqual(sequifiHasNoSuffix, { ok: true, team: { teamId: "Team.d6YVAlHT", teamName: "Prosper (Mambas)" } });
+  });
+
+  test("fails cleanly (never guesses) when a team name is ambiguous or missing", () => {
+    const catalog = buildTerrosTeamCatalog(terrosUsers as never);
+
+    const ambiguous = matchTerrosTeamForOffice("Drivin", catalog);
+    assert.equal(ambiguous.ok, false);
+    assert.match((ambiguous as { reason: string }).reason, /Ambiguous Terros team/);
+
+    const missing = matchTerrosTeamForOffice("Nowhere (Made Up)", catalog);
+    assert.equal(missing.ok, false);
+    assert.match((missing as { reason: string }).reason, /No Terros team found/);
+
+    const blank = matchTerrosTeamForOffice(null, catalog);
+    assert.equal(blank.ok, false);
+    assert.match((blank as { reason: string }).reason, /No Sequifi office_name/);
   });
 });

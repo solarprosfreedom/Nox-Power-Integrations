@@ -25,6 +25,7 @@ import {
   findTerrosUserByEmail,
   findTerrosUserByExactEmail,
 } from "@/lib/onboarding/terros-user";
+import { resolveTerrosTeamForOffice } from "@/lib/onboarding/terros-team";
 import { filterSequifiUsersNeedingProvisioning, classifyMicrosoftForSequifiUser, needsMicrosoftProvisioning } from "@/lib/onboarding/microsoft-gap-scan";
 import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, ProvisionUserResult, SequifiUserRecord } from "@/lib/onboarding/types";
 import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
@@ -553,6 +554,18 @@ export async function runOnboardingJob(
             step_errors: stepErrors,
           });
         } else {
+          // Terros requires every new user to belong to a team (as of
+          // ~2026-07-17) — resolve it from Sequifi's office_name before
+          // creating, and fail cleanly (no retry-forever loop, no guessing)
+          // if it can't be resolved unambiguously.
+          const officeName = job.raw_sequifi_payload?.office_name;
+          const teamResolution = await resolveTerrosTeamForOffice(
+            typeof officeName === "string" ? officeName : null,
+          );
+          if (!teamResolution.ok) {
+            throw new Error(`Terros team unresolved: ${teamResolution.reason}`);
+          }
+
           const result = await createTerrosUserForOnboarding({
             email: workEmail,
             firstName: job.first_name ?? "",
@@ -560,6 +573,7 @@ export async function runOnboardingJob(
             phone: job.phone ?? undefined,
             password: tempPassword,
             roles: role.terrosRoles,
+            teamId: teamResolution.team.teamId,
           });
           if (!result.ok) throw new Error(result.error ?? "Terros create failed");
           if (result.created) {

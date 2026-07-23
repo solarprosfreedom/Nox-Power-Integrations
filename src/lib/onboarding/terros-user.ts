@@ -58,6 +58,15 @@ export async function createTerrosUserForOnboarding(payload: {
   name?: string;
   password?: string;
   roles?: string[];
+  /**
+   * Terros team to assign the new user to. Required as of ~2026-07-17 —
+   * Terros now rejects POST /user/add with "All users in your company must
+   * be part of a team" if omitted. Must be sent as a TOP-LEVEL sibling of
+   * `user` (NOT nested inside the user object) — confirmed live; nesting it
+   * under `user` (as `teamId`/`team`/`teams`/`memberOf`) still triggers the
+   * same error. Resolve via resolveTerrosTeamForOffice().
+   */
+  teamId?: string;
 }): Promise<{ userId: string | null; ok: boolean; created: boolean; error?: string }> {
   const base = env.terrosApiBaseUrl ?? "https://api.terros.com";
   const key = env.terrosApiKey ?? "";
@@ -74,7 +83,10 @@ export async function createTerrosUserForOnboarding(payload: {
   if (payload.password) userFields.password = payload.password;
   if (payload.roles?.length) userFields.roles = payload.roles;
 
-  const { ok, text, status } = await postTerros(base, key, "/user/add", { user: userFields });
+  const requestBody: Record<string, unknown> = { user: userFields };
+  if (payload.teamId) requestBody.teamId = payload.teamId;
+
+  const { ok, text, status } = await postTerros(base, key, "/user/add", requestBody);
 
   if (!ok) {
     if (text.toLowerCase().includes("exist") || text.toLowerCase().includes("duplicate")) {
