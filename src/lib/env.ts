@@ -200,4 +200,16 @@ export const env = {
   twilioAuthToken: opt("TWILIO_AUTH_TOKEN"),
   /** E.164, e.g. +18005551234 */
   twilioFromNumber: opt("TWILIO_FROM_NUMBER"),
+  /**
+   * Better Earth partner onboarding — "Sales Rep Onboarding" form submit.
+   * Unlike Tron's JotForm, this form (Fillout.com) has no CAPTCHA — submitted
+   * via plain server-to-server REST calls, confirmed live (no headless
+   * browser needed). Defaults to disabled pending an explicit live-test
+   * approval. Flip BETTER_EARTH_FORM_ENABLED=true once confirmed.
+   */
+  betterEarthFormFlowId: opt("BETTER_EARTH_FORM_FLOW_ID", "961SCS6869us"),
+  betterEarthFormEnabled: opt("BETTER_EARTH_FORM_ENABLED", "false") === "true",
+  /** "Sales Company" field on the Better Earth form — no explicit value given
+   * in the SOP; defaults to the same "NOX Power" branding used for Tron/EMPWR. */
+  betterEarthSalesCompany: opt("BETTER_EARTH_SALES_COMPANY", "NOX Power"),
 };

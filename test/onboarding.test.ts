@@ -54,6 +54,13 @@ import {
 import { buildGoodPwrTextMessage, goodPwrTextAlreadySent } from "../src/lib/onboarding/goodpwr-text";
 import { toE164UsPhone } from "../src/lib/onboarding/sms";
 import {
+  betterEarthFormAlreadySent,
+  buildBetterEarthContinuePayload,
+  buildBetterEarthFormFields,
+  jobHasBetterEarthInstallerTab,
+  resolveBetterEarthStates,
+} from "../src/lib/onboarding/better-earth-form";
+import {
   buildTerrosTeamCatalog,
   canonicalTeamKey,
   matchTerrosTeamForOffice,
@@ -515,6 +522,101 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.equal(toE164UsPhone("15551112222"), "+15551112222");
     assert.equal(toE164UsPhone("123"), null);
     assert.equal(toE164UsPhone(null), null);
+  });
+});
+
+describe("Better Earth form submission (Fillout.com — direct REST, no browser needed)", () => {
+  const betterEarthRaw = {
+    employee_admin_only_fields: [{ field_name: "Onboard to Better Earth?", value: "Yes" }],
+    employee_personal_detail: [
+      { field_name: "Please provide the market(s) you will be working in?", value: "CA, NV" },
+      { field_name: "HIS License Number", value: "HIS-123" },
+      { field_name: "HIS Exp Date", value: "2027-01-01" },
+    ],
+    dob: "1990-05-15",
+  };
+
+  test("detects the Better Earth installer tab and prior sends", () => {
+    const job = onboardingJob({ raw_sequifi_payload: betterEarthRaw });
+    assert.equal(jobHasBetterEarthInstallerTab(job as never), true);
+    assert.equal(jobHasBetterEarthInstallerTab(onboardingJob() as never), false);
+    assert.equal(betterEarthFormAlreadySent(job as never), false);
+    assert.equal(
+      betterEarthFormAlreadySent(onboardingJob({ step_errors: { better_earth_form: "sent" } }) as never),
+      true,
+    );
+  });
+
+  test("maps Sequifi markets to Better Earth's 4 supported states, surfacing unsupported ones separately", () => {
+    assert.deepEqual(resolveBetterEarthStates({ raw_sequifi_payload: betterEarthRaw } as never), {
+      supported: ["California"],
+      unsupported: ["NV"],
+    });
+    assert.deepEqual(
+      resolveBetterEarthStates({ raw_sequifi_payload: { state_code: "TX" } } as never),
+      { supported: ["Texas"], unsupported: [] },
+    );
+    assert.deepEqual(
+      resolveBetterEarthStates({
+        raw_sequifi_payload: {
+          employee_personal_detail: [
+            { field_name: "Please provide the market(s) you will be working in?", value: "Arizona/Florida" },
+          ],
+        },
+      } as never),
+      { supported: ["Arizona", "Florida"], unsupported: [] },
+    );
+  });
+
+  test("builds form fields from Sequifi data, including CA's HIS license fields", () => {
+    env.msDefaultDomain = "noxpwr.com";
+    env.betterEarthSalesCompany = "NOX Power";
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      microsoft_upn: "janedoe@noxpwr.com",
+      welcome_email_to: "jane.personal@example.com",
+      raw_sequifi_payload: betterEarthRaw,
+    });
+
+    const fields = buildBetterEarthFormFields(job as never);
+    assert.equal(fields.salesCompany, "NOX Power");
+    assert.equal(fields.firstName, "Jane");
+    assert.equal(fields.lastName, "Doe");
+    assert.equal(fields.phone, "+15551112222");
+    assert.equal(fields.companyEmail, "janedoe@noxpwr.com");
+    assert.equal(fields.personalEmail, "jane.personal@example.com");
+    assert.equal(fields.dob, "1990-05-15");
+    assert.deepEqual(fields.states, { supported: ["California"], unsupported: ["NV"] });
+    assert.equal(fields.hisLicenseNumber, "HIS-123");
+    assert.equal(fields.hisLicenseExpDate, "2027-01-01");
+  });
+
+  test("builds the exact Fillout /continue payload shape confirmed live against the real flow", () => {
+    const fields = buildBetterEarthFormFields(
+      onboardingJob({
+        phone: "555-111-2222",
+        microsoft_upn: "janedoe@noxpwr.com",
+        raw_sequifi_payload: betterEarthRaw,
+      }) as never,
+    );
+    const payload = buildBetterEarthContinuePayload(fields, "SESSION_TOKEN_123", "SUBMISSION_ID_456");
+    assert.equal(payload.mode, "live");
+    assert.equal(payload.sessionToken, "SESSION_TOKEN_123");
+    assert.equal(payload.stepId, "x8AY");
+    const model = (payload.model as Record<string, unknown>).x8AY as Record<
+      string,
+      { value: unknown; selectedOptionIds?: string[] }
+    >;
+    assert.equal(model.tFfy.value, "NOX Power");
+    assert.equal(model.p1rc.value, "Jane");
+    assert.equal(model.oWvu.value, "Doe");
+    assert.equal(model.rnVh.value, "+15551112222");
+    assert.equal(model.h2FG.value, "janedoe@noxpwr.com");
+    assert.equal(model.p6Ha.value, "1990-05-15");
+    assert.deepEqual(model.iY8D.value, ["California"]);
+    assert.deepEqual(model.iY8D.selectedOptionIds, ["bjGZ"]);
+    assert.equal(model["8zDR"].value, "HIS-123");
+    assert.equal(model.geCw.value, "2027-01-01");
   });
 });
 
