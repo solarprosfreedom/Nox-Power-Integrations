@@ -61,6 +61,14 @@ import {
   resolveBetterEarthStates,
 } from "../src/lib/onboarding/better-earth-form";
 import {
+  bpsFormAlreadySent,
+  buildBpsFormFields,
+  buildBpsSubmitData,
+  isBpsTabName,
+  jobHasBpsInstallerTab,
+  resolveBpsMarketStates,
+} from "../src/lib/onboarding/bps-form";
+import {
   buildTerrosTeamCatalog,
   canonicalTeamKey,
   matchTerrosTeamForOffice,
@@ -649,6 +657,103 @@ describe("Better Earth form submission (Fillout.com — direct REST, no browser 
     assert.deepEqual(model.iY8D.selectedOptionIds, ["bjGZ"]);
     assert.equal(model["8zDR"].value, "HIS-123");
     assert.equal(model.geCw.value, "2027-01-01");
+  });
+});
+
+describe("BPS Smartsheet form submission (Financier Portal Login Request)", () => {
+  const bpsRaw = {
+    employee_personal_detail: [
+      { field_name: "Other Installers?", value: "BPS" },
+      { field_name: "Please provide the market(s) you will be working in?", value: "IL" },
+    ],
+    dob: "1990-05-15",
+  };
+
+  test("detects BPS / Bright Planet Solar from Other Installers? free text", () => {
+    assert.equal(isBpsTabName("BPS"), true);
+    assert.equal(isBpsTabName("Bright Planet Solar"), true);
+    assert.equal(isBpsTabName("bps (CA)"), true);
+    assert.equal(isBpsTabName("Quality Solar"), false);
+    assert.equal(jobHasBpsInstallerTab(onboardingJob({ raw_sequifi_payload: bpsRaw }) as never), true);
+    assert.equal(
+      jobHasBpsInstallerTab(
+        onboardingJob({
+          raw_sequifi_payload: {
+            employee_personal_detail: [{ field_name: "Other Installers?", value: "Bright Planet Solar" }],
+          },
+        }) as never,
+      ),
+      true,
+    );
+    assert.equal(jobHasBpsInstallerTab(onboardingJob() as never), false);
+    assert.equal(
+      bpsFormAlreadySent(onboardingJob({ step_errors: { bps_form: "sent" } }) as never),
+      true,
+    );
+  });
+
+  test("maps Sequifi markets to CA/CT yes-no and a primary selling state", () => {
+    assert.deepEqual(resolveBpsMarketStates({ raw_sequifi_payload: bpsRaw } as never), ["IL"]);
+    assert.deepEqual(
+      resolveBpsMarketStates({
+        raw_sequifi_payload: {
+          employee_personal_detail: [
+            { field_name: "Please provide the market(s) you will be working in?", value: "CA, NJ" },
+          ],
+        },
+      } as never),
+      ["CA", "NJ"],
+    );
+  });
+
+  test("builds BPS fields and the Smartsheet submit payload (no CA/CT license when No)", () => {
+    env.msDefaultDomain = "noxpwr.com";
+    env.bpsSalesOrganization = "NOX Power";
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      microsoft_upn: "janedoe@noxpwr.com",
+      raw_sequifi_payload: bpsRaw,
+    });
+    const fields = buildBpsFormFields(job as never);
+    assert.equal(fields.salesOrganization, "NOX Power");
+    assert.equal(fields.email, "janedoe@noxpwr.com");
+    assert.equal(fields.sellInCalifornia, "No");
+    assert.equal(fields.sellInConnecticut, "No");
+    assert.equal(fields.primarySellingState, "IL");
+    assert.equal(fields.dob, "1990-05-15");
+
+    const data = buildBpsSubmitData(fields);
+    assert.equal(data.Qvjp0mW.value, "NOX Power");
+    assert.equal(data.G1qOPYQ.value, "Jane");
+    assert.equal(data["8a3XzMb"].value, "Doe");
+    assert.deepEqual(data.bXQrd3d.value, { email: "janedoe@noxpwr.com", name: "Jane Doe" });
+    assert.equal(data.dZ0JJPw.value, "No");
+    assert.equal(data.nXwglbY0w.value, "No");
+    assert.equal(data.anrdPpe.value, "IL");
+    assert.equal(data.jMyn5Q0.value, "1990-05-15");
+    assert.equal(data.DweMv7o, undefined); // CA HIS omitted when CA=No
+    assert.equal(data.kXkvQ1Wq8, undefined); // CT HIS omitted when CT=No
+  });
+
+  test("includes CA HIS fields when selling in California", () => {
+    const job = onboardingJob({
+      microsoft_upn: "janedoe@noxpwr.com",
+      raw_sequifi_payload: {
+        employee_personal_detail: [
+          { field_name: "Other Installers?", value: "Bright Planet Solar" },
+          { field_name: "Please provide the market(s) you will be working in?", value: "CA" },
+          { field_name: "HIS License Number", value: "123456" },
+          { field_name: "HIS Exp Date", value: "2027-06-01" },
+        ],
+        dob: "1990-05-15",
+      },
+    });
+    const fields = buildBpsFormFields(job as never);
+    assert.equal(fields.sellInCalifornia, "Yes");
+    assert.equal(fields.caHisNumber, "123456");
+    const data = buildBpsSubmitData(fields);
+    assert.equal(data.DweMv7o.value, "123456");
+    assert.equal(data["5glzDNa"].value, "2027-06-01");
   });
 });
 

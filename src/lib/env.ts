@@ -212,4 +212,13 @@ export const env = {
   /** "Sales Company" field on the Better Earth form — no explicit value given
    * in the SOP; defaults to the same "NOX Power" branding used for Tron/EMPWR. */
   betterEarthSalesCompany: opt("BETTER_EARTH_SALES_COMPANY", "NOX Power"),
+  /**
+   * Bright Planet Solar (BPS) — Financier Portal Login Request (Smartsheet).
+   * Triggered when Sequifi Other Installers? contains "BPS" or "Bright Planet
+   * Solar". Plain server-to-server multipart POST (confirmed live — CAPTCHA
+   * not required for main submit). Defaults to disabled pending enablement.
+   */
+  bpsFormPublishKey: opt("BPS_FORM_PUBLISH_KEY", "60e97ea684894846927bfc564a5a2d9e"),
+  bpsFormEnabled: opt("BPS_FORM_ENABLED", "false") === "true",
+  bpsSalesOrganization: opt("BPS_SALES_ORGANIZATION", "NOX Power"),
 };

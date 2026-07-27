@@ -35,6 +35,7 @@ import { submitTronJotForm } from "@/lib/onboarding/tron-jotform";
 import { submitGoodPwrForm } from "@/lib/onboarding/goodpwr-form";
 import { sendGoodPwrText } from "@/lib/onboarding/goodpwr-text";
 import { submitBetterEarthForm } from "@/lib/onboarding/better-earth-form";
+import { submitBpsForm } from "@/lib/onboarding/bps-form";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -681,6 +682,8 @@ export async function runOnboardingJob(
     await sendGoodPwrText(job);
     job = (await loadJobById(jobId)) ?? job;
     await submitBetterEarthForm(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await submitBpsForm(job);
     job = (await loadJobById(jobId)) ?? job;
   }
 
