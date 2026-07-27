@@ -40,6 +40,7 @@ import {
   appendGreenBrillianceRoster,
   isGreenBrillianceTabName,
 } from "@/lib/onboarding/green-brilliance-roster";
+import { submitIconPowerForm } from "@/lib/onboarding/icon-power-form";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -690,6 +691,8 @@ export async function runOnboardingJob(
     await submitBpsForm(job);
     job = (await loadJobById(jobId)) ?? job;
     await appendGreenBrillianceRoster(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await submitIconPowerForm(job);
     job = (await loadJobById(jobId)) ?? job;
   }
 

@@ -76,6 +76,14 @@ import {
   jobHasGreenBrillianceInstallerTab,
 } from "../src/lib/onboarding/green-brilliance-roster";
 import {
+  buildIconPowerFormFields,
+  buildIconPowerSubmitData,
+  iconPowerFormAlreadySent,
+  isIconPowerTabName,
+  jobHasIconPowerInstallerTab,
+  resolveIconPowerStartDate,
+} from "../src/lib/onboarding/icon-power-form";
+import {
   buildTerrosTeamCatalog,
   canonicalTeamKey,
   matchTerrosTeamForOffice,
@@ -815,6 +823,65 @@ describe("Green Brilliance shared roster sheet", () => {
       "2026-07-27",
       "",
     ]);
+  });
+});
+
+describe("Icon Power Smartsheet form submission", () => {
+  const iconRaw = {
+    employee_personal_detail: [{ field_name: "Other Installers?", value: "Icon Power" }],
+    sub_position_name: "Sales Rep",
+    manager: { first_name: "Jordan", last_name: "Bastian", email: "jordan@example.com" },
+    created_at: "2026-07-20T15:00:00Z",
+  };
+
+  test("detects Icon Power / Icon from Other Installers?", () => {
+    assert.equal(isIconPowerTabName("Icon Power"), true);
+    assert.equal(isIconPowerTabName("Icon"), true);
+    assert.equal(isIconPowerTabName("icon (NV)"), true);
+    assert.equal(isIconPowerTabName("Quality Solar"), false);
+    assert.equal(jobHasIconPowerInstallerTab(onboardingJob({ raw_sequifi_payload: iconRaw }) as never), true);
+    assert.equal(jobHasIconPowerInstallerTab(onboardingJob() as never), false);
+    assert.equal(
+      iconPowerFormAlreadySent(onboardingJob({ step_errors: { icon_power_form: "sent" } }) as never),
+      true,
+    );
+  });
+
+  test("uses Sequifi values and N/A fallbacks; start date from Sequifi created_at", () => {
+    env.msDefaultDomain = "noxpwr.com";
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      microsoft_upn: "janedoe@noxpwr.com",
+      role_label: "Sales Rep",
+      raw_sequifi_payload: iconRaw,
+    });
+    const fields = buildIconPowerFormFields(job as never, new Date("2026-07-27T12:00:00Z"));
+    assert.equal(fields.employeeName, "Jane Doe");
+    assert.equal(fields.jobTitle, "Sales Rep");
+    assert.equal(fields.manager, "Jordan Bastian");
+    assert.equal(fields.payRate, "N/A"); // no Sequifi pay rate
+    assert.equal(fields.startDate, "2026-07-20");
+    assert.equal(fields.phone, "555-111-2222");
+    assert.equal(fields.email, "janedoe@noxpwr.com");
+
+    const data = buildIconPowerSubmitData(fields);
+    assert.equal(data.Ya3M6Yq3D.value, "Jane Doe");
+    assert.equal(data.wNK1350nb.value, "Sales Rep");
+    assert.equal(data.zA0QopXnq.value, "Jordan Bastian");
+    assert.equal(data["2waJbzkL3"].value, "N/A");
+    assert.equal(data.Z5aE3wRDP.value, "2026-07-20");
+    assert.equal(data.J9Qgy3nXm.value, "555-111-2222");
+    assert.equal(data["1z36lw19J"].value, "janedoe@noxpwr.com");
+  });
+
+  test("falls back start date to today when Sequifi has no date", () => {
+    assert.equal(
+      resolveIconPowerStartDate(
+        { raw_sequifi_payload: {}, created_at: "" } as never,
+        new Date("2026-07-27T12:00:00Z"),
+      ),
+      "2026-07-27",
+    );
   });
 });
 

@@ -232,4 +232,12 @@ export const env = {
     "1MvCndbCtMLYf9Rr12T6DJ9Xj1wvASlz39Zc1bdRQ_X4",
   ),
   greenBrillianceRosterEnabled: opt("GREEN_BRILLIANCE_ROSTER_ENABLED", "false") === "true",
+  /**
+   * Icon Power — Sales Rep Onboarding Smartsheet form (Freedom Pros).
+   * Triggered when Sequifi Other Installers? contains "Icon Power" or
+   * whole-word "Icon". Job Title / Manager / Pay Rate use Sequifi when
+   * present, otherwise "N/A". Defaults to disabled until enabled in Vercel.
+   */
+  iconPowerFormPublishKey: opt("ICON_POWER_FORM_PUBLISH_KEY", "019adb83223c7b2180542e382343d5f1"),
+  iconPowerFormEnabled: opt("ICON_POWER_FORM_ENABLED", "false") === "true",
 };
