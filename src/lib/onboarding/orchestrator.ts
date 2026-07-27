@@ -615,12 +615,19 @@ export async function runOnboardingJob(
       } else {
         const to = (job.welcome_email_to ?? job.email).trim();
         const password = job.temp_password ?? tempPassword;
+        // Quality Solar does not use Enerflo — omit it from the systems list when
+        // every selected installer tab is Quality Solar (Other Installers free-text).
+        const includeEnerflo = !(
+          installerTabs.length > 0 &&
+          installerTabs.every(tab => tab.trim().toLowerCase().includes("quality solar"))
+        );
         const { subject, body } = renderWelcomeTemplate(role.welcomeTemplate, {
           username: workEmail,
           password,
           firstName,
           installerTabs,
           onboardAxia: sequifiFields.onboardAxia,
+          includeEnerflo,
         });
         await sendMailAsUser({ to, subject, body, contentType: "text" });
         await updateJobStep(job.id, { welcome_email_status: "success" });

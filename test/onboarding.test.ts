@@ -248,17 +248,47 @@ describe("installer registry and role mapping", () => {
 
 describe("welcome and EMPWR HubSpot payloads", () => {
   test("renders sales rep and appointment setter welcome templates", () => {
-    const sales = renderWelcomeTemplate("sales_rep", {
+    const axia = renderWelcomeTemplate("sales_rep", {
       firstName: "Jane",
       username: "jane@noxpwr.com",
       password: "Secret123",
       installerTabs: ["Axia", "EMPWR"],
       onboardAxia: true,
     });
-    assert.equal(sales.subject, "Welcome to Axia — your Nox Power email");
-    assert.match(sales.body, /Hello Jane,/);
-    assert.match(sales.body, /Axia, EMPWR/);
-    assert.match(sales.body, /Planner tips:/);
+    assert.equal(axia.subject, "Welcome to Axia — your Nox Power email");
+    assert.match(axia.body, /Hello Jane,/);
+    assert.match(axia.body, /Axia, EMPWR/);
+    assert.match(axia.body, /Planner tips:/);
+    assert.match(axia.body, /Aurora: support@aurorasolar.com/);
+    assert.match(axia.body, /Email admin@noxpwr.com for questions/);
+    assert.doesNotMatch(axia.body, /Reply to this email/);
+
+    // Non-Axia installers get a generic email — no Aurora / EnFin / Recheck / planner tips.
+    const generic = renderWelcomeTemplate("sales_rep", {
+      firstName: "Drew",
+      username: "drewcollum@noxpwr.com",
+      password: "Secret123",
+      installerTabs: ["EMPWR"],
+      onboardAxia: false,
+    });
+    assert.equal(generic.subject, "Welcome — your Nox Power email");
+    assert.match(generic.body, /Outlook, Enerflo, and Terros/);
+    assert.match(generic.body, /Email admin@noxpwr.com for questions/);
+    assert.doesNotMatch(generic.body, /Planner tips:/);
+    assert.doesNotMatch(generic.body, /Aurora/);
+    assert.doesNotMatch(generic.body, /Reply to this email/);
+
+    // Quality Solar does not use Enerflo — systems list omits it.
+    const qualitySolar = renderWelcomeTemplate("sales_rep", {
+      firstName: "Drew",
+      username: "drewcollum@noxpwr.com",
+      password: "Secret123",
+      installerTabs: ["Quality Solar"],
+      onboardAxia: false,
+      includeEnerflo: false,
+    });
+    assert.match(qualitySolar.body, /Outlook and Terros/);
+    assert.doesNotMatch(qualitySolar.body, /Enerflo/);
 
     const setter = renderWelcomeTemplate("appt_setter", {
       username: "setter@noxpwr.com",
@@ -266,6 +296,8 @@ describe("welcome and EMPWR HubSpot payloads", () => {
     });
     assert.equal(setter.subject, "Welcome — your Nox Power email");
     assert.doesNotMatch(setter.body, /Planner tips:/);
+    assert.doesNotMatch(setter.body, /Aurora/);
+    assert.match(setter.body, /Email admin@noxpwr.com for questions/);
   });
 
   test("builds and validates EMPWR HubSpot payloads", () => {

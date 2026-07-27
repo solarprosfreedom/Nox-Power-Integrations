@@ -7,20 +7,17 @@ export interface WelcomeTemplateParams {
   firstName?: string;
   /** Sequifi installer tabs the rep was onboarded to. */
   installerTabs?: string[];
-  /** When true, use Axia-specific subject and planner tips. */
+  /** When true, use Axia-specific subject, planner tips, and Aurora/EnFin/Recheck support. */
   onboardAxia?: boolean;
+  /**
+   * When false, omit Enerflo from the "use it for …" systems list (e.g. Quality Solar
+   * does not use Enerflo). Defaults to true.
+   */
+  includeEnerflo?: boolean;
 }
 
 const AXIA_SUBJECT = "Welcome to Axia — your Nox Power email";
 const GENERIC_SUBJECT = "Welcome — your Nox Power email";
-
-const INTRO_WITH_INSTALLERS = `You have been onboarded to the following installer(s): {{installerList}}.
-
-Your company email is ready. Use it for Outlook, Enerflo, and Terros. You may also receive messages from financiers on this address.`;
-
-const INTRO_GENERIC = `You have been onboarded.
-
-Your company email is ready. Use it for Outlook, Enerflo, and Terros. You may also receive messages from financiers on this address.`;
 
 const CREDENTIALS_BLOCK = `Sign in at outlook.com:
 
@@ -33,23 +30,44 @@ const PLANNER_TIPS = `Planner tips:
 
 For Enfin and Aurora, use the same email: {{username}}`;
 
-const LOGIN_SUPPORT = `If you need login assistance:
+/** Axia-only — Aurora / EnFin / Recheck are not used by other installers. */
+const AXIA_LOGIN_SUPPORT = `If you need login assistance:
 
   Aurora: support@aurorasolar.com
   EnFin: Text (717) 853-1183
   Recheck: Support@Recheck.co or https://recheck.co/contact/
 
-Questions? Reply to this email.
+Email admin@noxpwr.com for questions.
 
 Thanks,
 
 Admin Team`;
 
-const APPT_SETTER_CLOSING = `Questions? Reply to this email.
+const GENERIC_CLOSING = `Email admin@noxpwr.com for questions.
 
 Thanks,
 
 Admin Team`;
+
+function systemsLine(includeEnerflo: boolean): string {
+  const systems = includeEnerflo
+    ? "Outlook, Enerflo, and Terros"
+    : "Outlook and Terros";
+  return `Your company email is ready. Use it for ${systems}. You may also receive messages from financiers on this address.`;
+}
+
+function buildIntro(params: WelcomeTemplateParams): string {
+  const includeEnerflo = params.includeEnerflo !== false;
+  const systems = systemsLine(includeEnerflo);
+  if (params.installerTabs?.length) {
+    return `You have been onboarded to the following installer(s): {{installerList}}.
+
+${systems}`;
+  }
+  return `You have been onboarded.
+
+${systems}`;
+}
 
 function fill(template: string, p: WelcomeTemplateParams): string {
   const installerList = p.installerTabs?.length ? p.installerTabs.join(", ") : "";
@@ -61,19 +79,14 @@ function fill(template: string, p: WelcomeTemplateParams): string {
     .replace(/\{\{installerList\}\}/g, installerList);
 }
 
-function buildIntro(params: WelcomeTemplateParams): string {
-  if (params.installerTabs?.length) {
-    return INTRO_WITH_INSTALLERS;
-  }
-  return INTRO_GENERIC;
-}
-
 function buildSalesRepBody(onboardAxia: boolean, params: WelcomeTemplateParams): string {
   const parts = [`{{greeting}}\n\n${buildIntro(params)}\n\n${CREDENTIALS_BLOCK}`];
   if (onboardAxia) {
     parts.push(`\n\n${PLANNER_TIPS}`);
+    parts.push(`\n\n${AXIA_LOGIN_SUPPORT}`);
+  } else {
+    parts.push(`\n\n${GENERIC_CLOSING}`);
   }
-  parts.push(`\n\n${LOGIN_SUPPORT}`);
   return fill(parts.join(""), params);
 }
 
@@ -85,7 +98,7 @@ ${buildIntro(params)}
 
 ${CREDENTIALS_BLOCK}
 
-${APPT_SETTER_CLOSING}`,
+${GENERIC_CLOSING}`,
     params,
   );
 }
