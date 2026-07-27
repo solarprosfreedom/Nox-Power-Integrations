@@ -36,6 +36,10 @@ import { submitGoodPwrForm } from "@/lib/onboarding/goodpwr-form";
 import { sendGoodPwrText } from "@/lib/onboarding/goodpwr-text";
 import { submitBetterEarthForm } from "@/lib/onboarding/better-earth-form";
 import { submitBpsForm } from "@/lib/onboarding/bps-form";
+import {
+  appendGreenBrillianceRoster,
+  isGreenBrillianceTabName,
+} from "@/lib/onboarding/green-brilliance-roster";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -685,6 +689,8 @@ export async function runOnboardingJob(
     job = (await loadJobById(jobId)) ?? job;
     await submitBpsForm(job);
     job = (await loadJobById(jobId)) ?? job;
+    await appendGreenBrillianceRoster(job);
+    job = (await loadJobById(jobId)) ?? job;
   }
 
   return job;
@@ -699,7 +705,9 @@ async function appendJobToOnboardingRosterSheet(
 
   const sequifiUser = sequifiUserFromOnboardingJob(job);
   const parsed = parseSequifiFields(job.raw_sequifi_payload ?? {});
-  const installerTabs = parsed.installerTabs;
+  // Green Brilliance uses its own dedicated spreadsheet (appendGreenBrillianceRoster),
+  // not a tab on the main 3rd-party installers workbook.
+  const installerTabs = parsed.installerTabs.filter(tab => !isGreenBrillianceTabName(tab));
 
   if (!installerTabs.length) {
     return { appended: 0, skipped: 1, errors: [] };

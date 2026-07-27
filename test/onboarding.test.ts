@@ -69,6 +69,13 @@ import {
   resolveBpsMarketStates,
 } from "../src/lib/onboarding/bps-form";
 import {
+  buildGreenBrillianceRosterRow,
+  greenBrillianceRosterAlreadySent,
+  greenBrillianceRowToSheetValues,
+  isGreenBrillianceTabName,
+  jobHasGreenBrillianceInstallerTab,
+} from "../src/lib/onboarding/green-brilliance-roster";
+import {
   buildTerrosTeamCatalog,
   canonicalTeamKey,
   matchTerrosTeamForOffice,
@@ -754,6 +761,60 @@ describe("BPS Smartsheet form submission (Financier Portal Login Request)", () =
     const data = buildBpsSubmitData(fields);
     assert.equal(data.DweMv7o.value, "123456");
     assert.equal(data["5glzDNa"].value, "2027-06-01");
+  });
+});
+
+describe("Green Brilliance shared roster sheet", () => {
+  const gbRaw = {
+    employee_personal_detail: [
+      { field_name: "Other Installers?", value: "Green Brilliance" },
+      { field_name: "Please provide the market(s) you will be working in?", value: "MD" },
+      { field_name: "HIS License Number", value: "HIS-MD-99" },
+    ],
+  };
+
+  test("detects Green Brilliance / GB from Other Installers?", () => {
+    assert.equal(isGreenBrillianceTabName("Green Brilliance"), true);
+    assert.equal(isGreenBrillianceTabName("GB"), true);
+    assert.equal(isGreenBrillianceTabName("gb (MD)"), true);
+    assert.equal(isGreenBrillianceTabName("Quality Solar"), false);
+    assert.equal(jobHasGreenBrillianceInstallerTab(onboardingJob({ raw_sequifi_payload: gbRaw }) as never), true);
+    assert.equal(jobHasGreenBrillianceInstallerTab(onboardingJob() as never), false);
+    assert.equal(
+      greenBrillianceRosterAlreadySent(
+        onboardingJob({ step_errors: { green_brilliance_roster: "sent" } }) as never,
+      ),
+      true,
+    );
+  });
+
+  test("builds roster row from Sequifi with Sungage Access left blank", () => {
+    env.msDefaultDomain = "noxpwr.com";
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      microsoft_upn: "janedoe@noxpwr.com",
+      raw_sequifi_payload: gbRaw,
+    });
+    const row = buildGreenBrillianceRosterRow(job as never, new Date("2026-07-27T12:00:00Z"));
+    assert.equal(row.firstName, "Jane");
+    assert.equal(row.lastName, "Doe");
+    assert.equal(row.phone, "555-111-2222");
+    assert.equal(row.email, "janedoe@noxpwr.com");
+    assert.equal(row.licenseHis, "HIS-MD-99");
+    assert.equal(row.sungageAccess, "");
+    assert.equal(row.market, "MD");
+    assert.equal(row.dateAdded, "2026-07-27");
+    assert.deepEqual(greenBrillianceRowToSheetValues(row), [
+      "Jane",
+      "Doe",
+      "555-111-2222",
+      "janedoe@noxpwr.com",
+      "HIS-MD-99",
+      "",
+      "MD",
+      "2026-07-27",
+      "",
+    ]);
   });
 });
 

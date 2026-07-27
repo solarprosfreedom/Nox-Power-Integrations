@@ -221,4 +221,15 @@ export const env = {
   bpsFormPublishKey: opt("BPS_FORM_PUBLISH_KEY", "60e97ea684894846927bfc564a5a2d9e"),
   bpsFormEnabled: opt("BPS_FORM_ENABLED", "false") === "true",
   bpsSalesOrganization: opt("BPS_SALES_ORGANIZATION", "NOX Power"),
+  /**
+   * Green Brilliance — shared roster Google Sheet for Bob/Amir (Blaze intake).
+   * Triggered when Sequifi Other Installers? contains "Green Brilliance" (or
+   * whole-word "GB"). Sungage Access is left blank (no Sequifi/SOP source).
+   * Defaults to disabled until enabled in Vercel.
+   */
+  greenBrillianceSpreadsheetId: opt(
+    "GREEN_BRILLIANCE_SPREADSHEET_ID",
+    "1MvCndbCtMLYf9Rr12T6DJ9Xj1wvASlz39Zc1bdRQ_X4",
+  ),
+  greenBrillianceRosterEnabled: opt("GREEN_BRILLIANCE_ROSTER_ENABLED", "false") === "true",
 };
