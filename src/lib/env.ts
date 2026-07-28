@@ -147,12 +147,27 @@ export const env = {
   installSheetSyncEnabled: opt("INSTALL_SHEET_SYNC_ENABLED", "false") === "true",
   /** Fixed assign_to_email for Axia install sheet imports (overrides sheet Assign_To_Email column). */
   installSheetAssignToEmail: opt("INSTALL_SHEET_ASSIGN_TO_EMAIL", "jonaslim@noxpwr.com"),
-  /** EMPWR partner onboarding — HubSpot form submit (NA2 unauthenticated API) */
+  /**
+   * EMPWR partner onboarding — legacy HubSpot form submit (NA2 API).
+   * Replaced by the Empower Typeform (EMPWR_TYPEFORM_*). Defaults to disabled;
+   * leave off unless ops explicitly needs the old HubSpot path.
+   */
   hubspotEmpwrPortalId: opt("HUBSPOT_EMPWR_PORTAL_ID", "244696383"),
   hubspotEmpwrFormGuid: opt("HUBSPOT_EMPWR_FORM_GUID", "bf39525c-6a76-4679-acca-459f92f20ded"),
   hubspotEmpwrApiBase: opt("HUBSPOT_EMPWR_API_BASE", "https://api-na2.hsforms.com"),
   hubspotEmpwrCompany: opt("HUBSPOT_EMPWR_COMPANY", "Nox Power"),
-  hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "true") === "true",
+  hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "false") === "true",
+  /**
+   * EMPWR / Empower — "Empower New Rep Request" Typeform
+   * (https://form.typeform.com/to/UvpPrheO). Closers only (setters skip).
+   * Submitted via headless Chromium (no public create-response API). Defaults
+   * to disabled until a live ZZTEST pass; flip EMPWR_TYPEFORM_ENABLED=true
+   * in Vercel after confirming.
+   */
+  empwrTypeformUrl: opt("EMPWR_TYPEFORM_URL", "https://form.typeform.com/to/UvpPrheO"),
+  empwrTypeformEnabled: opt("EMPWR_TYPEFORM_ENABLED", "false") === "true",
+  empwrTypeformTeamId: opt("EMPWR_TYPEFORM_TEAM_ID", "803"),
+  empwrTypeformEmailDomain: opt("EMPWR_TYPEFORM_EMAIL_DOMAIN", "solarpros.io"),
   /**
    * Tron partner onboarding — JotForm "Log-In Request Form" submit.
    * Both prior blockers are resolved:
