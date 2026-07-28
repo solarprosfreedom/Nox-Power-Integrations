@@ -11,7 +11,7 @@ import {
   retryOnboardingJob,
   runHiredOnboardingNow,
   scanSequifiMicrosoftGapList,
-  submitEmpwrTypeformForJob,
+  submitEmpwrHubSpotForJob,
 } from "@/app/actions/onboarding";
 import type { MicrosoftGapStatus, SequifiMicrosoftGapRow } from "@/lib/onboarding/microsoft-gap-scan";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
@@ -175,7 +175,7 @@ export default function SequifiOnboardingTab() {
   const [provisioningId, setProvisioningId] = useState<number | null>(null);
   const [bulkProvisioning, setBulkProvisioning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [empwrTypeformJobId, setEmpwrTypeformJobId] = useState<string | null>(null);
+  const [hubspotJobId, setHubspotJobId] = useState<string | null>(null);
 
   function jobHasEmpwrTab(job: OnboardingJob): boolean {
     return parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.some(
@@ -368,23 +368,23 @@ export default function SequifiOnboardingTab() {
     }
   }
 
-  async function handleEmpwrTypeform(jobId: string) {
-    setEmpwrTypeformJobId(jobId);
+  async function handleEmpwrHubSpot(jobId: string) {
+    setHubspotJobId(jobId);
     setMessage(null);
     try {
-      const result = await submitEmpwrTypeformForJob(jobId);
+      const result = await submitEmpwrHubSpotForJob(jobId);
       if (result.result === "sent") {
-        setMessage(`EMPWR Typeform: submitted for job ${jobId}`);
+        setMessage(`EMPWR HubSpot: submitted for job ${jobId}`);
       } else {
         setMessage(
-          `EMPWR Typeform ${result.result}: ${result.error ?? result.stepError ?? "unknown"}`,
+          `EMPWR HubSpot ${result.result}: ${result.error ?? result.stepError ?? "unknown"}`,
         );
       }
       await refresh();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
-      setEmpwrTypeformJobId(null);
+      setHubspotJobId(null);
     }
   }
 
@@ -444,7 +444,7 @@ export default function SequifiOnboardingTab() {
               { label: "Graph", ok: config.graphConfigured },
               { label: "Enerflo", ok: config.enerfloConfigured },
               { label: "Terros", ok: config.terrosConfigured },
-              { label: "EMPWR Typeform", ok: config.empwrTypeformConfigured },
+              { label: "EMPWR HubSpot", ok: config.empwrHubSpotConfigured },
             ] as const
           ).map(({ label, ok }) => (
             <div
@@ -819,19 +819,19 @@ export default function SequifiOnboardingTab() {
                           </button>
                         )}
                         {job.status === "completed" &&
-                          config?.empwrTypeformConfigured &&
+                          config?.empwrHubSpotConfigured &&
                           jobHasEmpwrTab(job) && (
                             <button
                               type="button"
-                              onClick={() => handleEmpwrTypeform(job.id)}
-                              disabled={empwrTypeformJobId === job.id}
+                              onClick={() => handleEmpwrHubSpot(job.id)}
+                              disabled={hubspotJobId === job.id}
                               className="text-xs text-orange-400 hover:text-orange-300 text-left disabled:opacity-50"
                             >
-                              {empwrTypeformJobId === job.id
-                                ? "Typeform…"
-                                : job.step_errors.empwr_typeform === "sent"
-                                  ? "Typeform sent"
-                                  : "EMPWR Typeform"}
+                              {hubspotJobId === job.id
+                                ? "HubSpot…"
+                                : job.step_errors.empwr_hubspot === "sent"
+                                  ? "HubSpot sent"
+                                  : "EMPWR HubSpot"}
                             </button>
                           )}
                       </div>

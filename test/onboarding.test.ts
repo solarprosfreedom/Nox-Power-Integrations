@@ -30,23 +30,10 @@ import { renderWelcomeTemplate } from "../src/lib/onboarding/welcome-templates";
 import {
   buildEmpwrHubSpotPayload,
   empwrHubSpotAlreadySent,
-  jobHasEmpwrInstallerTab as jobHasEmpwrInstallerTabHubSpot,
+  jobHasEmpwrInstallerTab,
   mapEmpwrHubSpotRole,
   validateEmpwrHubSpotPayload,
 } from "../src/lib/onboarding/empwr-hubspot";
-import {
-  buildEmpwrTypeformEmail,
-  buildEmpwrTypeformFields,
-  EMPWR_FINANCIERS_EXCEPT_GOODLEAP,
-  EMPWR_HOME_SERVICES,
-  empwrTypeformAlreadySent,
-  jobHasEmpwrInstallerTab,
-  mapEmpwrTypeformAccess,
-  normalizeEmpwrTypeformDate,
-  resolveEmpwrTypeformStates,
-  shouldSkipEmpwrTypeformForSetter,
-  validateEmpwrTypeformFields,
-} from "../src/lib/onboarding/empwr-typeform";
 import {
   buildTronJotFormBody,
   buildTronJotFormFields,
@@ -341,7 +328,7 @@ describe("welcome and EMPWR HubSpot payloads", () => {
     env.hubspotEmpwrCompany = "Nox Power";
 
     const job = onboardingJob();
-    assert.equal(jobHasEmpwrInstallerTabHubSpot(job as never), true);
+    assert.equal(jobHasEmpwrInstallerTab(job as never), true);
     assert.equal(empwrHubSpotAlreadySent(onboardingJob({ step_errors: { empwr_hubspot: "sent" } }) as never), true);
     assert.equal(mapEmpwrHubSpotRole(onboardingJob({ raw_sequifi_payload: { position_name: "Sales", sub_position_name: "Manager" } }) as never), "District Manager");
 
@@ -356,144 +343,6 @@ describe("welcome and EMPWR HubSpot payloads", () => {
       validateEmpwrHubSpotPayload({ ...payload, fields: payload.fields.filter((f) => f.name !== "phone") }),
       "Missing required field: phone",
     );
-  });
-});
-
-describe("EMPWR Empower Typeform submission", () => {
-  test("detects EMPWR tab and prior sends", () => {
-    const job = onboardingJob();
-    assert.equal(jobHasEmpwrInstallerTab(job as never), true);
-    assert.equal(jobHasEmpwrInstallerTab(onboardingJob({ raw_sequifi_payload: {} }) as never), false);
-    assert.equal(empwrTypeformAlreadySent(job as never), false);
-    assert.equal(
-      empwrTypeformAlreadySent(onboardingJob({ step_errors: { empwr_typeform: "sent" } }) as never),
-      true,
-    );
-  });
-
-  test("skips Appt Setter / Setter; maps Admin vs Closer access", () => {
-    assert.equal(
-      shouldSkipEmpwrTypeformForSetter({
-        raw_sequifi_payload: { position_name: "Closer", sub_position_name: "Appt Setter" },
-        role_label: null,
-      } as never),
-      true,
-    );
-    assert.equal(
-      shouldSkipEmpwrTypeformForSetter({
-        raw_sequifi_payload: { position_name: "Setter", sub_position_name: "" },
-        role_label: null,
-      } as never),
-      true,
-    );
-    assert.equal(
-      shouldSkipEmpwrTypeformForSetter({
-        raw_sequifi_payload: { position_name: "Closer", sub_position_name: "Sales Rep" },
-        role_label: null,
-      } as never),
-      false,
-    );
-    assert.equal(
-      mapEmpwrTypeformAccess({
-        raw_sequifi_payload: { position_name: "Sales", sub_position_name: "Admin" },
-        role_label: null,
-      } as never),
-      "Admin",
-    );
-    assert.equal(
-      mapEmpwrTypeformAccess({
-        raw_sequifi_payload: { position_name: "Closer", sub_position_name: "Sales Rep" },
-        role_label: null,
-      } as never),
-      "Closer",
-    );
-  });
-
-  test("builds +emp@solarpros.io email and SOP field defaults", () => {
-    env.empwrTypeformEmailDomain = "solarpros.io";
-    env.empwrTypeformTeamId = "803";
-    assert.equal(buildEmpwrTypeformEmail("Jane", "Doe"), "janedoe+emp@solarpros.io");
-    assert.equal(buildEmpwrTypeformEmail("Jane-Marie", "O'Doe"), "janemarieodoe+emp@solarpros.io");
-
-    const job = onboardingJob({
-      raw_sequifi_payload: {
-        ...sequifiRaw,
-        position_name: "Closer",
-        sub_position_name: "Sales Rep",
-      },
-    });
-    const fields = buildEmpwrTypeformFields(job as never);
-    assert.equal(fields.email, "janedoe+emp@solarpros.io");
-    assert.equal(fields.teamId, "803");
-    assert.equal(fields.newToEmpower, "New to Empower");
-    assert.equal(fields.accessNeeded, "Closer");
-    assert.deepEqual(fields.homeServices, [...EMPWR_HOME_SERVICES]);
-    assert.deepEqual(fields.financiers, [...EMPWR_FINANCIERS_EXCEPT_GOODLEAP]);
-    assert.equal(fields.financiers.includes("Goodleap"), false);
-    assert.equal(fields.consentYes, true);
-    // sequifiRaw markets: CA, NV → only CA maps
-    assert.deepEqual(fields.states, ["CA"]);
-    assert.ok(fields.his);
-    assert.equal(fields.his?.licenseNumber, "HIS-123");
-    assert.equal(fields.his?.issueDate, "2026-01-01");
-    assert.equal(fields.his?.expirationDate, "2027-01-01");
-    assert.equal(validateEmpwrTypeformFields(fields), null);
-  });
-
-  test("maps states; requires HIS only for CA; fails when no mappable state", () => {
-    assert.deepEqual(
-      resolveEmpwrTypeformStates({
-        raw_sequifi_payload: {
-          employee_personal_detail: [
-            { field_name: "Please provide the market(s) you will be working in?", value: "AZ, Texas, Florida" },
-          ],
-        },
-      } as never),
-      ["AZ", "TX"],
-    );
-    assert.equal(normalizeEmpwrTypeformDate("01/15/2026"), "2026-01-15");
-    assert.equal(normalizeEmpwrTypeformDate("2026-01-15"), "2026-01-15");
-
-    const nonCa = buildEmpwrTypeformFields(
-      onboardingJob({
-        raw_sequifi_payload: {
-          employee_admin_only_fields: [{ field_name: "Onboard to Empwr?", value: "yes" }],
-          employee_personal_detail: [
-            { field_name: "Please provide the market(s) you will be working in?", value: "UT" },
-          ],
-          position_name: "Closer",
-          sub_position_name: "Sales Rep",
-        },
-      }) as never,
-    );
-    assert.deepEqual(nonCa.states, ["UT"]);
-    assert.equal(nonCa.his, null);
-    assert.equal(validateEmpwrTypeformFields(nonCa), null);
-
-    const noState = buildEmpwrTypeformFields(
-      onboardingJob({
-        raw_sequifi_payload: {
-          employee_admin_only_fields: [{ field_name: "Onboard to Empwr?", value: "yes" }],
-          employee_personal_detail: [
-            { field_name: "Please provide the market(s) you will be working in?", value: "NY" },
-          ],
-        },
-      }) as never,
-    );
-    assert.deepEqual(noState.states, []);
-    assert.match(validateEmpwrTypeformFields(noState) ?? "", /No Empwr Typeform states/);
-
-    const caMissingHis = buildEmpwrTypeformFields(
-      onboardingJob({
-        raw_sequifi_payload: {
-          employee_admin_only_fields: [{ field_name: "Onboard to Empwr?", value: "yes" }],
-          employee_personal_detail: [
-            { field_name: "Please provide the market(s) you will be working in?", value: "CA" },
-          ],
-        },
-      }) as never,
-    );
-    assert.match(validateEmpwrTypeformFields(caMissingHis) ?? "", /HIS License Number/);
   });
 });
 

@@ -9,13 +9,12 @@ import {
   runOnboardingJob,
 } from "@/lib/onboarding/orchestrator";
 import {
-  buildEmpwrTypeformFields,
-  isEmpwrTypeformConfigured,
+  buildEmpwrHubSpotPayload,
+  isEmpwrHubSpotConfigured,
   jobHasEmpwrInstallerTab,
-  shouldSkipEmpwrTypeformForSetter,
-  submitEmpwrTypeform,
-  validateEmpwrTypeformFields,
-} from "@/lib/onboarding/empwr-typeform";
+  submitEmpwrHubSpotForm,
+  validateEmpwrHubSpotPayload,
+} from "@/lib/onboarding/empwr-hubspot";
 import { listOnboardingJobsSafe, loadJobById } from "@/lib/onboarding/repository";
 import { scanSequifiMicrosoftGaps } from "@/lib/onboarding/microsoft-gap-scan";
 import { env } from "@/lib/env";
@@ -77,12 +76,12 @@ export async function getOnboardingConfig() {
     ),
     enerfloConfigured: Boolean(env.enerfloV1ApiKey?.trim()),
     terrosConfigured: Boolean(env.terrosApiKey?.trim()),
-    empwrTypeformConfigured: isEmpwrTypeformConfigured(),
+    empwrHubSpotConfigured: isEmpwrHubSpotConfigured(),
   };
 }
 
-/** Manual test: submit one completed EMPWR job to Empower Typeform (ignores ONBOARDING_DRY_RUN). */
-export async function submitEmpwrTypeformForJob(jobId: string) {
+/** Manual test: POST one completed EMPWR job to HubSpot (ignores ONBOARDING_DRY_RUN). */
+export async function submitEmpwrHubSpotForJob(jobId: string) {
   const job = await loadJobById(jobId);
   if (!job) {
     return { ok: false as const, result: "failed" as const, error: "Job not found" };
@@ -94,33 +93,26 @@ export async function submitEmpwrTypeformForJob(jobId: string) {
       error: "Job does not have EMPWR installer tab",
     };
   }
-  if (shouldSkipEmpwrTypeformForSetter(job)) {
+  if (!isEmpwrHubSpotConfigured()) {
     return {
       ok: false as const,
       result: "skipped" as const,
-      error: "Appt Setter / Setter — Empwr Typeform skipped per SOP",
-    };
-  }
-  if (!isEmpwrTypeformConfigured()) {
-    return {
-      ok: false as const,
-      result: "skipped" as const,
-      error: "EMPWR Typeform not configured (set EMPWR_TYPEFORM_ENABLED=true)",
+      error: "EMPWR HubSpot not configured",
     };
   }
 
-  const fields = buildEmpwrTypeformFields(job);
-  const validationError = validateEmpwrTypeformFields(fields);
+  const payload = buildEmpwrHubSpotPayload(job);
+  const validationError = validateEmpwrHubSpotPayload(payload);
   if (validationError) {
-    return { ok: false as const, result: "failed" as const, error: validationError, fields };
+    return { ok: false as const, result: "failed" as const, error: validationError, payload };
   }
 
-  const result = await submitEmpwrTypeform(job, { ignoreDryRun: true });
+  const result = await submitEmpwrHubSpotForm(job, { ignoreDryRun: true });
   const updated = await loadJobById(jobId);
   return {
     ok: result === "sent",
     result,
-    stepError: updated?.step_errors.empwr_typeform ?? null,
-    fields,
+    stepError: updated?.step_errors.empwr_hubspot ?? null,
+    payload,
   };
 }

@@ -30,7 +30,7 @@ import { filterSequifiUsersNeedingProvisioning, classifyMicrosoftForSequifiUser,
 import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, ProvisionUserResult, SequifiUserRecord } from "@/lib/onboarding/types";
 import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
 import { sendAxiaOnboardingNotification } from "@/lib/onboarding/axia-notify";
-import { submitEmpwrTypeform } from "@/lib/onboarding/empwr-typeform";
+import { submitEmpwrHubSpotForm } from "@/lib/onboarding/empwr-hubspot";
 import { submitTronJotForm } from "@/lib/onboarding/tron-jotform";
 import { submitGoodPwrForm } from "@/lib/onboarding/goodpwr-form";
 import { sendGoodPwrText } from "@/lib/onboarding/goodpwr-text";
@@ -678,7 +678,7 @@ export async function runOnboardingJob(
     job = (await loadJobById(jobId)) ?? job;
     await sendAxiaOnboardingNotification(job);
     job = (await loadJobById(jobId)) ?? job;
-    await submitEmpwrTypeform(job);
+    await submitEmpwrHubSpotForm(job);
     job = (await loadJobById(jobId)) ?? job;
     await submitTronJotForm(job);
     job = (await loadJobById(jobId)) ?? job;
