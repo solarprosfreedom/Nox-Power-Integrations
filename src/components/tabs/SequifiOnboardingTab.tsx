@@ -12,6 +12,8 @@ import {
   runHiredOnboardingNow,
   scanSequifiMicrosoftGapList,
   submitEmpwrHubSpotForJob,
+  submitEmpowerTypeformForJob,
+  submitSolqFormForJob,
 } from "@/app/actions/onboarding";
 import type { MicrosoftGapStatus, SequifiMicrosoftGapRow } from "@/lib/onboarding/microsoft-gap-scan";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
@@ -176,10 +178,24 @@ export default function SequifiOnboardingTab() {
   const [bulkProvisioning, setBulkProvisioning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [hubspotJobId, setHubspotJobId] = useState<string | null>(null);
+  const [empowerTypeformJobId, setEmpowerTypeformJobId] = useState<string | null>(null);
+  const [solqFormJobId, setSolqFormJobId] = useState<string | null>(null);
 
   function jobHasEmpwrTab(job: OnboardingJob): boolean {
     return parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.some(
       tab => tab.trim().toLowerCase() === "empwr",
+    );
+  }
+
+  function jobHasEmpowerTab(job: OnboardingJob): boolean {
+    return parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.some(tab =>
+      /\bempower\b/i.test(tab.trim()),
+    );
+  }
+
+  function jobHasSolqTab(job: OnboardingJob): boolean {
+    return parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.some(tab =>
+      /^solq$/i.test(tab.trim()),
     );
   }
 
@@ -388,6 +404,46 @@ export default function SequifiOnboardingTab() {
     }
   }
 
+  async function handleEmpowerTypeform(jobId: string) {
+    setEmpowerTypeformJobId(jobId);
+    setMessage(null);
+    try {
+      const result = await submitEmpowerTypeformForJob(jobId);
+      if (result.result === "sent") {
+        setMessage(`Empower Typeform: submitted for job ${jobId}`);
+      } else {
+        setMessage(
+          `Empower Typeform ${result.result}: ${result.error ?? result.stepError ?? "unknown"}`,
+        );
+      }
+      await refresh();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEmpowerTypeformJobId(null);
+    }
+  }
+
+  async function handleSolqForm(jobId: string) {
+    setSolqFormJobId(jobId);
+    setMessage(null);
+    try {
+      const result = await submitSolqFormForJob(jobId);
+      if (result.result === "sent") {
+        setMessage(`SolQ form: submitted for job ${jobId}`);
+      } else {
+        setMessage(
+          `SolQ form ${result.result}: ${result.error ?? result.stepError ?? "unknown"}`,
+        );
+      }
+      await refresh();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSolqFormJobId(null);
+    }
+  }
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div>
@@ -445,6 +501,8 @@ export default function SequifiOnboardingTab() {
               { label: "Enerflo", ok: config.enerfloConfigured },
               { label: "Terros", ok: config.terrosConfigured },
               { label: "EMPWR HubSpot", ok: config.empwrHubSpotConfigured },
+              { label: "Empower Typeform", ok: config.empowerTypeformConfigured },
+              { label: "SolQ Form", ok: config.solqFormConfigured },
             ] as const
           ).map(({ label, ok }) => (
             <div
@@ -832,6 +890,38 @@ export default function SequifiOnboardingTab() {
                                 : job.step_errors.empwr_hubspot === "sent"
                                   ? "HubSpot sent"
                                   : "EMPWR HubSpot"}
+                            </button>
+                          )}
+                        {job.status === "completed" &&
+                          config?.empowerTypeformConfigured &&
+                          jobHasEmpowerTab(job) && (
+                            <button
+                              type="button"
+                              onClick={() => handleEmpowerTypeform(job.id)}
+                              disabled={empowerTypeformJobId === job.id}
+                              className="text-xs text-sky-400 hover:text-sky-300 text-left disabled:opacity-50"
+                            >
+                              {empowerTypeformJobId === job.id
+                                ? "Typeform…"
+                                : job.step_errors.empower_typeform === "sent"
+                                  ? "Typeform sent"
+                                  : "Empower Typeform"}
+                            </button>
+                          )}
+                        {job.status === "completed" &&
+                          config?.solqFormConfigured &&
+                          jobHasSolqTab(job) && (
+                            <button
+                              type="button"
+                              onClick={() => handleSolqForm(job.id)}
+                              disabled={solqFormJobId === job.id}
+                              className="text-xs text-teal-400 hover:text-teal-300 text-left disabled:opacity-50"
+                            >
+                              {solqFormJobId === job.id
+                                ? "SolQ…"
+                                : job.step_errors.solq_form === "sent"
+                                  ? "SolQ form sent"
+                                  : "SolQ Form"}
                             </button>
                           )}
                       </div>

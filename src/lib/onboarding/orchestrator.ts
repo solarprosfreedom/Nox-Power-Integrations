@@ -31,6 +31,8 @@ import type { OnboardingJob, OnboardingRunSummary, ProvisionBulkResult, Provisio
 import { sendOnboardingAdminNotification } from "@/lib/onboarding/admin-notify";
 import { sendAxiaOnboardingNotification } from "@/lib/onboarding/axia-notify";
 import { submitEmpwrHubSpotForm } from "@/lib/onboarding/empwr-hubspot";
+import { submitEmpowerTypeform } from "@/lib/onboarding/empower-typeform";
+import { sendEmpowerText } from "@/lib/onboarding/empower-text";
 import { submitTronJotForm } from "@/lib/onboarding/tron-jotform";
 import { submitGoodPwrForm } from "@/lib/onboarding/goodpwr-form";
 import { sendGoodPwrText } from "@/lib/onboarding/goodpwr-text";
@@ -41,6 +43,8 @@ import {
   isGreenBrillianceTabName,
 } from "@/lib/onboarding/green-brilliance-roster";
 import { submitIconPowerForm } from "@/lib/onboarding/icon-power-form";
+import { submitSolqForm } from "@/lib/onboarding/solq-form";
+import { sendSolqText } from "@/lib/onboarding/solq-text";
 import { renderWelcomeTemplate } from "@/lib/onboarding/welcome-templates";
 import {
   createGraphUser,
@@ -680,6 +684,10 @@ export async function runOnboardingJob(
     job = (await loadJobById(jobId)) ?? job;
     await submitEmpwrHubSpotForm(job);
     job = (await loadJobById(jobId)) ?? job;
+    await submitEmpowerTypeform(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await sendEmpowerText(job);
+    job = (await loadJobById(jobId)) ?? job;
     await submitTronJotForm(job);
     job = (await loadJobById(jobId)) ?? job;
     await submitGoodPwrForm(job);
@@ -693,6 +701,10 @@ export async function runOnboardingJob(
     await appendGreenBrillianceRoster(job);
     job = (await loadJobById(jobId)) ?? job;
     await submitIconPowerForm(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await submitSolqForm(job);
+    job = (await loadJobById(jobId)) ?? job;
+    await sendSolqText(job);
     job = (await loadJobById(jobId)) ?? job;
   }
 

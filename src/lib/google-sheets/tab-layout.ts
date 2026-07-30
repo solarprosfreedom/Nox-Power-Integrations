@@ -168,7 +168,14 @@ export const ROSTER_HEADERS = AXIA_HEADERS;
 export function rosterLayoutFromTabName(tabName: string): RosterTabLayout | null {
   const name = tabName.trim().toLowerCase();
   if (name === "axia" || name === "test sync") return AXIA_LAYOUT;
-  if (name === "empwr" || name === "empower" || name === "goodpwr" || name === "ilum" || name === "tron") {
+  if (
+    name === "empwr" ||
+    name === "empower" ||
+    name === "goodpwr" ||
+    name === "ilum" ||
+    name === "tron" ||
+    name === "solq"
+  ) {
     return STANDARD_LAYOUT;
   }
   if (name === "better earth") return BETTER_EARTH_LAYOUT;

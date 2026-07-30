@@ -23,10 +23,11 @@ const SOP_HIS_LICENSE = "Not selling in these markets";
 /** Static per the SOP: "Yes to Enerflo." */
 const SOP_USING_ENERFLO = "Yes";
 const SOP_SALES_ORG = "Solar Pros";
+/** SOP defaults (exact Google Form option labels). Sequifi custom fields override. */
+const SOP_PREFERRED_LENDER = "Sungage";
+const SOP_PREFERRED_TPO = "LightReach";
 
-/** Plausible custom-field names to check for Preferred Lender/TPO, in case ops
- * adds them to Sequifi later. None of these exist yet as of the last live check
- * against all active Sequifi users (confirmed via direct API scan). */
+/** Optional Sequifi overrides; if unset we use SOP_PREFERRED_*. */
 const LENDER_FIELD_NAMES = ["Preferred Lender", "GoodPWR Lender", "GoodPWR Preferred Lender", "Lender"];
 const TPO_FIELD_NAMES = ["Preferred TPO", "GoodPWR TPO", "GoodPWR Preferred TPO", "TPO"];
 
@@ -48,25 +49,24 @@ export function goodPwrFormAlreadySent(job: OnboardingJob): boolean {
   return job.step_errors.goodpwr_form === SENT_FLAG;
 }
 
-/** No source in Sequifi today — checks a few plausible custom-field names for
- * forward-compatibility. Returns "" (not resolvable) if none are set. */
+/** Sequifi custom field if present; otherwise SOP default Sungage. */
 export function resolveGoodPwrLender(job: Pick<OnboardingJob, "raw_sequifi_payload">): string {
   const raw = job.raw_sequifi_payload ?? {};
   for (const name of LENDER_FIELD_NAMES) {
     const value = getSequifiFieldValue(raw, name);
     if (value) return value;
   }
-  return "";
+  return SOP_PREFERRED_LENDER;
 }
 
-/** Same as resolveGoodPwrLender, for Preferred TPO. */
+/** Sequifi custom field if present; otherwise SOP default LightReach. */
 export function resolveGoodPwrTpo(job: Pick<OnboardingJob, "raw_sequifi_payload">): string {
   const raw = job.raw_sequifi_payload ?? {};
   for (const name of TPO_FIELD_NAMES) {
     const value = getSequifiFieldValue(raw, name);
     if (value) return value;
   }
-  return "";
+  return SOP_PREFERRED_TPO;
 }
 
 function workEmailForJob(job: OnboardingJob): string {
@@ -159,8 +159,8 @@ export async function submitGoodPwrForm(
       !fields.lastName && "last name",
       !fields.email && "email",
       !fields.phone && "phone",
-      !fields.preferredLender && "Preferred Lender (no source in Sequifi — ask the manager, add to Sequifi)",
-      !fields.preferredTpo && "Preferred TPO (no source in Sequifi — ask the manager, add to Sequifi)",
+      !fields.preferredLender && "Preferred Lender",
+      !fields.preferredTpo && "Preferred TPO",
     ]
       .filter(Boolean)
       .join(", ");

@@ -15,6 +15,21 @@ import {
   submitEmpwrHubSpotForm,
   validateEmpwrHubSpotPayload,
 } from "@/lib/onboarding/empwr-hubspot";
+import {
+  buildEmpowerTypeformFields,
+  isEmpowerTypeformConfigured,
+  jobHasEmpowerInstallerTab,
+  shouldSkipEmpowerTypeformForSetter,
+  submitEmpowerTypeform,
+  validateEmpowerTypeformFields,
+} from "@/lib/onboarding/empower-typeform";
+import {
+  buildSolqFormFields,
+  isSolqFormConfigured,
+  jobHasSolqInstallerTab,
+  submitSolqForm,
+  validateSolqFormFields,
+} from "@/lib/onboarding/solq-form";
 import { listOnboardingJobsSafe, loadJobById } from "@/lib/onboarding/repository";
 import { scanSequifiMicrosoftGaps } from "@/lib/onboarding/microsoft-gap-scan";
 import { env } from "@/lib/env";
@@ -77,6 +92,8 @@ export async function getOnboardingConfig() {
     enerfloConfigured: Boolean(env.enerfloV1ApiKey?.trim()),
     terrosConfigured: Boolean(env.terrosApiKey?.trim()),
     empwrHubSpotConfigured: isEmpwrHubSpotConfigured(),
+    empowerTypeformConfigured: isEmpowerTypeformConfigured(),
+    solqFormConfigured: isSolqFormConfigured(),
   };
 }
 
@@ -114,5 +131,86 @@ export async function submitEmpwrHubSpotForJob(jobId: string) {
     result,
     stepError: updated?.step_errors.empwr_hubspot ?? null,
     payload,
+  };
+}
+
+/** Manual test: submit one completed Empower job to Typeform (ignores ONBOARDING_DRY_RUN). */
+export async function submitEmpowerTypeformForJob(jobId: string) {
+  const job = await loadJobById(jobId);
+  if (!job) {
+    return { ok: false as const, result: "failed" as const, error: "Job not found" };
+  }
+  if (!jobHasEmpowerInstallerTab(job)) {
+    return {
+      ok: false as const,
+      result: "skipped" as const,
+      error: "Job does not have Empower installer tab / Other Installers",
+    };
+  }
+  if (shouldSkipEmpowerTypeformForSetter(job)) {
+    return {
+      ok: false as const,
+      result: "skipped" as const,
+      error: "Appt Setter / Setter — Empower Typeform skipped per SOP",
+    };
+  }
+  if (!isEmpowerTypeformConfigured()) {
+    return {
+      ok: false as const,
+      result: "skipped" as const,
+      error: "Empower Typeform not configured (set EMPOWER_TYPEFORM_ENABLED=true)",
+    };
+  }
+
+  const fields = buildEmpowerTypeformFields(job);
+  const validationError = validateEmpowerTypeformFields(fields);
+  if (validationError) {
+    return { ok: false as const, result: "failed" as const, error: validationError, fields };
+  }
+
+  const result = await submitEmpowerTypeform(job, { ignoreDryRun: true });
+  const updated = await loadJobById(jobId);
+  return {
+    ok: result === "sent",
+    result,
+    stepError: updated?.step_errors.empower_typeform ?? null,
+    fields,
+  };
+}
+
+/** Manual test: submit one completed SolQ job to LeadConnector form (ignores ONBOARDING_DRY_RUN). */
+export async function submitSolqFormForJob(jobId: string) {
+  const job = await loadJobById(jobId);
+  if (!job) {
+    return { ok: false as const, result: "failed" as const, error: "Job not found" };
+  }
+  if (!jobHasSolqInstallerTab(job)) {
+    return {
+      ok: false as const,
+      result: "skipped" as const,
+      error: "Job does not have SolQ installer tab / Other Installers",
+    };
+  }
+  if (!isSolqFormConfigured()) {
+    return {
+      ok: false as const,
+      result: "skipped" as const,
+      error: "SolQ form not configured (set SOLQ_FORM_ENABLED=true)",
+    };
+  }
+
+  const fields = buildSolqFormFields(job);
+  const validationError = validateSolqFormFields(fields);
+  if (validationError) {
+    return { ok: false as const, result: "failed" as const, error: validationError, fields };
+  }
+
+  const result = await submitSolqForm(job, { ignoreDryRun: true });
+  const updated = await loadJobById(jobId);
+  return {
+    ok: result === "sent",
+    result,
+    stepError: updated?.step_errors.solq_form ?? null,
+    fields,
   };
 }

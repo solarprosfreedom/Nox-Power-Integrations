@@ -35,6 +35,21 @@ import {
   validateEmpwrHubSpotPayload,
 } from "../src/lib/onboarding/empwr-hubspot";
 import {
+  buildEmpowerTypeformEmail,
+  buildEmpowerTypeformFields,
+  EMPOWER_FINANCIERS_EXCEPT_GOODLEAP,
+  EMPOWER_HOME_SERVICES,
+  empowerTypeformAlreadySent,
+  isEmpowerTabName,
+  jobHasEmpowerInstallerTab,
+  mapEmpowerTypeformAccess,
+  normalizeEmpowerTypeformDate,
+  resolveEmpowerTypeformStates,
+  shouldSkipEmpowerTypeformForSetter,
+  validateEmpowerTypeformFields,
+} from "../src/lib/onboarding/empower-typeform";
+import { buildEmpowerTextMessage, empowerTextAlreadySent } from "../src/lib/onboarding/empower-text";
+import {
   buildTronJotFormBody,
   buildTronJotFormFields,
   jobHasTronInstallerTab,
@@ -83,6 +98,18 @@ import {
   jobHasIconPowerInstallerTab,
   resolveIconPowerStartDate,
 } from "../src/lib/onboarding/icon-power-form";
+import {
+  buildSolqFormFields,
+  buildSolqNotes,
+  isSolqTabName,
+  jobHasSolqInstallerTab,
+  mapSolqPosition,
+  resolveSolqMarkets,
+  resolveSolqStartDate,
+  solqFormAlreadySent,
+  validateSolqFormFields,
+} from "../src/lib/onboarding/solq-form";
+import { buildSolqTextMessage, solqTextAlreadySent } from "../src/lib/onboarding/solq-text";
 import {
   buildTerrosTeamCatalog,
   canonicalTeamKey,
@@ -346,6 +373,161 @@ describe("welcome and EMPWR HubSpot payloads", () => {
   });
 });
 
+describe("Empower Typeform submission and text message", () => {
+  const empowerRaw = {
+    employee_personal_detail: [
+      { field_name: "Other Installers?", value: "Empower" },
+      { field_name: "Please provide the market(s) you will be working in?", value: "CA, UT" },
+      { field_name: "HIS License Number", value: "HIS-999" },
+      { field_name: "HIS Issue Date", value: "01/15/2026" },
+      { field_name: "HIS Exp Date", value: "01/15/2028" },
+    ],
+  };
+
+  test("detects Empower (not Empwr) and prior sends", () => {
+    const job = onboardingJob({ raw_sequifi_payload: empowerRaw });
+    assert.equal(isEmpowerTabName("Empower"), true);
+    assert.equal(isEmpowerTabName("Empower Home"), true);
+    assert.equal(isEmpowerTabName("EMPWR"), false);
+    assert.equal(isEmpowerTabName("Empwr"), false);
+    assert.equal(jobHasEmpowerInstallerTab(job as never), true);
+    assert.equal(jobHasEmpowerInstallerTab(onboardingJob() as never), false);
+    assert.equal(
+      jobHasEmpowerInstallerTab(
+        onboardingJob({
+          raw_sequifi_payload: {
+            employee_admin_only_fields: [{ field_name: "Onboard to Empwr?", value: "yes" }],
+          },
+        }) as never,
+      ),
+      false,
+    );
+    assert.equal(empowerTypeformAlreadySent(job as never), false);
+    assert.equal(
+      empowerTypeformAlreadySent(onboardingJob({ step_errors: { empower_typeform: "sent" } }) as never),
+      true,
+    );
+    assert.equal(empowerTextAlreadySent(job as never), false);
+    assert.equal(
+      empowerTextAlreadySent(onboardingJob({ step_errors: { empower_text: "sent" } }) as never),
+      true,
+    );
+  });
+
+  test("skips Typeform for Appt Setters / Setters; Admin maps to Admin access", () => {
+    assert.equal(
+      shouldSkipEmpowerTypeformForSetter({
+        raw_sequifi_payload: { position_name: "Sales", sub_position_name: "Appt Setter" },
+        role_label: null,
+      } as never),
+      true,
+    );
+    assert.equal(
+      shouldSkipEmpowerTypeformForSetter({
+        raw_sequifi_payload: { position_name: "Sales", sub_position_name: "Closer" },
+        role_label: null,
+      } as never),
+      false,
+    );
+    assert.equal(
+      shouldSkipEmpowerTypeformForSetter({
+        raw_sequifi_payload: { position_name: "Setter", sub_position_name: "" },
+        role_label: null,
+      } as never),
+      true,
+    );
+    assert.equal(
+      mapEmpowerTypeformAccess({
+        raw_sequifi_payload: { position_name: "Admin", sub_position_name: "" },
+        role_label: null,
+      } as never),
+      "Admin",
+    );
+    assert.equal(
+      mapEmpowerTypeformAccess({
+        raw_sequifi_payload: { position_name: "Sales", sub_position_name: "Closer" },
+        role_label: null,
+      } as never),
+      "Closer",
+    );
+  });
+
+  test("builds SOP Typeform fields (+emp email, Team 803, no Goodleap)", () => {
+    env.empowerTypeformEmailDomain = "solarpros.io";
+    env.empowerTypeformTeamId = "803";
+    assert.equal(buildEmpowerTypeformEmail("Jane", "Doe"), "janedoe+emp@solarpros.io");
+    assert.equal(buildEmpowerTypeformEmail("Jane-Marie", "O'Doe"), "janemarieodoe+emp@solarpros.io");
+
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      raw_sequifi_payload: {
+        ...empowerRaw,
+        position_name: "Sales",
+        sub_position_name: "Closer",
+      },
+    });
+    const fields = buildEmpowerTypeformFields(job as never);
+    assert.equal(fields.email, "janedoe+emp@solarpros.io");
+    assert.equal(fields.teamId, "803");
+    assert.equal(fields.newToEmpower, "New to Empower");
+    assert.equal(fields.accessNeeded, "Closer");
+    assert.deepEqual(fields.homeServices, [...EMPOWER_HOME_SERVICES]);
+    assert.deepEqual(fields.financiers, [...EMPOWER_FINANCIERS_EXCEPT_GOODLEAP]);
+    assert.ok(!fields.financiers.includes("Goodleap"));
+    assert.deepEqual(fields.states, ["CA", "UT"]);
+    assert.equal(fields.his?.licenseNumber, "HIS-999");
+    assert.equal(fields.his?.issueDate, "2026-01-15");
+    assert.equal(fields.his?.expirationDate, "2028-01-15");
+    assert.equal(validateEmpowerTypeformFields(fields), null);
+
+    assert.deepEqual(
+      resolveEmpowerTypeformStates({
+        raw_sequifi_payload: {
+          employee_personal_detail: [
+            { field_name: "Please provide the market(s) you will be working in?", value: "Arizona" },
+          ],
+        },
+      } as never),
+      ["AZ"],
+    );
+    assert.equal(normalizeEmpowerTypeformDate("01/15/2026"), "2026-01-15");
+    assert.equal(normalizeEmpowerTypeformDate("2026-01-15"), "2026-01-15");
+
+    const nonCa = buildEmpowerTypeformFields(
+      onboardingJob({
+        phone: "555-111-2222",
+        raw_sequifi_payload: {
+          employee_personal_detail: [
+            { field_name: "Other Installers?", value: "Empower" },
+            { field_name: "Please provide the market(s) you will be working in?", value: "UT" },
+          ],
+        },
+      }) as never,
+    );
+    assert.equal(nonCa.his, null);
+    assert.equal(validateEmpowerTypeformFields(nonCa), null);
+
+    const noState = buildEmpowerTypeformFields(
+      onboardingJob({
+        phone: "555-111-2222",
+        raw_sequifi_payload: {
+          employee_personal_detail: [{ field_name: "Other Installers?", value: "Empower" }],
+        },
+      }) as never,
+    );
+    assert.match(validateEmpowerTypeformFields(noState) ?? "", /No Empower Typeform states/);
+  });
+
+  test("builds the Empower SOP text with Jobflo video URL", () => {
+    env.empowerJobfloVideoUrl = "https://www.loom.com/share/8e99f6aa14ae47e8ac30f32ff42801ba";
+    const message = buildEmpowerTextMessage();
+    assert.match(message, /Hello! You have been onboarded for Empower\./);
+    assert.match(message, /10 Min Crash Course on Jobflo/);
+    assert.match(message, /https:\/\/www\.loom\.com\/share\/8e99f6aa14ae47e8ac30f32ff42801ba/);
+    assert.match(message, /Thanks!$/);
+  });
+});
+
 describe("Tron JotForm submission", () => {
   test("detects the Tron installer tab and prior sends", () => {
     const job = onboardingJob();
@@ -508,9 +690,9 @@ describe("GoodPWR Google Form submission and text message", () => {
     );
   });
 
-  test("Preferred Lender/TPO have no source in Sequifi today, but pick up a custom field if one is added later", () => {
-    assert.equal(resolveGoodPwrLender({ raw_sequifi_payload: goodPwrRaw } as never), "");
-    assert.equal(resolveGoodPwrTpo({ raw_sequifi_payload: goodPwrRaw } as never), "");
+  test("Preferred Lender/TPO default to Sungage / LightReach; Sequifi custom fields override", () => {
+    assert.equal(resolveGoodPwrLender({ raw_sequifi_payload: goodPwrRaw } as never), "Sungage");
+    assert.equal(resolveGoodPwrTpo({ raw_sequifi_payload: goodPwrRaw } as never), "LightReach");
 
     const withLenderField = {
       ...goodPwrRaw,
@@ -528,13 +710,7 @@ describe("GoodPWR Google Form submission and text message", () => {
     const job = onboardingJob({
       phone: "555-111-2222",
       microsoft_upn: "janedoe@noxpwr.com",
-      raw_sequifi_payload: {
-        ...goodPwrRaw,
-        employee_personal_detail: [
-          { field_name: "Preferred Lender", value: "GoodLeap" },
-          { field_name: "Preferred TPO", value: "SunRun" },
-        ],
-      },
+      raw_sequifi_payload: goodPwrRaw,
     });
 
     const fields = buildGoodPwrFormFields(job as never);
@@ -546,8 +722,8 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.deepEqual(fields.markets, ["New York", "Oregon", "Illinois"]);
     assert.equal(fields.hisLicense, "Not selling in these markets");
     assert.equal(fields.usingEnerflo, "Yes");
-    assert.equal(fields.preferredLender, "GoodLeap");
-    assert.equal(fields.preferredTpo, "SunRun");
+    assert.equal(fields.preferredLender, "Sungage");
+    assert.equal(fields.preferredTpo, "LightReach");
     assert.equal(fields.comments, "");
 
     const body = buildGoodPwrFormBody(fields);
@@ -559,8 +735,8 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.deepEqual(body.getAll("entry.1790700221"), ["New York", "Oregon", "Illinois"]);
     assert.equal(body.get("entry.1717147781"), "Not selling in these markets");
     assert.equal(body.get("entry.1551533457"), "Yes");
-    assert.equal(body.get("entry.1667807314"), "GoodLeap");
-    assert.equal(body.get("entry.879013296"), "SunRun");
+    assert.equal(body.get("entry.1667807314"), "Sungage");
+    assert.equal(body.get("entry.879013296"), "LightReach");
   });
 
   test("builds the exact GoodPWR SOP text message with the links URL", () => {
@@ -882,6 +1058,114 @@ describe("Icon Power Smartsheet form submission", () => {
       ),
       "2026-07-27",
     );
+  });
+});
+
+describe("SolQ LeadConnector form submission and text message", () => {
+  const solqRaw = {
+    employee_personal_detail: [
+      { field_name: "Other Installers?", value: "SolQ" },
+      { field_name: "Please provide the market(s) you will be working in?", value: "IA" },
+      { field_name: "Team", value: "Alpha" },
+    ],
+    office_name: "Des Moines",
+    sub_position_name: "Closer",
+    manager: { first_name: "Pat", last_name: "Lee" },
+  };
+
+  test("detects SolQ / SOLQ (not other installers) and prior sends", () => {
+    assert.equal(isSolqTabName("SolQ"), true);
+    assert.equal(isSolqTabName("SOLQ"), true);
+    assert.equal(isSolqTabName("solq"), true);
+    assert.equal(isSolqTabName("SolQ Iowa"), false);
+    assert.equal(isSolqTabName("Quality Solar"), false);
+    assert.equal(jobHasSolqInstallerTab(onboardingJob({ raw_sequifi_payload: solqRaw }) as never), true);
+    assert.equal(
+      jobHasSolqInstallerTab(
+        onboardingJob({
+          raw_sequifi_payload: {
+            employee_personal_detail: [{ field_name: "Other Installers?", value: "SOLQ" }],
+          },
+        }) as never,
+      ),
+      true,
+    );
+    assert.equal(jobHasSolqInstallerTab(onboardingJob() as never), false);
+    assert.equal(
+      solqFormAlreadySent(onboardingJob({ step_errors: { solq_form: "sent" } }) as never),
+      true,
+    );
+    assert.equal(
+      solqTextAlreadySent(onboardingJob({ step_errors: { solq_text: "sent" } }) as never),
+      true,
+    );
+  });
+
+  test("maps position/markets/start date and builds SOP form fields", () => {
+    env.solqFormSubmitterName = "Nox Power Admin";
+    env.solqOutsideOrgName = "Solar Pros";
+
+    assert.equal(
+      mapSolqPosition({
+        raw_sequifi_payload: { sub_position_name: "Appt Setter" },
+        role_label: null,
+      } as never),
+      "Setter",
+    );
+    assert.equal(
+      mapSolqPosition({
+        raw_sequifi_payload: { sub_position_name: "Closer" },
+        role_label: null,
+      } as never),
+      "Closer",
+    );
+    assert.deepEqual(resolveSolqMarkets({ raw_sequifi_payload: solqRaw } as never), ["Iowa"]);
+    assert.deepEqual(
+      resolveSolqMarkets({
+        raw_sequifi_payload: {
+          employee_personal_detail: [
+            { field_name: "Please provide the market(s) you will be working in?", value: "NV" },
+          ],
+        },
+      } as never),
+      ["Iowa"],
+    );
+    assert.equal(
+      resolveSolqStartDate(
+        { raw_sequifi_payload: {}, created_at: "" } as never,
+        new Date("2026-07-30T12:00:00Z"),
+      ),
+      "2026-07-30",
+    );
+
+    const job = onboardingJob({
+      phone: "555-111-2222",
+      email: "jane.personal@example.com",
+      raw_sequifi_payload: solqRaw,
+    });
+    const fields = buildSolqFormFields(job as never, new Date("2026-07-30T12:00:00Z"));
+    assert.equal(fields.submitterName, "Nox Power Admin");
+    assert.equal(fields.firstName, "Jane");
+    assert.equal(fields.lastName, "Doe");
+    assert.equal(fields.email, "jane.personal@example.com");
+    assert.equal(fields.phone, "555-111-2222");
+    assert.equal(fields.position, "Closer");
+    assert.equal(fields.employmentType, "Full Time");
+    assert.equal(fields.internalOrOutside, "Outside Org Rep");
+    assert.equal(fields.outsideOrgName, "Solar Pros");
+    assert.deepEqual(fields.markets, ["Iowa"]);
+    assert.match(fields.notes, /Team: Alpha/);
+    assert.match(fields.notes, /Manager: Pat Lee/);
+    assert.equal(validateSolqFormFields(fields), null);
+    assert.match(buildSolqNotes(job as never), /Office: Des Moines/);
+  });
+
+  test("builds the SolQ SOP text with Freedom Pros link tree URL", () => {
+    env.solqLinksUrl = "https://solarquotespv.com/sq/tools/lt-freedompros.php";
+    const message = buildSolqTextMessage();
+    assert.match(message, /Hello! You have been onboarded for SolQ\./);
+    assert.match(message, /https:\/\/solarquotespv\.com\/sq\/tools\/lt-freedompros\.php/);
+    assert.match(message, /Thanks!$/);
   });
 });
 

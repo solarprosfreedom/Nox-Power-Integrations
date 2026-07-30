@@ -154,6 +154,25 @@ export const env = {
   hubspotEmpwrCompany: opt("HUBSPOT_EMPWR_COMPANY", "Nox Power"),
   hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "true") === "true",
   /**
+   * Empower partner onboarding — "Empower New Rep Request" Typeform
+   * (https://form.typeform.com/to/UvpPrheO). Triggered by Other Installers /
+   * Empower tab (not Empwr HubSpot). Closers only (setters skip). Submitted via
+   * headless Chromium. Defaults to disabled until ZZTEST on Vercel.
+   */
+  empowerTypeformUrl: opt("EMPOWER_TYPEFORM_URL", "https://form.typeform.com/to/UvpPrheO"),
+  empowerTypeformEnabled: opt("EMPOWER_TYPEFORM_ENABLED", "false") === "true",
+  empowerTypeformTeamId: opt("EMPOWER_TYPEFORM_TEAM_ID", "803"),
+  empowerTypeformEmailDomain: opt("EMPOWER_TYPEFORM_EMAIL_DOMAIN", "solarpros.io"),
+  /**
+   * Empower partner onboarding — Jobflo crash-course SMS (SOP step 6).
+   * Uses Twilio. Defaults to disabled until credentials + enablement.
+   */
+  empowerJobfloVideoUrl: opt(
+    "EMPOWER_JOBFLO_VIDEO_URL",
+    "https://www.loom.com/share/8e99f6aa14ae47e8ac30f32ff42801ba",
+  ),
+  empowerSmsEnabled: opt("EMPOWER_SMS_ENABLED", "false") === "true",
+  /**
    * Tron partner onboarding — JotForm "Log-In Request Form" submit.
    * Both prior blockers are resolved:
    *  1. DOB — Sequifi's GET /v1/users now returns a top-level `dob` field
@@ -173,16 +192,10 @@ export const env = {
   jotformTronEnabled: opt("JOTFORM_TRON_ENABLED", "false") === "true",
   /**
    * GoodPWR partner onboarding — "New Sales Rep Onboarding" Google Form submit.
-   * 9 of 11 fields are auto-fillable (name/email/phone from Sequifi; Sales Org,
-   * Markets, HIS License, Enerflo=Yes are static per the SOP). Preferred Lender
-   * and Preferred TPO are both required by the form but have NO source in
-   * Sequifi today (SOP says "Ask Manager") — resolveGoodPwrLender/TPO() checks a
-   * few plausible custom-field names in case ops adds them later, but as of the
-   * last live check (all active Sequifi users scanned) neither field exists yet.
-   * PENDING: defaults to disabled. A job missing Lender/TPO fails cleanly with a
-   * clear reason (same pattern as Tron's missing-DOB case) instead of silently
-   * submitting an incomplete form. Flip GOODPWR_FORM_ENABLED=true once ops adds
-   * those two custom fields in Sequifi (or another source is agreed on).
+   * Name/email/phone from Sequifi; Sales Org, Markets, HIS, Enerflo=Yes are
+   * static per the SOP. Preferred Lender defaults to Sungage and Preferred TPO
+   * to LightReach (SOP); Sequifi custom fields override when present.
+   * Defaults to disabled — flip GOODPWR_FORM_ENABLED=true to go live.
    */
   googleFormsGoodPwrFormId: opt(
     "GOODPWR_FORM_ID",
@@ -240,4 +253,16 @@ export const env = {
    */
   iconPowerFormPublishKey: opt("ICON_POWER_FORM_PUBLISH_KEY", "019adb83223c7b2180542e382343d5f1"),
   iconPowerFormEnabled: opt("ICON_POWER_FORM_ENABLED", "false") === "true",
+  /**
+   * SolQ — LeadConnector Employee Submission form + link-tree SMS.
+   * Trigger: Other Installers? contains SolQ/SOLQ. Form submitted via headless
+   * Chromium (Cloudflare blocks plain POST). Defaults to disabled until a live
+   * ZZTEST pass on Vercel.
+   */
+  solqFormUrl: opt("SOLQ_FORM_URL", "https://msg.black33.io/widget/form/zEAvzxnz1cl1TTDNNMSz"),
+  solqFormEnabled: opt("SOLQ_FORM_ENABLED", "false") === "true",
+  solqFormSubmitterName: opt("SOLQ_FORM_SUBMITTER_NAME", "Nox Power Admin"),
+  solqOutsideOrgName: opt("SOLQ_OUTSIDE_ORG_NAME", "Solar Pros"),
+  solqLinksUrl: opt("SOLQ_LINKS_URL", "https://solarquotespv.com/sq/tools/lt-freedompros.php"),
+  solqSmsEnabled: opt("SOLQ_SMS_ENABLED", "false") === "true",
 };
