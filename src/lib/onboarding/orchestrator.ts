@@ -56,7 +56,14 @@ import {
   resolveUpnForUser,
 } from "@/lib/microsoft/graph-users";
 import { sendMailAsUser, isGraphMailConfigured } from "@/lib/microsoft/graph-mail";
-import { fetchAllSequifiUsers, fetchSequifiUserById, filterUsersByGoLive, filterUsersByOnboardingComplete, isSequifiOnboardingComplete } from "@/lib/sequifi/client";
+import {
+  canBypassOnboardingComplete,
+  fetchAllSequifiUsers,
+  fetchSequifiUserById,
+  filterUsersByGoLive,
+  filterUsersByOnboardingComplete,
+  isSequifiOnboardingComplete,
+} from "@/lib/sequifi/client";
 import {
   appendSequifiUserToInstallerRosterSheets,
   sequifiUserFromOnboardingJob,
@@ -170,7 +177,12 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
     if (!user) {
       const hired = filterUsersByGoLive(await fetchAllSequifiUsers());
       const found = hired.find(u => u.id === sequifiUserId);
-      if (found && !isSequifiOnboardingComplete(found) && env.onboardingRequireSequifiComplete) {
+      if (
+        found &&
+        !isSequifiOnboardingComplete(found) &&
+        !canBypassOnboardingComplete(found) &&
+        env.onboardingRequireSequifiComplete
+      ) {
         return {
           sequifiUserId,
           ok: false,

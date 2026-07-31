@@ -133,7 +133,20 @@ export function isSequifiOnboardingComplete(user: SequifiUserRecord): boolean {
   return false;
 }
 
+/** ZZTEST allowlist — may proceed when Sequifi onboarding_complete is still 0. */
+export function canBypassOnboardingComplete(user: { id: number | string }): boolean {
+  const raw = env.onboardingBypassCompleteUserIds?.trim() ?? "";
+  if (!raw) return false;
+  const ids = new Set(
+    raw
+      .split(/[,;\s]+/)
+      .map(s => s.trim())
+      .filter(Boolean),
+  );
+  return ids.has(String(user.id));
+}
+
 export function filterUsersByOnboardingComplete(users: SequifiUserRecord[]): SequifiUserRecord[] {
   if (!env.onboardingRequireSequifiComplete) return users;
-  return users.filter(isSequifiOnboardingComplete);
+  return users.filter(u => isSequifiOnboardingComplete(u) || canBypassOnboardingComplete(u));
 }
