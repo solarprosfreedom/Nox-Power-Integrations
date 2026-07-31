@@ -162,7 +162,7 @@ export async function submitEmpowerTypeformViaBrowser(
       let target: (typeof handles)[number] | null = null;
       let role = "";
       for (const h of handles) {
-        const meta = await h.evaluate(btn => {
+        const meta = await h.evaluate((btn: HTMLElement) => {
           const lines = (btn.innerText || "")
             .split("\n")
             .map(s => s.trim())
@@ -194,7 +194,7 @@ export async function submitEmpowerTypeformViaBrowser(
       await sleep(350);
 
       if (requireChecked || role === "checkbox") {
-        const checked = await target.evaluate(btn => btn.getAttribute("aria-checked"));
+        const checked = await target.evaluate((btn: HTMLElement) => btn.getAttribute("aria-checked"));
         if (checked !== "true") {
           throw new Error(`Typeform choice did not stay selected: ${label}`);
         }
