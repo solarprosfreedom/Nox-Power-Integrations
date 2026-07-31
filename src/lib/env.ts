@@ -29,6 +29,11 @@ export const env = {
   enerfloDefaultAssignEmail: opt("ENERFLO_DEFAULT_ASSIGN_EMAIL"),
   terrosApiBaseUrl: opt("TERROS_API_BASE_URL", "https://api.terros.com"),
   terrosApiKey: opt("TERROS_API_KEY"),
+  /**
+   * Sequifi office_name → Terros team aliases when Sequifi only stores the region/org
+   * (e.g. `Envision:Scarface`). Comma-separated `From:To` pairs; merges with built-ins.
+   */
+  terrosOfficeTeamAliases: opt("TERROS_OFFICE_TEAM_ALIASES"),
   /** If set, Terros webhooks must send the same value in `X-Terros-Webhook-Secret` or `X-Webhook-Secret`. */
   terrosWebhookSecret: opt("TERROS_WEBHOOK_SECRET"),
   /**

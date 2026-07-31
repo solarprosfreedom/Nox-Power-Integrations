@@ -56,10 +56,38 @@ export function buildTerrosTeamCatalog(users: Record<string, unknown>[]): Map<st
 }
 
 /**
+ * Sequifi sometimes stores only the region/org as office_name (e.g. "Envision")
+ * when the Terros team is a named squad under that org (e.g. "Scarface").
+ * Built-in defaults; override/extend with TERROS_OFFICE_TEAM_ALIASES
+ * (`Envision:Scarface,Other:Team Name`).
+ */
+const DEFAULT_OFFICE_TEAM_ALIASES: Record<string, string> = {
+  envision: "Scarface",
+};
+
+export function officeTeamAliases(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [from, to] of Object.entries(DEFAULT_OFFICE_TEAM_ALIASES)) {
+    map.set(canonicalTeamKey(from), to.trim());
+  }
+  const raw = env.terrosOfficeTeamAliases?.trim();
+  if (raw) {
+    for (const part of raw.split(/[,;]+/)) {
+      const idx = part.indexOf(":");
+      if (idx <= 0) continue;
+      const from = canonicalTeamKey(part.slice(0, idx));
+      const to = part.slice(idx + 1).trim();
+      if (from && to) map.set(from, to);
+    }
+  }
+  return map;
+}
+
+/**
  * Pure matcher: resolve a Sequifi office_name against an already-built team
  * catalog. Exported separately so tests can exercise the matching rules
- * (exact-after-stripping, no match, ambiguous match) without any network
- * calls — see resolveTerrosTeamForOffice() for the live-fetching wrapper.
+ * (exact-after-stripping, aliases, no match, ambiguous match) without any
+ * network calls — see resolveTerrosTeamForOffice() for the live-fetching wrapper.
  */
 export function matchTerrosTeamForOffice(
   officeName: string | null | undefined,
@@ -74,23 +102,26 @@ export function matchTerrosTeamForOffice(
     };
   }
 
-  const needle = canonicalTeamKey(baseName);
+  const aliasTo = officeTeamAliases().get(canonicalTeamKey(baseName));
+  const lookupName = aliasTo ?? baseName;
+  const needle = canonicalTeamKey(lookupName);
   const matches = catalog.get(needle) ?? [];
 
   if (matches.length === 1) {
     return { ok: true, team: matches[0]! };
   }
   if (matches.length === 0) {
+    const lookedFor = aliasTo ? `${lookupName} (alias for "${baseName}")` : baseName;
     return {
       ok: false,
-      reason: `No Terros team found matching Sequifi office "${officeName}" (looked for "${baseName}")`,
+      reason: `No Terros team found matching Sequifi office "${officeName}" (looked for "${lookedFor}")`,
     };
   }
   return {
     ok: false,
     reason:
       `Ambiguous Terros team for Sequifi office "${officeName}" — ${matches.length} teams named ` +
-      `"${baseName}" (${matches.map(m => m.teamId).join(", ")})`,
+      `"${lookupName}" (${matches.map(m => m.teamId).join(", ")})`,
   };
 }
 

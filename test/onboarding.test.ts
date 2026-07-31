@@ -1210,6 +1210,10 @@ describe("Terros team resolution (POST /user/add now requires a team)", () => {
     const terrosHasNoSuffix = matchTerrosTeamForOffice("Scarface (Envision)", catalog);
     assert.deepEqual(terrosHasNoSuffix, { ok: true, team: { teamId: "Team.e4SgFcv3", teamName: "Scarface" } });
 
+    // Sequifi office is only the region "Envision" — alias to Terros team Scarface.
+    const regionOnly = matchTerrosTeamForOffice("Envision", catalog);
+    assert.deepEqual(regionOnly, { ok: true, team: { teamId: "Team.e4SgFcv3", teamName: "Scarface" } });
+
     // Sequifi says plain "Prosper"; Terros's team is "Prosper (Mambas)".
     const sequifiHasNoSuffix = matchTerrosTeamForOffice("Prosper", catalog);
     assert.deepEqual(sequifiHasNoSuffix, { ok: true, team: { teamId: "Team.d6YVAlHT", teamName: "Prosper (Mambas)" } });
