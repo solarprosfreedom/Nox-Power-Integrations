@@ -57,12 +57,12 @@ import {
 } from "@/lib/microsoft/graph-users";
 import { sendMailAsUser, isGraphMailConfigured } from "@/lib/microsoft/graph-mail";
 import {
-  canBypassOnboardingComplete,
   fetchAllSequifiUsers,
   fetchSequifiUserById,
   filterUsersByGoLive,
   filterUsersByOnboardingComplete,
   isSequifiOnboardingComplete,
+  isSequifiOnboardingCompleteBypassed,
 } from "@/lib/sequifi/client";
 import {
   appendSequifiUserToInstallerRosterSheets,
@@ -180,7 +180,7 @@ export async function provisionSequifiUserById(sequifiUserId: number): Promise<P
       if (
         found &&
         !isSequifiOnboardingComplete(found) &&
-        !canBypassOnboardingComplete(found) &&
+        !isSequifiOnboardingCompleteBypassed(found) &&
         env.onboardingRequireSequifiComplete
       ) {
         return {
