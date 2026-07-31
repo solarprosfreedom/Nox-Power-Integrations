@@ -376,9 +376,21 @@ export default function SequifiOnboardingTab() {
 
   async function handleRetry(jobId: string) {
     setRunning(true);
+    setMessage(`Retrying job ${jobId.slice(0, 8)}…`);
     try {
-      await retryOnboardingJob(jobId);
+      const { job } = await retryOnboardingJob(jobId);
       await refresh();
+      if (!job) {
+        setMessage(`Retry finished but job ${jobId.slice(0, 8)} was not found`);
+      } else {
+        const terros = job.terros_status;
+        setMessage(
+          `Retry ${job.first_name ?? ""} ${job.last_name ?? ""}: status=${job.status}, terros=${terros}` +
+            (job.last_error && job.status !== "completed" ? ` — ${job.last_error}` : ""),
+        );
+      }
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
     }

@@ -30,7 +30,7 @@ import {
   submitSolqForm,
   validateSolqFormFields,
 } from "@/lib/onboarding/solq-form";
-import { listOnboardingJobsSafe, loadJobById } from "@/lib/onboarding/repository";
+import { listOnboardingJobsSafe, loadJobById, updateJobStep } from "@/lib/onboarding/repository";
 import { scanSequifiMicrosoftGaps } from "@/lib/onboarding/microsoft-gap-scan";
 import { env } from "@/lib/env";
 
@@ -61,6 +61,17 @@ export async function provisionSequifiUsersBulkAction(sequifiUserIds: number[]) 
 }
 
 export async function retryOnboardingJob(jobId: string) {
+  const existing = await loadJobById(jobId);
+  if (!existing) return { job: null };
+  // Manual retry: clear exhausted attempt budget so a failed job can run again.
+  if (existing.attempt_count >= existing.max_attempts || existing.status === "failed") {
+    await updateJobStep(jobId, {
+      attempt_count: 0,
+      next_retry_at: null,
+      status: "pending",
+      last_error: null,
+    });
+  }
   const job = await runOnboardingJob(jobId);
   return { job };
 }

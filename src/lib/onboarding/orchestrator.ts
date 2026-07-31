@@ -600,10 +600,12 @@ export async function runOnboardingJob(
           } else {
             stepErrors.terros_welcome = stepErrors.terros_welcome ?? "skipped_existing";
           }
+          delete stepErrors.terros;
           await updateJobStep(job.id, {
             terros_status: "success",
             terros_user_id: result.userId ?? undefined,
             step_errors: stepErrors,
+            last_error: null,
           });
         }
       }
