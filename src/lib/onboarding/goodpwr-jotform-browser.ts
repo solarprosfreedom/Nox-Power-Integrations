@@ -7,42 +7,20 @@
  * Form: https://form.jotform.com/261804783661160
  */
 import type { GoodPwrFormFields } from "@/lib/onboarding/goodpwr-form";
+import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
 
 export interface BrowserSubmitResult {
   status: "sent" | "failed";
   reason?: string;
 }
 
-function isServerlessRuntime(): boolean {
-  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-}
-
-type PuppeteerBrowser = {
-  newPage: () => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  close: () => Promise<void>;
-};
-
-async function launchBrowser(): Promise<PuppeteerBrowser> {
-  if (isServerlessRuntime()) {
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const puppeteer = await import("puppeteer-core");
-    return (await puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    })) as unknown as PuppeteerBrowser;
-  }
-  const puppeteer = await import("puppeteer");
-  return (await puppeteer.launch({ headless: true })) as unknown as PuppeteerBrowser;
-}
-
 export async function submitGoodPwrJotFormViaBrowser(
   fields: GoodPwrFormFields,
   formId: string,
 ): Promise<BrowserSubmitResult> {
-  let browser: PuppeteerBrowser | null = null;
+  let browser: HeadlessBrowser | null = null;
   try {
-    browser = await launchBrowser();
+    browser = await launchHeadlessBrowser();
     const page = await browser.newPage();
     await page.setDefaultNavigationTimeout(45000);
     await page.setDefaultTimeout(20000);

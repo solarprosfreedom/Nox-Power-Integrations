@@ -8,48 +8,12 @@
  * Vue-multiselect picklists + Vue datepicker; Rep Card / shirt / coat / headshot
  * intentionally left blank per SOP.
  */
+import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
 import type { SolqFormFields } from "@/lib/onboarding/solq-form";
 
 export interface BrowserSubmitResult {
   status: "sent" | "failed";
   reason?: string;
-}
-
-function isServerlessRuntime(): boolean {
-  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-}
-
-type PuppeteerPage = {
-  goto: (url: string, opts?: object) => Promise<unknown>;
-  setDefaultNavigationTimeout: (ms: number) => void;
-  setDefaultTimeout: (ms: number) => void;
-  setViewport: (v: { width: number; height: number }) => Promise<unknown>;
-  waitForSelector: (s: string, opts?: object) => Promise<unknown>;
-  click: (s: string) => Promise<void>;
-  $: (s: string) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  $$: (s: string) => Promise<any[]>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  evaluate: (fn: any, ...args: any[]) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  type: (s: string, text: string, opts?: object) => Promise<void>;
-  keyboard: { press: (key: string) => Promise<void> };
-};
-
-type PuppeteerBrowser = {
-  newPage: () => Promise<PuppeteerPage>;
-  close: () => Promise<void>;
-};
-
-async function launchBrowser(): Promise<PuppeteerBrowser> {
-  if (isServerlessRuntime()) {
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const puppeteer = await import("puppeteer-core");
-    return (await puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    })) as unknown as PuppeteerBrowser;
-  }
-  const puppeteer = await import("puppeteer");
-  return (await puppeteer.launch({ headless: true })) as unknown as PuppeteerBrowser;
 }
 
 function formatPhone(raw: string): string {
@@ -71,9 +35,9 @@ export async function submitSolqFormViaBrowser(
   fields: SolqFormFields,
   formUrl: string,
 ): Promise<BrowserSubmitResult> {
-  let browser: PuppeteerBrowser | null = null;
+  let browser: HeadlessBrowser | null = null;
   try {
-    browser = await launchBrowser();
+    browser = await launchHeadlessBrowser();
     const page = await browser.newPage();
     await page.setDefaultNavigationTimeout(60000);
     await page.setDefaultTimeout(25000);

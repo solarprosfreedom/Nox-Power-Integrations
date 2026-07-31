@@ -16,43 +16,15 @@
  * CONFIRMED LIVE: a manual dry run of this exact flow reached JotForm's real
  * "Thank You!" page (no CAPTCHA) — see chat history for the captured request.
  *
- * RUNTIME: uses @sparticuz/chromium + puppeteer-core in serverless/Lambda-like
- * environments (Vercel), and falls back to full `puppeteer`'s bundled Chromium
- * for local dev (full `puppeteer` is a devDependency only — it isn't available
- * in production, so the two code paths are mutually exclusive by environment).
+ * RUNTIME: shared launchHeadlessBrowser — @sparticuz/chromium on Vercel
+ * (with remote pack fallback), full puppeteer locally.
  */
+import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
 import type { TronJotFormFields } from "@/lib/onboarding/tron-jotform";
 
 export interface BrowserSubmitResult {
   status: "sent" | "failed";
   reason?: string;
-}
-
-function isServerlessRuntime(): boolean {
-  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-}
-
-/** Minimal shape we need from either puppeteer or puppeteer-core, to keep this
- * file untyped against whichever package actually ends up loaded at runtime. */
-type PuppeteerBrowser = {
-  newPage: () => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  close: () => Promise<void>;
-};
-
-async function launchBrowser(): Promise<PuppeteerBrowser> {
-  if (isServerlessRuntime()) {
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const puppeteer = await import("puppeteer-core");
-    return (await puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    })) as unknown as PuppeteerBrowser;
-  }
-  // Local dev/test only — `puppeteer` (full, bundles its own Chromium) is a
-  // devDependency and won't exist in a production install.
-  const puppeteer = await import("puppeteer");
-  return (await puppeteer.launch({ headless: true })) as unknown as PuppeteerBrowser;
 }
 
 /** Format {month, day, year} into JotForm's masked "MM-DD-YYYY" date-lite field. */
@@ -65,9 +37,9 @@ export async function submitTronJotFormViaBrowser(
   fields: TronJotFormFields,
   formId: string,
 ): Promise<BrowserSubmitResult> {
-  let browser: PuppeteerBrowser | null = null;
+  let browser: HeadlessBrowser | null = null;
   try {
-    browser = await launchBrowser();
+    browser = await launchHeadlessBrowser();
     const page = await browser.newPage();
     await page.setDefaultNavigationTimeout(45000);
     await page.setDefaultTimeout(20000);

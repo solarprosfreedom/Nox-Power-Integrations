@@ -3,8 +3,7 @@
  *
  * Typeform's public API can retrieve responses but cannot create them, so we
  * drive the published form the same way a human would (welcome → fields →
- * thank-you). Runtime mirrors Tron: @sparticuz/chromium + puppeteer-core on
- * Vercel; full puppeteer locally.
+ * thank-you). Runtime uses shared launchHeadlessBrowser.
  *
  * Live form notes (https://form.typeform.com/to/UvpPrheO):
  * - Free-form navigation stacks questions; inactive blocks have `inert` +
@@ -13,51 +12,11 @@
  *   Cmd+Enter.
  */
 import type { EmpowerTypeformFields } from "@/lib/onboarding/empower-typeform";
+import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
 
 export interface BrowserSubmitResult {
   status: "sent" | "failed";
   reason?: string;
-}
-
-function isServerlessRuntime(): boolean {
-  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-}
-
-type PuppeteerPage = {
-  goto: (url: string, opts?: object) => Promise<unknown>;
-  setDefaultNavigationTimeout: (ms: number) => void;
-  setDefaultTimeout: (ms: number) => void;
-  setViewport: (v: { width: number; height: number }) => Promise<unknown>;
-  waitForSelector: (s: string, opts?: object) => Promise<unknown>;
-  click: (s: string) => Promise<void>;
-  $: (s: string) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  $$: (s: string) => Promise<any[]>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  evaluate: (fn: any, ...args: any[]) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  keyboard: {
-    press: (key: string) => Promise<void>;
-    down: (key: string) => Promise<void>;
-    up: (key: string) => Promise<void>;
-  };
-  focus: (s: string) => Promise<void>;
-};
-
-type PuppeteerBrowser = {
-  newPage: () => Promise<PuppeteerPage>;
-  close: () => Promise<void>;
-};
-
-async function launchBrowser(): Promise<PuppeteerBrowser> {
-  if (isServerlessRuntime()) {
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const puppeteer = await import("puppeteer-core");
-    return (await puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    })) as unknown as PuppeteerBrowser;
-  }
-  const puppeteer = await import("puppeteer");
-  return (await puppeteer.launch({ headless: true })) as unknown as PuppeteerBrowser;
 }
 
 function formatPhoneForTypeform(raw: string): string {
@@ -72,9 +31,9 @@ export async function submitEmpowerTypeformViaBrowser(
   fields: EmpowerTypeformFields,
   formUrl: string,
 ): Promise<BrowserSubmitResult> {
-  let browser: PuppeteerBrowser | null = null;
+  let browser: HeadlessBrowser | null = null;
   try {
-    browser = await launchBrowser();
+    browser = await launchHeadlessBrowser();
     const page = await browser.newPage();
     await page.setDefaultNavigationTimeout(60000);
     await page.setDefaultTimeout(25000);

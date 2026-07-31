@@ -165,6 +165,11 @@ export const env = {
   /** Always on — Empwr HubSpot form submit uses public form IDs (no API key). */
   hubspotEmpwrEnabled: true,
   /**
+   * Optional remote Chromium pack for Vercel when `@sparticuz/chromium/bin` is
+   * missing from the serverless bundle. Defaults to the v149 x64 pack in code.
+   */
+  chromiumRemoteExecPath: opt("CHROMIUM_REMOTE_EXEC_PATH"),
+  /**
    * Empower partner onboarding — "Empower New Rep Request" Typeform
    * (https://form.typeform.com/to/UvpPrheO). Triggered by Other Installers /
    * Empower tab (not Empwr HubSpot). Closers only (setters skip). Submitted via
