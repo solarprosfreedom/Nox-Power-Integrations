@@ -162,7 +162,8 @@ export const env = {
   hubspotEmpwrFormGuid: opt("HUBSPOT_EMPWR_FORM_GUID", "bf39525c-6a76-4679-acca-459f92f20ded"),
   hubspotEmpwrApiBase: opt("HUBSPOT_EMPWR_API_BASE", "https://api-na2.hsforms.com"),
   hubspotEmpwrCompany: opt("HUBSPOT_EMPWR_COMPANY", "Nox Power"),
-  hubspotEmpwrEnabled: opt("HUBSPOT_EMPWR_ENABLED", "true") === "true",
+  /** Always on — Empwr HubSpot form submit uses public form IDs (no API key). */
+  hubspotEmpwrEnabled: true,
   /**
    * Empower partner onboarding — "Empower New Rep Request" Typeform
    * (https://form.typeform.com/to/UvpPrheO). Triggered by Other Installers /

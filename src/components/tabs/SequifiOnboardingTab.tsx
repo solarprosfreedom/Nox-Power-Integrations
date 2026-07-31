@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   checkOnboardingUserExists,
   getOnboardingConfig,
@@ -17,6 +17,10 @@ import {
   submitSolqFormForJob,
 } from "@/app/actions/onboarding";
 import type { MicrosoftGapStatus, SequifiMicrosoftGapRow } from "@/lib/onboarding/microsoft-gap-scan";
+import {
+  getEligiblePartnerSteps,
+  type PartnerStepUiStatus,
+} from "@/lib/onboarding/partner-steps";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
@@ -157,6 +161,50 @@ function StatusPill({ status }: { status: string }) {
     >
       {status}
     </span>
+  );
+}
+
+function PartnerStepStatusPill({ status }: { status: PartnerStepUiStatus }) {
+  const styles: Record<PartnerStepUiStatus, string> = {
+    completed: "bg-emerald-900/40 text-emerald-300",
+    failed: "bg-red-900/40 text-red-300",
+    pending: "bg-amber-900/30 text-amber-300",
+  };
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${styles[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+function PartnerStepsPanel({ job }: { job: OnboardingJob }) {
+  const steps = getEligiblePartnerSteps(job);
+  if (steps.length === 0) {
+    return <p className="text-xs text-gray-600">No eligible partner sheets/forms for this job.</p>;
+  }
+  const failed = steps.filter(s => s.status === "failed").length;
+  const completed = steps.filter(s => s.status === "completed").length;
+  const pending = steps.filter(s => s.status === "pending").length;
+  return (
+    <div className="mt-1 space-y-1">
+      <p className="text-[11px] text-gray-500">
+        Sheets/forms: {completed} done · {failed} failed · {pending} pending
+        {failed + pending > 0 ? " · Retry re-runs failed/pending only" : ""}
+      </p>
+      <ul className="space-y-0.5">
+        {steps.map(step => (
+          <li key={step.key} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+            <PartnerStepStatusPill status={step.status} />
+            <span className="text-gray-300">{step.label}</span>
+            {step.detail && (
+              <span className="text-gray-500 truncate max-w-[420px]" title={step.detail}>
+                {step.detail}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -407,27 +455,16 @@ export default function SequifiOnboardingTab() {
         setMessage(`Partner retry finished but job ${jobId.slice(0, 8)} was not found`);
         return;
       }
-      const errs = job.step_errors ?? {};
-      const partnerKeys = [
-        "google_sheets",
-        "empwr_hubspot",
-        "empower_typeform",
-        "empower_text",
-        "tron_jotform",
-        "goodpwr_form",
-        "goodpwr_text",
-        "better_earth_form",
-        "bps_form",
-        "solq_form",
-        "solq_text",
-      ];
-      const failed = partnerKeys
-        .filter(k => errs[k] && errs[k] !== "sent" && !errs[k].startsWith("appended:") && errs[k] !== "already in sheet")
-        .map(k => `${k}=${errs[k]}`);
+      const steps = getEligiblePartnerSteps(job);
+      const failed = steps.filter(s => s.status === "failed");
+      const retriedOk = steps.filter(s => s.status === "completed").length;
       setMessage(
         failed.length
-          ? `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: still failing — ${failed.slice(0, 3).join("; ")}`
-          : `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: sheets/forms re-ran (sent steps skipped)`,
+          ? `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: ${retriedOk} done, ${failed.length} still failing — ${failed
+              .slice(0, 3)
+              .map(s => `${s.label}: ${s.detail}`)
+              .join("; ")}`
+          : `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: ${retriedOk} eligible step(s) completed (already-sent skipped)`,
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -897,99 +934,109 @@ export default function SequifiOnboardingTab() {
               </thead>
               <tbody>
                 {jobs.map(job => (
-                  <tr key={job.id} className="border-b border-gray-800/60">
-                    <td className="px-4 py-2 text-gray-200 whitespace-nowrap">
-                      {[job.first_name, job.last_name].filter(Boolean).join(" ") || "—"}
-                    </td>
-                    <td className="px-4 py-2 text-gray-400 text-xs">{job.email}</td>
-                    <td className="px-4 py-2">
-                      <StatusPill status={job.microsoft_status} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusPill status={job.enerflo_status} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusPill status={job.terros_status} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusPill status={job.welcome_email_status} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusPill status={job.status} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <div className="flex flex-col gap-1">
-                        {job.status !== "completed" && !config?.dryRun && (
-                          <button
-                            type="button"
-                            onClick={() => handleRetry(job.id)}
-                            disabled={running}
-                            className="text-xs text-violet-400 hover:text-violet-300 text-left disabled:opacity-50"
-                          >
-                            Retry
-                          </button>
-                        )}
-                        {job.status === "completed" && !config?.dryRun && (
-                          <button
-                            type="button"
-                            onClick={() => handleRetryPartnerSteps(job.id)}
-                            disabled={running}
-                            className="text-xs text-amber-400 hover:text-amber-300 text-left disabled:opacity-50"
-                          >
-                            Retry sheets/forms
-                          </button>
-                        )}
-                        {job.status === "completed" &&
-                          config?.empwrHubSpotConfigured &&
-                          jobHasEmpwrTab(job) && (
+                  <Fragment key={job.id}>
+                    <tr className="border-b border-gray-800/60">
+                      <td className="px-4 py-2 text-gray-200 whitespace-nowrap">
+                        {[job.first_name, job.last_name].filter(Boolean).join(" ") || "—"}
+                      </td>
+                      <td className="px-4 py-2 text-gray-400 text-xs">{job.email}</td>
+                      <td className="px-4 py-2">
+                        <StatusPill status={job.microsoft_status} />
+                      </td>
+                      <td className="px-4 py-2">
+                        <StatusPill status={job.enerflo_status} />
+                      </td>
+                      <td className="px-4 py-2">
+                        <StatusPill status={job.terros_status} />
+                      </td>
+                      <td className="px-4 py-2">
+                        <StatusPill status={job.welcome_email_status} />
+                      </td>
+                      <td className="px-4 py-2">
+                        <StatusPill status={job.status} />
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex flex-col gap-1">
+                          {job.status !== "completed" && !config?.dryRun && (
                             <button
                               type="button"
-                              onClick={() => handleEmpwrHubSpot(job.id)}
-                              disabled={hubspotJobId === job.id}
-                              className="text-xs text-orange-400 hover:text-orange-300 text-left disabled:opacity-50"
+                              onClick={() => handleRetry(job.id)}
+                              disabled={running}
+                              className="text-xs text-violet-400 hover:text-violet-300 text-left disabled:opacity-50"
                             >
-                              {hubspotJobId === job.id
-                                ? "HubSpot…"
-                                : job.step_errors.empwr_hubspot === "sent"
-                                  ? "HubSpot sent"
-                                  : "EMPWR HubSpot"}
+                              Retry
                             </button>
                           )}
-                        {job.status === "completed" &&
-                          config?.empowerTypeformConfigured &&
-                          jobHasEmpowerTab(job) && (
+                          {job.status === "completed" && !config?.dryRun && (
                             <button
                               type="button"
-                              onClick={() => handleEmpowerTypeform(job.id)}
-                              disabled={empowerTypeformJobId === job.id}
-                              className="text-xs text-sky-400 hover:text-sky-300 text-left disabled:opacity-50"
+                              onClick={() => handleRetryPartnerSteps(job.id)}
+                              disabled={running}
+                              title="Re-runs failed/pending partner steps only; completed (sent) steps are skipped"
+                              className="text-xs text-amber-400 hover:text-amber-300 text-left disabled:opacity-50"
                             >
-                              {empowerTypeformJobId === job.id
-                                ? "Typeform…"
-                                : job.step_errors.empower_typeform === "sent"
-                                  ? "Typeform sent"
-                                  : "Empower Typeform"}
+                              Retry failed sheets/forms
                             </button>
                           )}
-                        {job.status === "completed" &&
-                          config?.solqFormConfigured &&
-                          jobHasSolqTab(job) && (
-                            <button
-                              type="button"
-                              onClick={() => handleSolqForm(job.id)}
-                              disabled={solqFormJobId === job.id}
-                              className="text-xs text-teal-400 hover:text-teal-300 text-left disabled:opacity-50"
-                            >
-                              {solqFormJobId === job.id
-                                ? "SolQ…"
-                                : job.step_errors.solq_form === "sent"
-                                  ? "SolQ form sent"
-                                  : "SolQ Form"}
-                            </button>
-                          )}
-                      </div>
-                    </td>
-                  </tr>
+                          {job.status === "completed" &&
+                            config?.empwrHubSpotConfigured &&
+                            jobHasEmpwrTab(job) && (
+                              <button
+                                type="button"
+                                onClick={() => handleEmpwrHubSpot(job.id)}
+                                disabled={hubspotJobId === job.id}
+                                className="text-xs text-orange-400 hover:text-orange-300 text-left disabled:opacity-50"
+                              >
+                                {hubspotJobId === job.id
+                                  ? "HubSpot…"
+                                  : job.step_errors.empwr_hubspot === "sent"
+                                    ? "HubSpot sent"
+                                    : "EMPWR HubSpot"}
+                              </button>
+                            )}
+                          {job.status === "completed" &&
+                            config?.empowerTypeformConfigured &&
+                            jobHasEmpowerTab(job) && (
+                              <button
+                                type="button"
+                                onClick={() => handleEmpowerTypeform(job.id)}
+                                disabled={empowerTypeformJobId === job.id}
+                                className="text-xs text-sky-400 hover:text-sky-300 text-left disabled:opacity-50"
+                              >
+                                {empowerTypeformJobId === job.id
+                                  ? "Typeform…"
+                                  : job.step_errors.empower_typeform === "sent"
+                                    ? "Typeform sent"
+                                    : "Empower Typeform"}
+                              </button>
+                            )}
+                          {job.status === "completed" &&
+                            config?.solqFormConfigured &&
+                            jobHasSolqTab(job) && (
+                              <button
+                                type="button"
+                                onClick={() => handleSolqForm(job.id)}
+                                disabled={solqFormJobId === job.id}
+                                className="text-xs text-teal-400 hover:text-teal-300 text-left disabled:opacity-50"
+                              >
+                                {solqFormJobId === job.id
+                                  ? "SolQ…"
+                                  : job.step_errors.solq_form === "sent"
+                                    ? "SolQ form sent"
+                                    : "SolQ Form"}
+                              </button>
+                            )}
+                        </div>
+                      </td>
+                    </tr>
+                    {job.status === "completed" && (
+                      <tr className="border-b border-gray-800/60">
+                        <td colSpan={8} className="px-4 pb-3 pt-0">
+                          <PartnerStepsPanel job={job} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

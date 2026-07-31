@@ -70,6 +70,7 @@ import {
 } from "@/lib/google-sheets/sync-roster";
 import { isGoogleSheetsConfigured } from "@/lib/google-sheets/client";
 import { appendSequifiUserToInstallerSharePointRosters, isSharePointRosterConfigured } from "@/lib/sharepoint/sync-roster";
+import { isPartnerStepSuccess } from "@/lib/onboarding/partner-steps";
 import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import { filterExcludedSequifiUsers, isSequifiUserExcluded } from "@/lib/onboarding/exclude";
 import {
@@ -784,7 +785,7 @@ export async function retryPartnerOnboardingSteps(jobId: string): Promise<Onboar
   const stepErrors = { ...existing.step_errors };
   for (const key of PARTNER_STEP_ERROR_KEYS) {
     const value = stepErrors[key];
-    if (value && value !== "sent" && !value.startsWith("appended:") && value !== "already in sheet") {
+    if (value && !isPartnerStepSuccess(value)) {
       delete stepErrors[key];
     }
   }
