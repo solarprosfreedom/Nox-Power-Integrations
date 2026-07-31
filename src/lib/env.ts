@@ -95,11 +95,6 @@ export const env = {
   /** When true (default), only provision reps with Sequifi onboarding_complete = 1. */
   onboardingRequireSequifiComplete:
     opt("ONBOARDING_REQUIRE_SEQUIFI_COMPLETE", "true") !== "false",
-  /**
-   * Comma-separated Sequifi user IDs that skip the onboarding_complete=1 gate
-   * (ZZTEST allowlist). Default includes Test Onboarding (id 334); clear after test.
-   */
-  onboardingCompleteBypassUserIds: opt("ONBOARDING_COMPLETE_BYPASS_USER_IDS", "334"),
   /** When true, log actions but do not create accounts or send email. */
   onboardingDryRun: opt("ONBOARDING_DRY_RUN", "true") === "true",
   /** When true, assign Microsoft 365 license after user create (default false for testing). */

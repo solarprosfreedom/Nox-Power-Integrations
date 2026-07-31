@@ -133,17 +133,17 @@ export function isSequifiOnboardingComplete(user: SequifiUserRecord): boolean {
   return false;
 }
 
-/** ZZTEST allowlist — Sequifi IDs that may onboard without onboarding_complete = 1. */
-export function isSequifiOnboardingCompleteBypassed(user: { id: number | string }): boolean {
-  const raw = env.onboardingCompleteBypassUserIds?.trim();
-  if (!raw) return false;
-  const ids = new Set(
-    raw
-      .split(/[,;\s]+/)
-      .map(s => s.trim())
-      .filter(Boolean),
-  );
-  return ids.has(String(user.id));
+/** Sequifi "Test Onboarding" only — may proceed when onboarding_complete is still 0. */
+const TEST_ONBOARDING_SEQUIFI_ID = 334;
+
+export function isSequifiOnboardingCompleteBypassed(user: {
+  id: number | string;
+  first_name?: string | null;
+  last_name?: string | null;
+}): boolean {
+  if (String(user.id) !== String(TEST_ONBOARDING_SEQUIFI_ID)) return false;
+  const name = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim().toLowerCase();
+  return name === "test onboarding";
 }
 
 export function filterUsersByOnboardingComplete(users: SequifiUserRecord[]): SequifiUserRecord[] {
