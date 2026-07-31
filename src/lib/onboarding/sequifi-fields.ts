@@ -1,3 +1,5 @@
+import { env } from "@/lib/env";
+
 export interface SequifiCustomField {
   id?: number;
   field_name?: string;
@@ -58,8 +60,16 @@ export function normalizeSequifiDobToIso(value: unknown): string {
   return "";
 }
 
+function defaultDobIso(): string {
+  return normalizeSequifiDobToIso(env.onboardingDefaultDob) || "1990-01-01";
+}
+
 /** Read DOB from Sequifi user payload (top-level `dob` first, then custom fields). */
-export function getSequifiDobIso(raw: Record<string, unknown>): string {
+export function getSequifiDobIso(
+  raw: Record<string, unknown>,
+  options?: { allowDefault?: boolean },
+): string {
+  const allowDefault = options?.allowDefault !== false;
   const candidates: unknown[] = [
     raw.dob,
     raw.date_of_birth,
@@ -72,13 +82,14 @@ export function getSequifiDobIso(raw: Record<string, unknown>): string {
     const iso = normalizeSequifiDobToIso(candidate);
     if (iso) return iso;
   }
-  return "";
+  return allowDefault ? defaultDobIso() : "";
 }
 
 export function getSequifiDobParts(
   raw: Record<string, unknown>,
+  options?: { allowDefault?: boolean },
 ): { month: string; day: string; year: string } | null {
-  const iso = getSequifiDobIso(raw);
+  const iso = getSequifiDobIso(raw, options);
   const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
   return { year: match[1]!, month: match[2]!, day: match[3]! };

@@ -110,6 +110,11 @@ export const env = {
   msUsageLocation: opt("MS_USAGE_LOCATION", "US"),
   /** Initial M365 password for new hires (included in welcome email). */
   onboardingDefaultPassword: opt("ONBOARDING_DEFAULT_PASSWORD", "Solar123"),
+  /**
+   * Fallback DOB (YYYY-MM-DD) when Sequifi `dob` is null — used by partner forms
+   * that require date of birth. Override with ONBOARDING_DEFAULT_DOB.
+   */
+  onboardingDefaultDob: opt("ONBOARDING_DEFAULT_DOB", "1990-01-01"),
   /** JSON map: Sequifi role/position substring → { enerfloRoles, terrosRoles, welcomeTemplate } */
   onboardingRoleMapJson: opt("ONBOARDING_ROLE_MAP_JSON"),
   /** UPN domain for new Microsoft users (default noxpwr.com). */

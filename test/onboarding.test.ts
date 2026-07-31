@@ -623,9 +623,22 @@ describe("Tron JotForm submission", () => {
       day: "07",
       year: "1990",
     });
-    assert.equal(resolveDob({ raw_sequifi_payload: { dob: null } } as never), null);
-    assert.equal(resolveDob({ raw_sequifi_payload: { dob: "not-a-date" } } as never), null);
-    assert.equal(resolveDob({ raw_sequifi_payload: {} } as never), null);
+    // Null / missing Sequifi dob falls back to ONBOARDING_DEFAULT_DOB (1990-01-01).
+    assert.deepEqual(resolveDob({ raw_sequifi_payload: { dob: null } } as never), {
+      month: "01",
+      day: "01",
+      year: "1990",
+    });
+    assert.deepEqual(resolveDob({ raw_sequifi_payload: { dob: "not-a-date" } } as never), {
+      month: "01",
+      day: "01",
+      year: "1990",
+    });
+    assert.deepEqual(resolveDob({ raw_sequifi_payload: {} } as never), {
+      month: "01",
+      day: "01",
+      year: "1990",
+    });
   });
 
   test("builds Tron JotForm fields and urlencoded submission body", () => {
