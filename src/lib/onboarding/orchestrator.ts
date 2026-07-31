@@ -674,62 +674,127 @@ export async function runOnboardingJob(
   job = (await loadJobById(jobId)) ?? job;
 
   if (job && !dryRun && job.microsoft_status === "success") {
-    const sheet = await appendJobToOnboardingRosterSheet(job);
-    const rosterErrors = { ...job.step_errors };
-    if (sheet.errors.length) {
-      rosterErrors.google_sheets = sheet.errors.join("; ");
-    } else if (sheet.appended > 0) {
-      rosterErrors.google_sheets = `appended:${sheet.appended}`;
-    } else if (sheet.skipped > 0) {
-      rosterErrors.google_sheets = "already in sheet";
-    } else if (!parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.length) {
-      rosterErrors.google_sheets = "no installer tabs";
-    }
-    if (Object.keys(rosterErrors).length) {
-      await updateJobStep(job.id, { step_errors: rosterErrors });
-    }
-    job = (await loadJobById(jobId)) ?? job;
+    job = (await syncRosterSheetsForJob(job.id)) ?? job;
   }
 
   if (job?.status === "completed") {
-    // Re-pull Sequifi so partner forms see latest dob / markets / HIS fields.
-    const latestUser = await fetchSequifiUserById(Number(job.sequifi_user_id)).catch(() => null);
-    if (latestUser) {
-      await refreshJobFromSequifiUser(job.id, latestUser);
-      job = (await loadJobById(jobId)) ?? job;
-    }
-
-    await sendOnboardingAdminNotification(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await sendAxiaOnboardingNotification(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitEmpwrHubSpotForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitEmpowerTypeform(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await sendEmpowerText(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitTronJotForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitGoodPwrForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await sendGoodPwrText(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitBetterEarthForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitBpsForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await appendGreenBrillianceRoster(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitIconPowerForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await submitSolqForm(job);
-    job = (await loadJobById(jobId)) ?? job;
-    await sendSolqText(job);
-    job = (await loadJobById(jobId)) ?? job;
+    job = (await runCompletedPartnerForms(job.id)) ?? job;
   }
 
   return job;
+}
+
+const PARTNER_STEP_ERROR_KEYS = [
+  "google_sheets",
+  "empwr_hubspot",
+  "empower_typeform",
+  "empower_text",
+  "tron_jotform",
+  "goodpwr_form",
+  "goodpwr_text",
+  "better_earth_form",
+  "bps_form",
+  "green_brilliance_roster",
+  "icon_power_form",
+  "solq_form",
+  "solq_text",
+] as const;
+
+async function syncRosterSheetsForJob(jobId: string): Promise<OnboardingJob | null> {
+  let job = await loadJobById(jobId);
+  if (!job || env.onboardingDryRun || job.microsoft_status !== "success") return job;
+
+  const sheet = await appendJobToOnboardingRosterSheet(job);
+  const rosterErrors = { ...job.step_errors };
+  if (sheet.errors.length) {
+    rosterErrors.google_sheets = sheet.errors.join("; ");
+  } else if (sheet.appended > 0) {
+    rosterErrors.google_sheets = `appended:${sheet.appended}`;
+  } else if (sheet.skipped > 0) {
+    rosterErrors.google_sheets = "already in sheet";
+  } else if (!parseSequifiFields(job.raw_sequifi_payload ?? {}).installerTabs.length) {
+    rosterErrors.google_sheets = "no installer tabs";
+  }
+  if (Object.keys(rosterErrors).length) {
+    await updateJobStep(job.id, { step_errors: rosterErrors });
+  }
+  return (await loadJobById(jobId)) ?? job;
+}
+
+/**
+ * Partner forms/SMS/notifications after core onboarding completes.
+ * Steps already marked `sent` are skipped by each submitter.
+ */
+export async function runCompletedPartnerForms(jobId: string): Promise<OnboardingJob | null> {
+  let job = await loadJobById(jobId);
+  if (!job || job.status !== "completed") return job;
+
+  // Re-pull Sequifi so partner forms see latest dob / markets / HIS fields.
+  const latestUser = await fetchSequifiUserById(Number(job.sequifi_user_id)).catch(() => null);
+  if (latestUser) {
+    await refreshJobFromSequifiUser(job.id, latestUser);
+    job = (await loadJobById(jobId)) ?? job;
+  }
+  if (!job) return null;
+
+  await sendOnboardingAdminNotification(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await sendAxiaOnboardingNotification(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitEmpwrHubSpotForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitEmpowerTypeform(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await sendEmpowerText(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitTronJotForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitGoodPwrForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await sendGoodPwrText(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitBetterEarthForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitBpsForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await appendGreenBrillianceRoster(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitIconPowerForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await submitSolqForm(job);
+  job = (await loadJobById(jobId)) ?? job;
+  await sendSolqText(job);
+  job = (await loadJobById(jobId)) ?? job;
+
+  return job;
+}
+
+/**
+ * Manual retry for sheets/forms on an already-completed job.
+ * Clears non-`sent` partner step_errors so failed steps run again; successful
+ * `sent` steps stay skipped.
+ */
+export async function retryPartnerOnboardingSteps(jobId: string): Promise<OnboardingJob | null> {
+  const existing = await loadJobById(jobId);
+  if (!existing) return null;
+  if (existing.status !== "completed") {
+    throw new Error("Partner-step retry requires a completed onboarding job");
+  }
+
+  const stepErrors = { ...existing.step_errors };
+  for (const key of PARTNER_STEP_ERROR_KEYS) {
+    const value = stepErrors[key];
+    if (value && value !== "sent" && !value.startsWith("appended:") && value !== "already in sheet") {
+      delete stepErrors[key];
+    }
+  }
+  if (stepErrors.icon_power_form !== "sent") {
+    delete stepErrors.icon_power_form_submission_id;
+  }
+  await updateJobStep(jobId, { step_errors: stepErrors });
+
+  await syncRosterSheetsForJob(jobId);
+  return runCompletedPartnerForms(jobId);
 }
 
 async function appendJobToOnboardingRosterSheet(

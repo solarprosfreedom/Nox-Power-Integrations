@@ -5,6 +5,7 @@ import {
   previewOnboardingFromSequifi,
   provisionSequifiUserById,
   provisionSequifiUsersBulk,
+  retryPartnerOnboardingSteps,
   runOnboardingCycle,
   runOnboardingJob,
 } from "@/lib/onboarding/orchestrator";
@@ -73,6 +74,12 @@ export async function retryOnboardingJob(jobId: string) {
     });
   }
   const job = await runOnboardingJob(jobId);
+  return { job };
+}
+
+/** Re-run failed roster sheet / partner form steps on a completed job. */
+export async function retryPartnerStepsForJob(jobId: string) {
+  const job = await retryPartnerOnboardingSteps(jobId);
   return { job };
 }
 

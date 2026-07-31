@@ -9,6 +9,7 @@ import {
   provisionSequifiUser,
   provisionSequifiUsersBulkAction,
   retryOnboardingJob,
+  retryPartnerStepsForJob,
   runHiredOnboardingNow,
   scanSequifiMicrosoftGapList,
   submitEmpwrHubSpotForJob,
@@ -389,6 +390,45 @@ export default function SequifiOnboardingTab() {
             (job.last_error && job.status !== "completed" ? ` — ${job.last_error}` : ""),
         );
       }
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleRetryPartnerSteps(jobId: string) {
+    setRunning(true);
+    setMessage(`Retrying partner sheets/forms for ${jobId.slice(0, 8)}…`);
+    try {
+      const { job } = await retryPartnerStepsForJob(jobId);
+      await refresh();
+      if (!job) {
+        setMessage(`Partner retry finished but job ${jobId.slice(0, 8)} was not found`);
+        return;
+      }
+      const errs = job.step_errors ?? {};
+      const partnerKeys = [
+        "google_sheets",
+        "empwr_hubspot",
+        "empower_typeform",
+        "empower_text",
+        "tron_jotform",
+        "goodpwr_form",
+        "goodpwr_text",
+        "better_earth_form",
+        "bps_form",
+        "solq_form",
+        "solq_text",
+      ];
+      const failed = partnerKeys
+        .filter(k => errs[k] && errs[k] !== "sent" && !errs[k].startsWith("appended:") && errs[k] !== "already in sheet")
+        .map(k => `${k}=${errs[k]}`);
+      setMessage(
+        failed.length
+          ? `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: still failing — ${failed.slice(0, 3).join("; ")}`
+          : `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: sheets/forms re-ran (sent steps skipped)`,
+      );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -883,9 +923,20 @@ export default function SequifiOnboardingTab() {
                           <button
                             type="button"
                             onClick={() => handleRetry(job.id)}
-                            className="text-xs text-violet-400 hover:text-violet-300 text-left"
+                            disabled={running}
+                            className="text-xs text-violet-400 hover:text-violet-300 text-left disabled:opacity-50"
                           >
                             Retry
+                          </button>
+                        )}
+                        {job.status === "completed" && !config?.dryRun && (
+                          <button
+                            type="button"
+                            onClick={() => handleRetryPartnerSteps(job.id)}
+                            disabled={running}
+                            className="text-xs text-amber-400 hover:text-amber-300 text-left disabled:opacity-50"
+                          >
+                            Retry sheets/forms
                           </button>
                         )}
                         {job.status === "completed" &&
