@@ -38,6 +38,53 @@ export function isSequifiYes(value: string | null | undefined): boolean {
 }
 
 /**
+ * Normalize Sequifi DOB values to `YYYY-MM-DD`.
+ * Live GET /v1/users exposes top-level `dob` as that ISO date string for most
+ * active reps; also accept common alternates / custom-field labels.
+ */
+export function normalizeSequifiDobToIso(value: unknown): string {
+  if (value == null) return "";
+  const s = String(value).trim();
+  if (!s || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") return "";
+
+  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+
+  const mdy = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+  if (mdy) {
+    return `${mdy[3]}-${mdy[1]!.padStart(2, "0")}-${mdy[2]!.padStart(2, "0")}`;
+  }
+
+  return "";
+}
+
+/** Read DOB from Sequifi user payload (top-level `dob` first, then custom fields). */
+export function getSequifiDobIso(raw: Record<string, unknown>): string {
+  const candidates: unknown[] = [
+    raw.dob,
+    raw.date_of_birth,
+    raw.dateOfBirth,
+    getSequifiFieldValue(raw, "Date of Birth"),
+    getSequifiFieldValue(raw, "DOB"),
+    getSequifiFieldValue(raw, "Birth Date"),
+  ];
+  for (const candidate of candidates) {
+    const iso = normalizeSequifiDobToIso(candidate);
+    if (iso) return iso;
+  }
+  return "";
+}
+
+export function getSequifiDobParts(
+  raw: Record<string, unknown>,
+): { month: string; day: string; year: string } | null {
+  const iso = getSequifiDobIso(raw);
+  const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return { year: match[1]!, month: match[2]!, day: match[3]! };
+}
+
+/**
  * Sequifi has, at least once (Axia, around 2026-07-17), silently renamed a
  * custom-field question's label — the short "Onboard to Axia?" became
  * "Please select which installer(s) the user needs to be onboarded to.
@@ -90,8 +137,11 @@ export function parseSequifiFields(raw: Record<string, unknown>): ParsedSequifiF
     }
   }
 
+  // Sequifi has used both "market(s)" and "state(s)" labels for the same question.
   const markets =
     getSequifiFieldValue(raw, "Please provide the market(s) you will be working in?") ||
+    getSequifiFieldValue(raw, "Please provide the state(s) you will be working in.") ||
+    getSequifiFieldValue(raw, "Please provide the state(s) you will be working in") ||
     String(raw.state_code ?? "").trim();
 
   const caHis =

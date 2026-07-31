@@ -5,7 +5,11 @@ import {
   isApptSetterName,
   sequifiPositionContextFromJob,
 } from "@/lib/onboarding/role-map";
-import { getSequifiFieldValue, parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
+import {
+  getSequifiDobParts,
+  getSequifiFieldValue,
+  parseSequifiFields,
+} from "@/lib/onboarding/sequifi-fields";
 import { submitTronJotFormViaBrowser } from "@/lib/onboarding/tron-jotform-browser";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
@@ -109,20 +113,11 @@ export interface TronDob {
 }
 
 /**
- * Sequifi's GET /v1/users now returns a top-level `dob` field as "YYYY-MM-DD"
- * (confirmed against live data — was null/absent when this integration was first
- * built, populated for ~239/273 active users as of the last check). Split it into
- * JotForm's month/day/year sub-fields (see buildTronJotFormBody). Returns null if
- * missing or unparseable so callers can treat it like any other missing field.
+ * Sequifi GET /v1/users top-level `dob` ("YYYY-MM-DD") → JotForm month/day/year.
+ * See getSequifiDobIso for alternate shapes / custom-field fallbacks.
  */
 export function resolveDob(job: Pick<OnboardingJob, "raw_sequifi_payload">): TronDob | null {
-  const raw = job.raw_sequifi_payload ?? {};
-  const dob = raw.dob;
-  if (typeof dob !== "string") return null;
-  const match = dob.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return null;
-  const [, year, month, day] = match;
-  return { month, day, year };
+  return getSequifiDobParts(job.raw_sequifi_payload ?? {});
 }
 
 export interface TronJotFormFields {

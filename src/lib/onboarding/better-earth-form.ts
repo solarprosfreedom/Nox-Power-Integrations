@@ -22,7 +22,7 @@
 import { env } from "@/lib/env";
 import { buildWorkUpn } from "@/lib/onboarding/normalize";
 import { updateJobStep } from "@/lib/onboarding/repository";
-import { parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
+import { getSequifiDobIso, parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
 const SENT_FLAG = "sent";
@@ -98,13 +98,9 @@ function formatPhoneE164(raw: string | null | undefined): string {
   return trim(raw);
 }
 
-/** Sequifi's GET /v1/users `dob` field is already "YYYY-MM-DD" — exactly what
- * the form's DatePicker fields expect, no conversion needed. */
+/** Sequifi GET /v1/users `dob` → YYYY-MM-DD for Fillout date fields. */
 function resolveDobString(job: Pick<OnboardingJob, "raw_sequifi_payload">): string {
-  const raw = job.raw_sequifi_payload ?? {};
-  const dob = raw.dob;
-  if (typeof dob !== "string") return "";
-  return /^\d{4}-\d{2}-\d{2}/.test(dob.trim()) ? dob.trim().slice(0, 10) : "";
+  return getSequifiDobIso(job.raw_sequifi_payload ?? {});
 }
 
 export interface BetterEarthStates {

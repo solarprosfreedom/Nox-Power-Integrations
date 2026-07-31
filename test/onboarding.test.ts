@@ -237,6 +237,19 @@ describe("Sequifi normalization and custom field parsing", () => {
     assert.equal(parsed.onboardAxia, false);
     assert.deepEqual(parsed.installerTabs, []);
   });
+
+  test("reads markets from Sequifi state(s) question when market(s) label is absent", () => {
+    const parsed = parseSequifiFields({
+      state_code: "CA",
+      employee_admin_only_fields: [
+        {
+          field_name: "Please provide the state(s) you will be working in.",
+          value: "AZ",
+        },
+      ],
+    });
+    assert.equal(parsed.markets, "AZ");
+  });
 });
 
 describe("installer registry and role mapping", () => {
@@ -604,6 +617,11 @@ describe("Tron JotForm submission", () => {
       month: "04",
       day: "20",
       year: "2005",
+    });
+    assert.deepEqual(resolveDob({ raw_sequifi_payload: { dob: "5/7/1990" } } as never), {
+      month: "05",
+      day: "07",
+      year: "1990",
     });
     assert.equal(resolveDob({ raw_sequifi_payload: { dob: null } } as never), null);
     assert.equal(resolveDob({ raw_sequifi_payload: { dob: "not-a-date" } } as never), null);

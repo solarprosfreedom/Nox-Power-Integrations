@@ -692,6 +692,13 @@ export async function runOnboardingJob(
   }
 
   if (job?.status === "completed") {
+    // Re-pull Sequifi so partner forms see latest dob / markets / HIS fields.
+    const latestUser = await fetchSequifiUserById(Number(job.sequifi_user_id)).catch(() => null);
+    if (latestUser) {
+      await refreshJobFromSequifiUser(job.id, latestUser);
+      job = (await loadJobById(jobId)) ?? job;
+    }
+
     await sendOnboardingAdminNotification(job);
     job = (await loadJobById(jobId)) ?? job;
     await sendAxiaOnboardingNotification(job);

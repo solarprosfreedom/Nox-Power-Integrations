@@ -16,7 +16,7 @@
 import { env } from "@/lib/env";
 import { buildWorkUpn } from "@/lib/onboarding/normalize";
 import { updateJobStep } from "@/lib/onboarding/repository";
-import { getSequifiFieldValue, parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
+import { getSequifiDobIso, getSequifiFieldValue, parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
 const SENT_FLAG = "sent";
@@ -108,9 +108,7 @@ function workEmailForJob(job: OnboardingJob): string {
 }
 
 function resolveDobIso(job: Pick<OnboardingJob, "raw_sequifi_payload">): string {
-  const dob = job.raw_sequifi_payload?.dob;
-  if (typeof dob !== "string") return "";
-  return /^\d{4}-\d{2}-\d{2}/.test(dob.trim()) ? dob.trim().slice(0, 10) : "";
+  return getSequifiDobIso(job.raw_sequifi_payload ?? {});
 }
 
 /** Parse Sequifi markets/state_code into codes that appear in the form picklist. */
