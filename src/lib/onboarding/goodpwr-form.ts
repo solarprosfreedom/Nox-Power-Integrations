@@ -1,20 +1,22 @@
 /**
- * GoodPWR partner onboarding — "New Sales Rep Onboarding" Google Form (Step 1 of
- * the SOP). Submits via Google's formResponse endpoint (plain POST — unlike Tron's
- * JotForm, Google Forms has no CAPTCHA/anti-bot gate on this form; it only
- * enforces required fields server-side, confirmed via research).
+ * GoodPWR partner onboarding — "New Sales Rep Onboarding" JotForm (Step 1 of
+ * the SOP).
  *
- * Field → entry ID mapping below was read directly off the live form's embedded
- * FB_PUBLIC_LOAD_DATA_ config:
- * https://docs.google.com/forms/d/e/1FAIpQLScKv_hEmeYO_rg75JysNuR8pzX04zvT5bQe_1hb-XOjunCFYA/viewform
+ * Form: https://form.jotform.com/261804783661160
+ *
+ * Same SOP field defaults as the prior Google Form. JotForm's public submit
+ * endpoint challenges scripted POSTs with CAPTCHA, so submission drives a
+ * headless browser (see goodpwr-jotform-browser.ts), same stack as Tron.
  */
 import { env } from "@/lib/env";
 import { buildWorkUpn } from "@/lib/onboarding/normalize";
 import { updateJobStep } from "@/lib/onboarding/repository";
 import { getSequifiFieldValue, parseSequifiFields } from "@/lib/onboarding/sequifi-fields";
+import { submitGoodPwrJotFormViaBrowser } from "@/lib/onboarding/goodpwr-jotform-browser";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
 const SENT_FLAG = "sent";
+const DEFAULT_FORM_ID = "261804783661160";
 
 /** Static per the SOP: "We are only selling in New York, OR and IL currently." */
 const SOP_MARKETS = ["New York", "Oregon", "Illinois"];
@@ -23,7 +25,7 @@ const SOP_HIS_LICENSE = "Not selling in these markets";
 /** Static per the SOP: "Yes to Enerflo." */
 const SOP_USING_ENERFLO = "Yes";
 const SOP_SALES_ORG = "Solar Pros";
-/** SOP defaults (exact Google Form option labels). Sequifi custom fields override. */
+/** SOP defaults (exact JotForm option labels). Sequifi custom fields override. */
 const SOP_PREFERRED_LENDER = "Sungage";
 const SOP_PREFERRED_TPO = "LightReach";
 
@@ -35,8 +37,17 @@ function trim(s: string | null | undefined): string {
   return (s ?? "").trim();
 }
 
+/** Format a phone number for JotForm's masked "(000) 000-0000" phone field. */
+function formatPhoneForJotForm(raw: string | null | undefined): string {
+  const digits = (raw ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return trim(raw);
+}
+
 export function isGoodPwrFormConfigured(): boolean {
-  return Boolean(env.googleFormsGoodPwrEnabled && env.googleFormsGoodPwrFormId?.trim());
+  return Boolean(env.goodPwrFormEnabled && (env.jotformGoodPwrFormId?.trim() || DEFAULT_FORM_ID));
 }
 
 export function jobHasGoodPwrInstallerTab(job: OnboardingJob): boolean {
@@ -82,6 +93,8 @@ export interface GoodPwrFormFields {
   email: string;
   phone: string;
   salesOrganization: string;
+  /** Optional Recheck # — left blank (not required on the form). */
+  recheck: string;
   markets: string[];
   hisLicense: string;
   usingEnerflo: string;
@@ -95,44 +108,46 @@ export function buildGoodPwrFormFields(job: OnboardingJob): GoodPwrFormFields {
     firstName: trim(job.first_name),
     lastName: trim(job.last_name),
     email: workEmailForJob(job),
-    phone: trim(job.phone),
+    phone: formatPhoneForJotForm(job.phone),
     salesOrganization: SOP_SALES_ORG,
+    recheck: "",
     markets: [...SOP_MARKETS],
     hisLicense: SOP_HIS_LICENSE,
     usingEnerflo: SOP_USING_ENERFLO,
     preferredLender: resolveGoodPwrLender(job),
     preferredTpo: resolveGoodPwrTpo(job),
-    // No source today — left blank, same as Tron's "notes".
     comments: "",
   };
 }
 
-/** Build the application/x-www-form-urlencoded body for Google's formResponse
- * endpoint. entry IDs read directly off the live form's embedded config. */
-export function buildGoodPwrFormBody(fields: GoodPwrFormFields): URLSearchParams {
+/**
+ * Build the application/x-www-form-urlencoded body JotForm's own form posts.
+ * Field names read from https://form.jotform.com/261804783661160.
+ */
+export function buildGoodPwrFormBody(fields: GoodPwrFormFields, formId: string): URLSearchParams {
   const body = new URLSearchParams();
-  body.append("entry.897722329", fields.firstName);
-  body.append("entry.1646665289", fields.lastName);
-  body.append("entry.219209550", fields.email);
-  body.append("entry.41757151", fields.phone);
-  body.append("entry.1235168892", fields.salesOrganization);
+  body.append("formID", formId);
+  body.append("simple_spc", formId);
+  body.append("website", "");
+  body.append("q3_repFull[first]", fields.firstName);
+  body.append("q3_repFull[last]", fields.lastName);
+  body.append("q51_phoneNumber[full]", fields.phone);
+  body.append("q31_email", fields.email);
+  body.append("q26_salesPartner", fields.salesOrganization);
+  if (fields.recheck) body.append("q35_recheck", fields.recheck);
   for (const market of fields.markets) {
-    body.append("entry.1790700221", market);
+    body.append("q45_marketsselect[]", market);
   }
-  body.append("entry.1717147781", fields.hisLicense);
-  body.append("entry.1551533457", fields.usingEnerflo);
-  if (fields.preferredLender) body.append("entry.1667807314", fields.preferredLender);
-  if (fields.preferredTpo) body.append("entry.879013296", fields.preferredTpo);
-  if (fields.comments) body.append("entry.358987251", fields.comments);
+  body.append("q46_hisLicense[]", fields.hisLicense);
+  body.append("q47_willYou", fields.usingEnerflo);
+  body.append("q48_preferredLender", fields.preferredLender);
+  body.append("q49_preferredTpo", fields.preferredTpo);
+  if (fields.comments) body.append("q50_anyAdditional", fields.comments);
   return body;
 }
 
-function submitUrl(formId: string): string {
-  return `https://docs.google.com/forms/d/e/${formId}/formResponse`;
-}
-
 /**
- * Submit rep details to the GoodPWR "New Sales Rep Onboarding" Google Form when
+ * Submit rep details to the GoodPWR "New Sales Rep Onboarding" JotForm when
  * the Sequifi "Onboard to Good Pwr?" tab is set (non-blocking).
  */
 export async function submitGoodPwrForm(
@@ -170,36 +185,14 @@ export async function submitGoodPwrForm(
     return "failed";
   }
 
-  const formId = env.googleFormsGoodPwrFormId?.trim() ?? "";
-  const body = buildGoodPwrFormBody(fields);
+  const formId = env.jotformGoodPwrFormId?.trim() || DEFAULT_FORM_ID;
+  const result = await submitGoodPwrJotFormViaBrowser(fields, formId);
 
-  try {
-    const res = await fetch(submitUrl(formId), {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    });
-    const text = await res.text();
-    const looksLikeValidationError = /this is a required question/i.test(text);
-    if (!res.ok || looksLikeValidationError) {
-      const reason = looksLikeValidationError
-        ? `Google Forms rejected the submission — a required question was left blank: ${text.slice(0, 300)}`
-        : `Google Forms ${res.status}: ${text.slice(0, 500)}`;
-      await updateJobStep(job.id, {
-        step_errors: { ...job.step_errors, goodpwr_form: reason },
-      });
-      return "failed";
-    }
-
-    await updateJobStep(job.id, {
-      step_errors: { ...job.step_errors, goodpwr_form: SENT_FLAG },
-    });
-    return "sent";
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await updateJobStep(job.id, {
-      step_errors: { ...job.step_errors, goodpwr_form: msg },
-    });
-    return "failed";
-  }
+  await updateJobStep(job.id, {
+    step_errors: {
+      ...job.step_errors,
+      goodpwr_form: result.status === "sent" ? SENT_FLAG : (result.reason ?? "failed"),
+    },
+  });
+  return result.status;
 }

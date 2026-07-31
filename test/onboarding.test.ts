@@ -669,7 +669,7 @@ describe("Tron JotForm submission", () => {
   });
 });
 
-describe("GoodPWR Google Form submission and text message", () => {
+describe("GoodPWR JotForm submission and text message", () => {
   const goodPwrRaw = {
     employee_admin_only_fields: [{ field_name: "Onboard to Good Pwr?", value: "Yes" }],
   };
@@ -705,7 +705,7 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.equal(resolveGoodPwrTpo({ raw_sequifi_payload: withLenderField } as never), "SunRun");
   });
 
-  test("builds GoodPWR form fields (static SOP values) and the urlencoded submission body", () => {
+  test("builds GoodPWR JotForm fields (static SOP values) and the urlencoded submission body", () => {
     env.msDefaultDomain = "noxpwr.com";
     const job = onboardingJob({
       phone: "555-111-2222",
@@ -717,8 +717,9 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.equal(fields.firstName, "Jane");
     assert.equal(fields.lastName, "Doe");
     assert.equal(fields.email, "janedoe@noxpwr.com");
-    assert.equal(fields.phone, "555-111-2222");
+    assert.equal(fields.phone, "(555) 111-2222");
     assert.equal(fields.salesOrganization, "Solar Pros");
+    assert.equal(fields.recheck, "");
     assert.deepEqual(fields.markets, ["New York", "Oregon", "Illinois"]);
     assert.equal(fields.hisLicense, "Not selling in these markets");
     assert.equal(fields.usingEnerflo, "Yes");
@@ -726,17 +727,19 @@ describe("GoodPWR Google Form submission and text message", () => {
     assert.equal(fields.preferredTpo, "LightReach");
     assert.equal(fields.comments, "");
 
-    const body = buildGoodPwrFormBody(fields);
-    assert.equal(body.get("entry.897722329"), "Jane");
-    assert.equal(body.get("entry.1646665289"), "Doe");
-    assert.equal(body.get("entry.219209550"), "janedoe@noxpwr.com");
-    assert.equal(body.get("entry.41757151"), "555-111-2222");
-    assert.equal(body.get("entry.1235168892"), "Solar Pros");
-    assert.deepEqual(body.getAll("entry.1790700221"), ["New York", "Oregon", "Illinois"]);
-    assert.equal(body.get("entry.1717147781"), "Not selling in these markets");
-    assert.equal(body.get("entry.1551533457"), "Yes");
-    assert.equal(body.get("entry.1667807314"), "Sungage");
-    assert.equal(body.get("entry.879013296"), "LightReach");
+    const body = buildGoodPwrFormBody(fields, "261804783661160");
+    assert.equal(body.get("formID"), "261804783661160");
+    assert.equal(body.get("q3_repFull[first]"), "Jane");
+    assert.equal(body.get("q3_repFull[last]"), "Doe");
+    assert.equal(body.get("q31_email"), "janedoe@noxpwr.com");
+    assert.equal(body.get("q51_phoneNumber[full]"), "(555) 111-2222");
+    assert.equal(body.get("q26_salesPartner"), "Solar Pros");
+    assert.equal(body.get("q35_recheck"), null);
+    assert.deepEqual(body.getAll("q45_marketsselect[]"), ["New York", "Oregon", "Illinois"]);
+    assert.equal(body.get("q46_hisLicense[]"), "Not selling in these markets");
+    assert.equal(body.get("q47_willYou"), "Yes");
+    assert.equal(body.get("q48_preferredLender"), "Sungage");
+    assert.equal(body.get("q49_preferredTpo"), "LightReach");
   });
 
   test("builds the exact GoodPWR SOP text message with the links URL", () => {

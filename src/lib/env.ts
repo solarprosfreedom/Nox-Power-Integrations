@@ -157,112 +157,88 @@ export const env = {
    * Empower partner onboarding — "Empower New Rep Request" Typeform
    * (https://form.typeform.com/to/UvpPrheO). Triggered by Other Installers /
    * Empower tab (not Empwr HubSpot). Closers only (setters skip). Submitted via
-   * headless Chromium. Defaults to disabled until ZZTEST on Vercel.
+   * headless Chromium. On by default for live testing.
    */
   empowerTypeformUrl: opt("EMPOWER_TYPEFORM_URL", "https://form.typeform.com/to/UvpPrheO"),
-  empowerTypeformEnabled: opt("EMPOWER_TYPEFORM_ENABLED", "false") === "true",
+  empowerTypeformEnabled: opt("EMPOWER_TYPEFORM_ENABLED", "true") === "true",
   empowerTypeformTeamId: opt("EMPOWER_TYPEFORM_TEAM_ID", "803"),
   empowerTypeformEmailDomain: opt("EMPOWER_TYPEFORM_EMAIL_DOMAIN", "solarpros.io"),
   /**
    * Empower partner onboarding — Jobflo crash-course SMS (SOP step 6).
-   * Uses Twilio. Defaults to disabled until credentials + enablement.
+   * Uses Twilio. On by default; fails cleanly if Twilio vars are missing.
    */
   empowerJobfloVideoUrl: opt(
     "EMPOWER_JOBFLO_VIDEO_URL",
     "https://www.loom.com/share/8e99f6aa14ae47e8ac30f32ff42801ba",
   ),
-  empowerSmsEnabled: opt("EMPOWER_SMS_ENABLED", "false") === "true",
+  empowerSmsEnabled: opt("EMPOWER_SMS_ENABLED", "true") === "true",
   /**
    * Tron partner onboarding — JotForm "Log-In Request Form" submit.
-   * Both prior blockers are resolved:
-   *  1. DOB — Sequifi's GET /v1/users now returns a top-level `dob` field
-   *     ("YYYY-MM-DD"), confirmed live against real data.
-   *  2. CAPTCHA — JotForm's public submit endpoint rejects plain scripted POSTs,
-   *     but the integration now drives a real headless browser (puppeteer-core +
-   *     @sparticuz/chromium) to fill and submit the form, which produces the same
-   *     anti-bot signals (jsExecutionTracker, timeToSubmit, etc.) a genuine
-   *     browser session generates. Confirmed live: a manual dry run reached
-   *     JotForm's real "Thank You!" page with no CAPTCHA.
-   * Still defaults to disabled pending one full end-to-end run against a real
-   * onboarded Tron rep (via the cron) to confirm the headless-Chromium path
-   * works the same way on Vercel's serverless runtime as it did locally.
-   * Flip JOTFORM_TRON_ENABLED=true once that's confirmed.
+   * Headless Chromium (CAPTCHA). On by default for live testing. Needs Sequifi DOB.
    */
   jotformTronFormId: opt("JOTFORM_TRON_FORM_ID", "252994617874071"),
-  jotformTronEnabled: opt("JOTFORM_TRON_ENABLED", "false") === "true",
+  jotformTronEnabled: opt("JOTFORM_TRON_ENABLED", "true") === "true",
   /**
-   * GoodPWR partner onboarding — "New Sales Rep Onboarding" Google Form submit.
-   * Name/email/phone from Sequifi; Sales Org, Markets, HIS, Enerflo=Yes are
-   * static per the SOP. Preferred Lender defaults to Sungage and Preferred TPO
-   * to LightReach (SOP); Sequifi custom fields override when present.
-   * Defaults to disabled — flip GOODPWR_FORM_ENABLED=true to go live.
+   * GoodPWR partner onboarding — "New Sales Rep Onboarding" JotForm
+   * (https://form.jotform.com/261804783661160). SOP defaults: Sungage / LightReach.
+   * Headless Chromium. On by default for live testing. Recheck # left blank.
    */
-  googleFormsGoodPwrFormId: opt(
-    "GOODPWR_FORM_ID",
-    "1FAIpQLScKv_hEmeYO_rg75JysNuR8pzX04zvT5bQe_1hb-XOjunCFYA",
-  ),
-  googleFormsGoodPwrEnabled: opt("GOODPWR_FORM_ENABLED", "false") === "true",
+  jotformGoodPwrFormId: opt("JOTFORM_GOODPWR_FORM_ID", "261804783661160"),
+  goodPwrFormEnabled: opt("GOODPWR_FORM_ENABLED", "true") === "true",
   /** "GoodPWR Links" link-tree URL, sent in the post-onboarding text to the rep. */
   goodPwrLinksUrl: opt("GOODPWR_LINKS_URL", "https://sites.google.com/goodpwr.com/goodpwr/sales-partners"),
   /**
    * GoodPWR partner onboarding — text message to the rep (Step 4 of the SOP).
-   * Uses Twilio. PENDING: defaults to disabled until Twilio credentials are set.
+   * Uses Twilio. On by default; fails cleanly if Twilio vars are missing.
    */
-  goodPwrSmsEnabled: opt("GOODPWR_SMS_ENABLED", "false") === "true",
+  goodPwrSmsEnabled: opt("GOODPWR_SMS_ENABLED", "true") === "true",
   twilioAccountSid: opt("TWILIO_ACCOUNT_SID"),
   twilioAuthToken: opt("TWILIO_AUTH_TOKEN"),
   /** E.164, e.g. +18005551234 */
   twilioFromNumber: opt("TWILIO_FROM_NUMBER"),
   /**
-   * Better Earth partner onboarding — "Sales Rep Onboarding" form submit.
-   * Unlike Tron's JotForm, this form (Fillout.com) has no CAPTCHA — submitted
-   * via plain server-to-server REST calls, confirmed live (no headless
-   * browser needed). Defaults to disabled pending an explicit live-test
-   * approval. Flip BETTER_EARTH_FORM_ENABLED=true once confirmed.
+   * Better Earth partner onboarding — "Sales Rep Onboarding" Fillout form.
+   * Direct REST (no browser). On by default for live testing.
    */
   betterEarthFormFlowId: opt("BETTER_EARTH_FORM_FLOW_ID", "961SCS6869us"),
-  betterEarthFormEnabled: opt("BETTER_EARTH_FORM_ENABLED", "false") === "true",
+  betterEarthFormEnabled: opt("BETTER_EARTH_FORM_ENABLED", "true") === "true",
   /** "Sales Company" field on the Better Earth form — no explicit value given
    * in the SOP; defaults to the same "NOX Power" branding used for Tron/EMPWR. */
   betterEarthSalesCompany: opt("BETTER_EARTH_SALES_COMPANY", "NOX Power"),
   /**
    * Bright Planet Solar (BPS) — Financier Portal Login Request (Smartsheet).
    * Triggered when Sequifi Other Installers? contains "BPS" or "Bright Planet
-   * Solar". Plain server-to-server multipart POST (confirmed live — CAPTCHA
-   * not required for main submit). Defaults to disabled pending enablement.
+   * Solar". On by default for live testing.
    */
   bpsFormPublishKey: opt("BPS_FORM_PUBLISH_KEY", "60e97ea684894846927bfc564a5a2d9e"),
-  bpsFormEnabled: opt("BPS_FORM_ENABLED", "false") === "true",
+  bpsFormEnabled: opt("BPS_FORM_ENABLED", "true") === "true",
   bpsSalesOrganization: opt("BPS_SALES_ORGANIZATION", "NOX Power"),
   /**
    * Green Brilliance — shared roster Google Sheet for Bob/Amir (Blaze intake).
    * Triggered when Sequifi Other Installers? contains "Green Brilliance" (or
-   * whole-word "GB"). Sungage Access is left blank (no Sequifi/SOP source).
-   * Defaults to disabled until enabled in Vercel.
+   * whole-word "GB"). Sungage Access is left blank. On by default for live testing.
    */
   greenBrillianceSpreadsheetId: opt(
     "GREEN_BRILLIANCE_SPREADSHEET_ID",
     "1MvCndbCtMLYf9Rr12T6DJ9Xj1wvASlz39Zc1bdRQ_X4",
   ),
-  greenBrillianceRosterEnabled: opt("GREEN_BRILLIANCE_ROSTER_ENABLED", "false") === "true",
+  greenBrillianceRosterEnabled: opt("GREEN_BRILLIANCE_ROSTER_ENABLED", "true") === "true",
   /**
    * Icon Power — Sales Rep Onboarding Smartsheet form (Freedom Pros).
    * Triggered when Sequifi Other Installers? contains "Icon Power" or
-   * whole-word "Icon". Job Title / Manager / Pay Rate use Sequifi when
-   * present, otherwise "N/A". Defaults to disabled until enabled in Vercel.
+   * whole-word "Icon". On by default for live testing.
    */
   iconPowerFormPublishKey: opt("ICON_POWER_FORM_PUBLISH_KEY", "019adb83223c7b2180542e382343d5f1"),
-  iconPowerFormEnabled: opt("ICON_POWER_FORM_ENABLED", "false") === "true",
+  iconPowerFormEnabled: opt("ICON_POWER_FORM_ENABLED", "true") === "true",
   /**
    * SolQ — LeadConnector Employee Submission form + link-tree SMS.
-   * Trigger: Other Installers? contains SolQ/SOLQ. Form submitted via headless
-   * Chromium (Cloudflare blocks plain POST). Defaults to disabled until a live
-   * ZZTEST pass on Vercel.
+   * Trigger: Other Installers? contains SolQ/SOLQ. Headless Chromium.
+   * On by default for live testing.
    */
   solqFormUrl: opt("SOLQ_FORM_URL", "https://msg.black33.io/widget/form/zEAvzxnz1cl1TTDNNMSz"),
-  solqFormEnabled: opt("SOLQ_FORM_ENABLED", "false") === "true",
+  solqFormEnabled: opt("SOLQ_FORM_ENABLED", "true") === "true",
   solqFormSubmitterName: opt("SOLQ_FORM_SUBMITTER_NAME", "Nox Power Admin"),
   solqOutsideOrgName: opt("SOLQ_OUTSIDE_ORG_NAME", "Solar Pros"),
   solqLinksUrl: opt("SOLQ_LINKS_URL", "https://solarquotespv.com/sq/tools/lt-freedompros.php"),
-  solqSmsEnabled: opt("SOLQ_SMS_ENABLED", "false") === "true",
+  solqSmsEnabled: opt("SOLQ_SMS_ENABLED", "true") === "true",
 };
