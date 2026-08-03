@@ -1,8 +1,5 @@
 "use server";
 
-/** Partner form retries launch several headless Chromium submits — needs cron-like budget. */
-export const maxDuration = 300;
-
 import {
   checkUserExistence,
   previewOnboardingFromSequifi,

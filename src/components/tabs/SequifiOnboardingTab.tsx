@@ -9,7 +9,6 @@ import {
   provisionSequifiUser,
   provisionSequifiUsersBulkAction,
   retryOnboardingJob,
-  retryPartnerStepsForJob,
   runHiredOnboardingNow,
   scanSequifiMicrosoftGapList,
   submitEmpwrHubSpotForJob,
@@ -464,8 +463,21 @@ export default function SequifiOnboardingTab() {
       `Retrying partner sheets/forms for ${jobId.slice(0, 8)}… this can take 1–3 minutes (browser forms). Status updates when it finishes — no need to refresh.`,
     );
     try {
-      const { job } = await retryPartnerStepsForJob(jobId);
+      // Dedicated API route (300s / 1.5GB) — server actions were timing out / breaking the build.
+      const res = await fetch("/api/onboarding/retry-partner-steps", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jobId }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        job?: OnboardingJob | null;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(payload.error || `Partner retry failed (${res.status})`);
+      }
       await refresh();
+      const job = payload.job ?? null;
       if (!job) {
         setMessage(`Partner retry finished but job ${jobId.slice(0, 8)} was not found — refresh the page.`);
         return;

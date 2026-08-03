@@ -17,6 +17,10 @@
     "src/app/api/cron/sequifi-onboarding/route.ts": {
       "memory": 1536,
       "maxDuration": 300
+    },
+    "src/app/api/onboarding/retry-partner-steps/route.ts": {
+      "memory": 1536,
+      "maxDuration": 300
     }
   }
 }
