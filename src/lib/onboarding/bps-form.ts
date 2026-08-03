@@ -111,19 +111,20 @@ function resolveDobIso(job: Pick<OnboardingJob, "raw_sequifi_payload">): string 
   return getSequifiDobIso(job.raw_sequifi_payload ?? {});
 }
 
-/** Parse Sequifi markets/state_code into codes that appear in the form picklist. */
+/** Parse Sequifi markets into BPS picklist codes. Prefer the markets custom
+ * field; only fall back to top-level `state_code` when markets is empty —
+ * otherwise a stale state_code (e.g. CA) can force HIS when markets are AZ. */
 export function resolveBpsMarketStates(job: Pick<OnboardingJob, "raw_sequifi_payload">): PrimaryState[] {
   const raw = job.raw_sequifi_payload ?? {};
   const parsed = parseSequifiFields(raw);
-  const candidates = [parsed.markets, String(raw.state_code ?? "").trim()].filter(Boolean);
+  const marketsBlob = parsed.markets.trim();
+  const blob = marketsBlob || String(raw.state_code ?? "").trim();
   const out = new Set<PrimaryState>();
-  for (const blob of candidates) {
-    for (const part of blob.split(/[,/;]+/)) {
-      const token = part.trim().toLowerCase();
-      if (!token) continue;
-      const code = STATE_NAME_TO_CODE[token];
-      if (code) out.add(code);
-    }
+  for (const part of blob.split(/[,/;]+/)) {
+    const token = part.trim().toLowerCase();
+    if (!token) continue;
+    const code = STATE_NAME_TO_CODE[token];
+    if (code) out.add(code);
   }
   return [...out];
 }

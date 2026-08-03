@@ -929,6 +929,18 @@ describe("BPS Smartsheet form submission (Financier Portal Login Request)", () =
       } as never),
       ["CA", "NJ"],
     );
+    // Explicit markets=AZ must not pull CA from a stale top-level state_code.
+    assert.deepEqual(
+      resolveBpsMarketStates({
+        raw_sequifi_payload: {
+          state_code: "CA",
+          employee_personal_detail: [
+            { field_name: "Please provide the state(s) you will be working in.", value: "AZ" },
+          ],
+        },
+      } as never),
+      [],
+    );
   });
 
   test("builds BPS fields and the Smartsheet submit payload (no CA/CT license when No)", () => {

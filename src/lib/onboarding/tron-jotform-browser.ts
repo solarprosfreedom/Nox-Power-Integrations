@@ -20,6 +20,7 @@
  * (with remote pack fallback), full puppeteer locally.
  */
 import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
+import { phoneDigitsForMaskedInput } from "@/lib/onboarding/phone";
 import type { TronJotFormFields } from "@/lib/onboarding/tron-jotform";
 
 export interface BrowserSubmitResult {
@@ -62,7 +63,8 @@ export async function submitTronJotFormViaBrowser(
     await fill('input[name="q3_name[last]"]', fields.lastName);
     await fill('input[name="q9_typeA"]', fields.salesOrganization);
     await fill('input[name="q5_email"]', fields.email);
-    await fill('input[name="q6_phoneNumber[full]"]', fields.phone);
+    // Type digits only — parentheses break JotForm's (000) 000-0000 mask.
+    await fill('input[name="q6_phoneNumber[full]"]', phoneDigitsForMaskedInput(fields.phone));
 
     const dobText = formatDobForWidget(fields.dob);
     if (dobText) {

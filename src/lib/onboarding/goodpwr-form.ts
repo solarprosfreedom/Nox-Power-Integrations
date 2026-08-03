@@ -38,7 +38,7 @@ function trim(s: string | null | undefined): string {
   return (s ?? "").trim();
 }
 
-/** Format a phone number for JotForm's masked "(000) 000-0000" phone field. */
+/** Display/API form: (555) 123-4567. Browser fill types digits only (see browser). */
 function formatPhoneForJotForm(raw: string | null | undefined): string {
   return formatPhoneForMaskedInput(raw);
 }

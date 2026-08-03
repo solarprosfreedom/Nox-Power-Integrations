@@ -26,3 +26,11 @@ export function formatPhoneForMaskedInput(raw: string | null | undefined): strin
   const digits = normalizeUsPhoneDigits(raw);
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
+
+/**
+ * Digits only for masked inputs. Typing "(480) 555-0199" into JotForm's phone
+ * mask often double-formats and fails validation; typing 4805550199 works.
+ */
+export function phoneDigitsForMaskedInput(raw: string | null | undefined): string {
+  return normalizeUsPhoneDigits(raw);
+}

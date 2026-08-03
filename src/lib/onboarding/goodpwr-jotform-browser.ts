@@ -8,6 +8,7 @@
  */
 import type { GoodPwrFormFields } from "@/lib/onboarding/goodpwr-form";
 import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
+import { phoneDigitsForMaskedInput } from "@/lib/onboarding/phone";
 
 export interface BrowserSubmitResult {
   status: "sent" | "failed";
@@ -37,7 +38,8 @@ export async function submitGoodPwrJotFormViaBrowser(
 
     await fill('input[name="q3_repFull[first]"]', fields.firstName);
     await fill('input[name="q3_repFull[last]"]', fields.lastName);
-    await fill('input[name="q51_phoneNumber[full]"]', fields.phone);
+    // Type digits only — parentheses break JotForm's (000) 000-0000 mask.
+    await fill('input[name="q51_phoneNumber[full]"]', phoneDigitsForMaskedInput(fields.phone));
     await fill('input[name="q31_email"]', fields.email);
     await fill('input[name="q26_salesPartner"]', fields.salesOrganization);
     if (fields.recheck) {
