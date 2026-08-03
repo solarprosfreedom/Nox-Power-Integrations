@@ -9,6 +9,7 @@
  * intentionally left blank per SOP.
  */
 import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
+import { formatPhoneForMaskedInput } from "@/lib/onboarding/phone";
 import type { SolqFormFields } from "@/lib/onboarding/solq-form";
 
 export interface BrowserSubmitResult {
@@ -17,11 +18,7 @@ export interface BrowserSubmitResult {
 }
 
 function formatPhone(raw: string): string {
-  const digits = raw.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  return raw.trim();
+  return formatPhoneForMaskedInput(raw);
 }
 
 /** MM/DD/YYYY for the Vue datepicker display input. */
@@ -67,31 +64,80 @@ export async function submitSolqFormViaBrowser(
     }
 
     async function selectMultiselect(fieldName: string, optionText: string): Promise<void> {
+      const want = optionText.trim().toLowerCase();
       const opened = await page.evaluate((name: string) => {
         const input = document.querySelector(`input[name="${name}"]`) as HTMLElement | null;
-        const root = input?.closest(".multiselect") as HTMLElement | null;
+        const root =
+          (input?.closest(".multiselect") as HTMLElement | null) ||
+          (document.querySelector(`[data-qid="${name}"] .multiselect`) as HTMLElement | null);
         if (!root) return false;
-        root.click();
+        const searchable = root.querySelector(".multiselect__input, input") as HTMLInputElement | null;
+        (searchable || root).click();
+        if (searchable) {
+          searchable.focus();
+          searchable.value = "";
+        }
         return true;
       }, fieldName);
       if (!opened) throw new Error(`SolQ multiselect not found: ${fieldName}`);
-      await sleep(350);
-      const clicked = await page.evaluate((opt: string) => {
-        const options = [...document.querySelectorAll(".multiselect__option, .multiselect__element")];
+      await sleep(400);
+
+      // Type to filter (many LeadConnector multiselects are searchable).
+      const searchSel = `input[name="${fieldName}"], [data-qid="${fieldName}"] .multiselect__input, .multiselect--active .multiselect__input`;
+      const searchEl = await page.$(searchSel);
+      if (searchEl) {
+        await searchEl.click({ clickCount: 3 }).catch(() => null);
+        await page.keyboard.type(optionText, { delay: 20 });
+        await sleep(350);
+      }
+
+      const result = await page.evaluate((opt: string) => {
+        const want = opt.trim().toLowerCase();
+        const options = [
+          ...document.querySelectorAll(
+            ".multiselect__content-wrapper .multiselect__option, .multiselect__element, .multiselect__option",
+          ),
+        ].filter(o => {
+          const el = o as HTMLElement;
+          const style = getComputedStyle(el);
+          return style.display !== "none" && style.visibility !== "hidden" && !el.classList.contains("multiselect__option--disabled");
+        });
+        const texts = options.map(o => (o.textContent || "").replace(/\s+/g, " ").trim()).filter(Boolean);
         const el = options.find(o => {
-          const t = (o.textContent || "").replace(/\s+/g, " ").trim();
-          return t === opt || t.endsWith(opt);
+          const t = (o.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          return t === want || t.endsWith(want) || t.includes(want) || want.includes(t);
         }) as HTMLElement | undefined;
-        if (!el) return false;
+        if (!el) return { ok: false as const, texts };
         el.click();
-        return true;
+        return { ok: true as const, texts };
       }, optionText);
-      if (!clicked) throw new Error(`SolQ option not found for ${fieldName}: ${optionText}`);
+
+      if (!result.ok) {
+        // Last resort: Enter on first highlighted option after typing.
+        await page.keyboard.press("Enter");
+        await sleep(250);
+        const selected = await page.evaluate((name: string, opt: string) => {
+          const input = document.querySelector(`input[name="${name}"]`) as HTMLInputElement | null;
+          const root = input?.closest(".multiselect") as HTMLElement | null;
+          const tags = root
+            ? [...root.querySelectorAll(".multiselect__tag, .multiselect__single")]
+                .map(t => (t.textContent || "").replace(/\s+/g, " ").trim().toLowerCase())
+            : [];
+          const want = opt.trim().toLowerCase();
+          return tags.some(t => t === want || t.includes(want));
+        }, fieldName, optionText);
+        if (!selected) {
+          throw new Error(
+            `SolQ option not found for ${fieldName}: ${optionText}` +
+              (result.texts.length ? ` (saw: ${result.texts.slice(0, 10).join(" | ")})` : ""),
+          );
+        }
+      }
       await sleep(200);
-      // Close dropdown if still open
       await page.evaluate(() => {
         (document.activeElement as HTMLElement | null)?.blur?.();
       });
+      await page.keyboard.press("Escape").catch(() => null);
       await sleep(150);
     }
 

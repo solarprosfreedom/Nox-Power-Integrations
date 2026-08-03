@@ -486,7 +486,7 @@ describe("Empower Typeform submission and text message", () => {
     assert.equal(fields.accessNeeded, "Closer");
     assert.deepEqual(fields.homeServices, [...EMPOWER_HOME_SERVICES]);
     assert.deepEqual(fields.financiers, [...EMPOWER_FINANCIERS_EXCEPT_GOODLEAP]);
-    assert.ok(!fields.financiers.includes("Goodleap"));
+    assert.ok(!(fields.financiers as readonly string[]).includes("Goodleap"));
     assert.deepEqual(fields.states, ["CA", "UT"]);
     assert.equal(fields.his?.licenseNumber, "HIS-999");
     assert.equal(fields.his?.issueDate, "2026-01-15");
@@ -1162,7 +1162,7 @@ describe("SolQ LeadConnector form submission and text message", () => {
           ],
         },
       } as never),
-      ["Iowa"],
+      ["Other"],
     );
     assert.equal(
       resolveSolqStartDate(

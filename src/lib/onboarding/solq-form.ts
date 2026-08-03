@@ -91,7 +91,8 @@ export function resolveSolqMarkets(job: Pick<OnboardingJob, "raw_sequifi_payload
     const mapped = MARKET_ALIASES[token];
     if (mapped) out.add(mapped);
   }
-  if (!out.size) out.add("Iowa");
+  // Unmapped Sequifi markets (e.g. AZ/CA/TX) → Other, not Iowa.
+  if (!out.size) out.add("Other");
   return SOLQ_MARKETS.filter(m => out.has(m));
 }
 

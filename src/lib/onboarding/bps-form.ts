@@ -113,23 +113,32 @@ function resolveDobIso(job: Pick<OnboardingJob, "raw_sequifi_payload">): string 
 
 /** Parse Sequifi markets/state_code into codes that appear in the form picklist. */
 export function resolveBpsMarketStates(job: Pick<OnboardingJob, "raw_sequifi_payload">): PrimaryState[] {
-  const markets = parseSequifiFields(job.raw_sequifi_payload ?? {}).markets;
+  const raw = job.raw_sequifi_payload ?? {};
+  const parsed = parseSequifiFields(raw);
+  const candidates = [parsed.markets, String(raw.state_code ?? "").trim()].filter(Boolean);
   const out = new Set<PrimaryState>();
-  for (const part of markets.split(/[,/;]+/)) {
-    const token = part.trim().toLowerCase();
-    if (!token) continue;
-    const code = STATE_NAME_TO_CODE[token];
-    if (code) out.add(code);
+  for (const blob of candidates) {
+    for (const part of blob.split(/[,/;]+/)) {
+      const token = part.trim().toLowerCase();
+      if (!token) continue;
+      const code = STATE_NAME_TO_CODE[token];
+      if (code) out.add(code);
+    }
   }
   return [...out];
 }
 
+function defaultBpsPrimaryState(): PrimaryState {
+  const raw = (env.bpsDefaultPrimaryState ?? "UT").trim().toUpperCase();
+  return (PRIMARY_STATES as readonly string[]).includes(raw) ? (raw as PrimaryState) : "UT";
+}
+
 /**
  * Pick one Primary Selling State. Prefer the first Sequifi market that matches
- * the form's picklist; fall back to empty (caller fails cleanly).
+ * the form's picklist; otherwise use BPS_DEFAULT_PRIMARY_STATE (default UT).
  */
-export function resolveBpsPrimaryState(states: PrimaryState[]): PrimaryState | "" {
-  return states[0] ?? "";
+export function resolveBpsPrimaryState(states: PrimaryState[]): PrimaryState {
+  return states[0] ?? defaultBpsPrimaryState();
 }
 
 export interface BpsFormFields {
@@ -140,7 +149,7 @@ export interface BpsFormFields {
   email: string;
   sellInCalifornia: "Yes" | "No";
   sellInConnecticut: "Yes" | "No";
-  primarySellingState: PrimaryState | "";
+  primarySellingState: PrimaryState;
   dob: string;
   caHisNumber: string;
   caHisExpDate: string;
@@ -157,6 +166,7 @@ export function buildBpsFormFields(job: OnboardingJob): BpsFormFields {
     lastName: trim(job.last_name),
     phone: trim(job.phone),
     email: workEmailForJob(job),
+    // CA/CT Yes only from Sequifi markets — default primary (UT) must not force HIS.
     sellInCalifornia: states.includes("CA") ? "Yes" : "No",
     sellInConnecticut: states.includes("CT") ? "Yes" : "No",
     primarySellingState: resolveBpsPrimaryState(states),

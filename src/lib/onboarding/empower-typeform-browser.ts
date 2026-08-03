@@ -13,6 +13,7 @@
  */
 import type { EmpowerTypeformFields } from "@/lib/onboarding/empower-typeform";
 import { launchHeadlessBrowser, type HeadlessBrowser } from "@/lib/onboarding/headless-browser";
+import { formatPhoneForMaskedInput } from "@/lib/onboarding/phone";
 
 export interface BrowserSubmitResult {
   status: "sent" | "failed";
@@ -20,11 +21,7 @@ export interface BrowserSubmitResult {
 }
 
 function formatPhoneForTypeform(raw: string): string {
-  const digits = raw.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  return raw.trim();
+  return formatPhoneForMaskedInput(raw);
 }
 
 export async function submitEmpowerTypeformViaBrowser(
@@ -114,19 +111,25 @@ export async function submitEmpowerTypeformViaBrowser(
       label: string,
       opts?: { requireChecked?: boolean },
     ): Promise<void> {
-      const want = label.trim().toLowerCase();
+      const want = label.trim().toLowerCase().replace(/[.…]+$/g, "").trim();
       const requireChecked = opts?.requireChecked ?? false;
 
-      const handles = await page.$$('button[role="radio"], button[role="checkbox"]');
+      const handles = await page.$$(
+        'button[role="radio"], button[role="checkbox"], [role="radio"], [role="checkbox"], li[role="option"], div[data-qa*="choice"]',
+      );
       let target: (typeof handles)[number] | null = null;
       let role = "";
+      const seen: string[] = [];
       for (const h of handles) {
         const meta = await h.evaluate((btn: HTMLElement) => {
           const lines = (btn.innerText || "")
             .split("\n")
             .map(s => s.trim())
             .filter(Boolean);
-          const labelText = (lines[lines.length - 1] || "").toLowerCase();
+          const labelText = (lines[lines.length - 1] || btn.getAttribute("aria-label") || "")
+            .toLowerCase()
+            .replace(/[.…]+$/g, "")
+            .trim();
           const block = btn.closest('[data-qa*="blocktype"]') as HTMLElement | null;
           const inert = Boolean(block?.hasAttribute("inert"));
           const opacity = block ? getComputedStyle(block).opacity : "1";
@@ -141,13 +144,25 @@ export async function submitEmpowerTypeformViaBrowser(
           };
         });
         if (meta.inert || meta.opacity === "0" || meta.w < 2 || meta.h < 2) continue;
-        if (meta.labelText === want || meta.labelText.startsWith(want)) {
+        if (meta.labelText) seen.push(meta.labelText);
+        const exact = meta.labelText === want || meta.labelText.startsWith(want);
+        const fuzzy =
+          meta.labelText.includes(want) ||
+          want.includes(meta.labelText) ||
+          // "New to Empower" vs "I'm new to Empower" / "New to Empwer"
+          (want.includes("empower") && meta.labelText.includes("new") && meta.labelText.includes("emp"));
+        if (exact || fuzzy) {
           target = h;
           role = meta.role;
           break;
         }
       }
-      if (!target) throw new Error(`Typeform choice not found (active): ${label}`);
+      if (!target) {
+        throw new Error(
+          `Typeform choice not found (active): ${label}` +
+            (seen.length ? ` (saw: ${[...new Set(seen)].slice(0, 8).join(" | ")})` : ""),
+        );
+      }
 
       await target.click({ delay: 40 });
       await sleep(350);
@@ -187,6 +202,7 @@ export async function submitEmpowerTypeformViaBrowser(
     await sleep(1000);
 
     // —— New to Empower ——
+    await waitActiveQuestion("empower");
     await selectChoice(fields.newToEmpower);
     await sleep(800);
 

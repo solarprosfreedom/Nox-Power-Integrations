@@ -50,7 +50,12 @@ export async function submitTronJotFormViaBrowser(
       if (!value) return;
       const el = await page.$(selector);
       if (!el) throw new Error(`Tron JotForm field not found on page: ${selector}`);
-      await el.type(value, { delay: 10 });
+      await el.click({ clickCount: 3 }).catch(() => null);
+      await page.evaluate((sel: string) => {
+        const node = document.querySelector(sel) as HTMLInputElement | null;
+        if (node) node.value = "";
+      }, selector);
+      await el.type(value, { delay: 15 });
     }
 
     await fill('input[name="q3_name[first]"]', fields.firstName);

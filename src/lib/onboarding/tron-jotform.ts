@@ -10,6 +10,7 @@ import {
   getSequifiFieldValue,
   parseSequifiFields,
 } from "@/lib/onboarding/sequifi-fields";
+import { formatPhoneForMaskedInput } from "@/lib/onboarding/phone";
 import { submitTronJotFormViaBrowser } from "@/lib/onboarding/tron-jotform-browser";
 import type { OnboardingJob } from "@/lib/onboarding/types";
 
@@ -99,11 +100,7 @@ function workEmailForJob(job: OnboardingJob): string {
 
 /** Format a phone number for JotForm's masked "(000) 000-0000" phone field. */
 function formatPhoneForJotForm(raw: string | null | undefined): string {
-  const digits = (raw ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  return trim(raw);
+  return formatPhoneForMaskedInput(raw);
 }
 
 export interface TronDob {

@@ -115,6 +115,13 @@ export const env = {
    * that require date of birth. Override with ONBOARDING_DEFAULT_DOB.
    */
   onboardingDefaultDob: opt("ONBOARDING_DEFAULT_DOB", "1990-01-01"),
+  /**
+   * Fallback US phone when Sequifi mobile is missing/invalid (NANP area/exchange
+   * cannot start with 0/1). Used by partner forms with masked phone inputs.
+   */
+  onboardingDefaultPhone: opt("ONBOARDING_DEFAULT_PHONE", "4805550199"),
+  /** BPS Primary Selling State when Sequifi markets don't overlap the form picklist. */
+  bpsDefaultPrimaryState: opt("BPS_DEFAULT_PRIMARY_STATE", "UT"),
   /** JSON map: Sequifi role/position substring → { enerfloRoles, terrosRoles, welcomeTemplate } */
   onboardingRoleMapJson: opt("ONBOARDING_ROLE_MAP_JSON"),
   /** UPN domain for new Microsoft users (default noxpwr.com). */
