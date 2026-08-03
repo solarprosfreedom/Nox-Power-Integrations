@@ -282,7 +282,8 @@ export async function submitEmpowerTypeformViaBrowser(
 }
 
 async function fillDate(
-  page: PuppeteerPage,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  page: any,
   isoDate: string,
   sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
