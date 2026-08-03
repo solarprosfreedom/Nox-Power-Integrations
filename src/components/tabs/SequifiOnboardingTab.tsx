@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   checkOnboardingUserExists,
   getOnboardingConfig,
@@ -177,33 +177,46 @@ function PartnerStepStatusPill({ status }: { status: PartnerStepUiStatus }) {
   );
 }
 
-function PartnerStepsPanel({ job }: { job: OnboardingJob }) {
+function PartnerStepsPanel({
+  job,
+  actions,
+}: {
+  job: OnboardingJob;
+  actions?: ReactNode;
+}) {
   const steps = getEligiblePartnerSteps(job);
-  if (steps.length === 0) {
+  if (steps.length === 0 && !actions) {
     return <p className="text-xs text-gray-600">No eligible partner sheets/forms for this job.</p>;
   }
   const failed = steps.filter(s => s.status === "failed").length;
   const completed = steps.filter(s => s.status === "completed").length;
   const pending = steps.filter(s => s.status === "pending").length;
   return (
-    <div className="mt-1 space-y-1">
-      <p className="text-[11px] text-gray-500">
-        Sheets/forms: {completed} done · {failed} failed · {pending} pending
-        {failed + pending > 0 ? " · Retry re-runs failed/pending only" : ""}
-      </p>
-      <ul className="space-y-0.5">
-        {steps.map(step => (
-          <li key={step.key} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
-            <PartnerStepStatusPill status={step.status} />
-            <span className="text-gray-300">{step.label}</span>
-            {step.detail && (
-              <span className="text-gray-500 truncate max-w-[420px]" title={step.detail}>
-                {step.detail}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+    <div className="mt-1 space-y-2 rounded-lg border border-gray-800/80 bg-gray-950/40 px-3 py-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <p className="text-[11px] text-gray-500 shrink-0">
+          Sheets/forms: {completed} done · {failed} failed · {pending} pending
+          {failed + pending > 0 ? " · Retry re-runs failed/pending only" : ""}
+        </p>
+        {actions && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 shrink-0">{actions}</div>
+        )}
+      </div>
+      {steps.length > 0 && (
+        <ul className="space-y-0.5">
+          {steps.map(step => (
+            <li key={step.key} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+              <PartnerStepStatusPill status={step.status} />
+              <span className="text-gray-300 whitespace-nowrap">{step.label}</span>
+              {step.detail && (
+                <span className="text-gray-500 break-all" title={step.detail}>
+                  {step.detail}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -929,17 +942,19 @@ export default function SequifiOnboardingTab() {
                   <th className="px-4 py-2">Tr</th>
                   <th className="px-4 py-2">Mail</th>
                   <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2" />
+                  <th className="px-4 py-2 whitespace-nowrap min-w-[5rem]">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {jobs.map(job => (
                   <Fragment key={job.id}>
-                    <tr className="border-b border-gray-800/60">
+                    <tr className={job.status === "completed" ? "" : "border-b border-gray-800/60"}>
                       <td className="px-4 py-2 text-gray-200 whitespace-nowrap">
                         {[job.first_name, job.last_name].filter(Boolean).join(" ") || "—"}
                       </td>
-                      <td className="px-4 py-2 text-gray-400 text-xs">{job.email}</td>
+                      <td className="px-4 py-2 text-gray-400 text-xs max-w-[200px] truncate" title={job.email}>
+                        {job.email}
+                      </td>
                       <td className="px-4 py-2">
                         <StatusPill status={job.microsoft_status} />
                       </td>
@@ -955,84 +970,84 @@ export default function SequifiOnboardingTab() {
                       <td className="px-4 py-2">
                         <StatusPill status={job.status} />
                       </td>
-                      <td className="px-4 py-2">
-                        <div className="flex flex-col gap-1">
-                          {job.status !== "completed" && !config?.dryRun && (
-                            <button
-                              type="button"
-                              onClick={() => handleRetry(job.id)}
-                              disabled={running}
-                              className="text-xs text-violet-400 hover:text-violet-300 text-left disabled:opacity-50"
-                            >
-                              Retry
-                            </button>
-                          )}
-                          {job.status === "completed" && !config?.dryRun && (
-                            <button
-                              type="button"
-                              onClick={() => handleRetryPartnerSteps(job.id)}
-                              disabled={running}
-                              title="Re-runs failed/pending partner steps only; completed (sent) steps are skipped"
-                              className="text-xs text-amber-400 hover:text-amber-300 text-left disabled:opacity-50"
-                            >
-                              Retry failed sheets/forms
-                            </button>
-                          )}
-                          {job.status === "completed" &&
-                            config?.empwrHubSpotConfigured &&
-                            jobHasEmpwrTab(job) && (
-                              <button
-                                type="button"
-                                onClick={() => handleEmpwrHubSpot(job.id)}
-                                disabled={hubspotJobId === job.id}
-                                className="text-xs text-orange-400 hover:text-orange-300 text-left disabled:opacity-50"
-                              >
-                                {hubspotJobId === job.id
-                                  ? "HubSpot…"
-                                  : job.step_errors.empwr_hubspot === "sent"
-                                    ? "HubSpot sent"
-                                    : "EMPWR HubSpot"}
-                              </button>
-                            )}
-                          {job.status === "completed" &&
-                            config?.empowerTypeformConfigured &&
-                            jobHasEmpowerTab(job) && (
-                              <button
-                                type="button"
-                                onClick={() => handleEmpowerTypeform(job.id)}
-                                disabled={empowerTypeformJobId === job.id}
-                                className="text-xs text-sky-400 hover:text-sky-300 text-left disabled:opacity-50"
-                              >
-                                {empowerTypeformJobId === job.id
-                                  ? "Typeform…"
-                                  : job.step_errors.empower_typeform === "sent"
-                                    ? "Typeform sent"
-                                    : "Empower Typeform"}
-                              </button>
-                            )}
-                          {job.status === "completed" &&
-                            config?.solqFormConfigured &&
-                            jobHasSolqTab(job) && (
-                              <button
-                                type="button"
-                                onClick={() => handleSolqForm(job.id)}
-                                disabled={solqFormJobId === job.id}
-                                className="text-xs text-teal-400 hover:text-teal-300 text-left disabled:opacity-50"
-                              >
-                                {solqFormJobId === job.id
-                                  ? "SolQ…"
-                                  : job.step_errors.solq_form === "sent"
-                                    ? "SolQ form sent"
-                                    : "SolQ Form"}
-                              </button>
-                            )}
-                        </div>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        {job.status !== "completed" && !config?.dryRun ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRetry(job.id)}
+                            disabled={running}
+                            className="text-xs text-violet-400 hover:text-violet-300 disabled:opacity-50"
+                          >
+                            Retry
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-600">—</span>
+                        )}
                       </td>
                     </tr>
                     {job.status === "completed" && (
                       <tr className="border-b border-gray-800/60">
                         <td colSpan={8} className="px-4 pb-3 pt-0">
-                          <PartnerStepsPanel job={job} />
+                          <PartnerStepsPanel
+                            job={job}
+                            actions={
+                              !config?.dryRun ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRetryPartnerSteps(job.id)}
+                                    disabled={running}
+                                    title="Re-runs failed/pending partner steps only; completed (sent) steps are skipped"
+                                    className="text-xs font-medium text-amber-400 hover:text-amber-300 whitespace-nowrap disabled:opacity-50"
+                                  >
+                                    Retry failed sheets/forms
+                                  </button>
+                                  {config?.empwrHubSpotConfigured && jobHasEmpwrTab(job) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEmpwrHubSpot(job.id)}
+                                      disabled={hubspotJobId === job.id}
+                                      className="text-xs text-orange-400 hover:text-orange-300 whitespace-nowrap disabled:opacity-50"
+                                    >
+                                      {hubspotJobId === job.id
+                                        ? "HubSpot…"
+                                        : job.step_errors.empwr_hubspot === "sent"
+                                          ? "HubSpot sent"
+                                          : "EMPWR HubSpot"}
+                                    </button>
+                                  )}
+                                  {config?.empowerTypeformConfigured && jobHasEmpowerTab(job) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEmpowerTypeform(job.id)}
+                                      disabled={empowerTypeformJobId === job.id}
+                                      className="text-xs text-sky-400 hover:text-sky-300 whitespace-nowrap disabled:opacity-50"
+                                    >
+                                      {empowerTypeformJobId === job.id
+                                        ? "Typeform…"
+                                        : job.step_errors.empower_typeform === "sent"
+                                          ? "Typeform sent"
+                                          : "Empower Typeform"}
+                                    </button>
+                                  )}
+                                  {config?.solqFormConfigured && jobHasSolqTab(job) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSolqForm(job.id)}
+                                      disabled={solqFormJobId === job.id}
+                                      className="text-xs text-teal-400 hover:text-teal-300 whitespace-nowrap disabled:opacity-50"
+                                    >
+                                      {solqFormJobId === job.id
+                                        ? "SolQ…"
+                                        : job.step_errors.solq_form === "sent"
+                                          ? "SolQ form sent"
+                                          : "SolQ Form"}
+                                    </button>
+                                  )}
+                                </>
+                              ) : undefined
+                            }
+                          />
                         </td>
                       </tr>
                     )}
