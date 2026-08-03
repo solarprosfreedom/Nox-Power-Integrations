@@ -460,12 +460,14 @@ export default function SequifiOnboardingTab() {
 
   async function handleRetryPartnerSteps(jobId: string) {
     setRunning(true);
-    setMessage(`Retrying partner sheets/forms for ${jobId.slice(0, 8)}…`);
+    setMessage(
+      `Retrying partner sheets/forms for ${jobId.slice(0, 8)}… this can take 1–3 minutes (browser forms). Status updates when it finishes — no need to refresh.`,
+    );
     try {
       const { job } = await retryPartnerStepsForJob(jobId);
       await refresh();
       if (!job) {
-        setMessage(`Partner retry finished but job ${jobId.slice(0, 8)} was not found`);
+        setMessage(`Partner retry finished but job ${jobId.slice(0, 8)} was not found — refresh the page.`);
         return;
       }
       const steps = getEligiblePartnerSteps(job);
@@ -480,7 +482,13 @@ export default function SequifiOnboardingTab() {
           : `Partner retry ${job.first_name ?? ""} ${job.last_name ?? ""}: ${retriedOk} eligible step(s) completed (already-sent skipped)`,
       );
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setMessage(`${msg} — refresh the page to see latest step statuses.`);
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
     } finally {
       setRunning(false);
     }
