@@ -85,12 +85,29 @@ export async function submitGoodPwrJotFormViaBrowser(
       submitBtn.click(),
     ]);
 
-    const bodyText: string = await page.evaluate(() => document.body.innerText);
-    const url: string = page.url();
+    // Navigation can destroy the old execution context mid-evaluate; wait then retry.
+    await new Promise(r => setTimeout(r, 800));
+    let bodyText = "";
+    let url = page.url();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        bodyText = await page.evaluate(() => document.body?.innerText || "");
+        url = page.url();
+        break;
+      } catch {
+        await new Promise(r => setTimeout(r, 400));
+        url = page.url();
+      }
+    }
+
+    if (url.includes("submit.jotform.com")) {
+      return { status: "sent" };
+    }
 
     const looksLikeCaptchaChallenge = /captcha/i.test(bodyText) || /please complete/i.test(bodyText);
-    const looksLikeSuccess = /thank you/i.test(bodyText) || url.includes("submit.jotform.com");
-    const looksLikeValidationError = /error on this page/i.test(bodyText);
+    const looksLikeSuccess = /thank you/i.test(bodyText);
+    const looksLikeValidationError =
+      /error on this page/i.test(bodyText) || /please enter a valid phone number/i.test(bodyText);
 
     if (looksLikeCaptchaChallenge) {
       return {
@@ -107,7 +124,7 @@ export async function submitGoodPwrJotFormViaBrowser(
     if (!looksLikeSuccess) {
       return {
         status: "failed",
-        reason: `Unexpected page after submit (url=${url}): ${bodyText.slice(0, 300)}`,
+        reason: `Unexpected page after submit (url=${url}): ${bodyText.slice(0, 300) || "(empty body)"}`,
       };
     }
 
