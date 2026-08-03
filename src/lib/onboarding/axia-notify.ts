@@ -9,7 +9,7 @@ import { isGraphMailConfigured, sendMailAsUser } from "@/lib/microsoft/graph-mai
 const AXIA_NOTIFY_TO = [
   "onboardingspecialist2@us.q-cells.com",
   "stan.fletcher@qcells.com",
-  "carldeveloper01@gmail.com",
+  "admin@noxpwr.com",
 ];
 const SENT_FLAG = "sent";
 
