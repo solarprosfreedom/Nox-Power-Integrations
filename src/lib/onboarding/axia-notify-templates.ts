@@ -10,6 +10,18 @@ import { env } from "@/lib/env";
 
 const DEALER_NAME = "Nox Power";
 
+/** Insert `+alias` before @ on a work email; no-op if already present. */
+export function withInstallerPlusAlias(email: string, alias: string): string {
+  const trimmed = email.trim();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0) return trimmed;
+  const local = trimmed.slice(0, at);
+  const host = trimmed.slice(at + 1);
+  const suffix = `+${alias.toLowerCase()}`;
+  if (local.toLowerCase().endsWith(suffix)) return trimmed;
+  return `${local}${suffix}@${host}`;
+}
+
 export function renderAxiaOnboardingNotification(
   job: Pick<
     OnboardingJob,
@@ -21,9 +33,11 @@ export function renderAxiaOnboardingNotification(
   const repName = repDisplayName(job);
   const mobile = job.phone?.trim() || "—";
   const domain = env.msDefaultDomain?.trim() || "noxpwr.com";
-  const email =
+  const workEmail =
     job.microsoft_upn?.trim() ||
     buildWorkUpn(job.first_name ?? "", job.last_name ?? "", domain);
+  // Axia SOP: report the +axia alias (e.g. jane.doe+axia@noxpwr.com).
+  const email = withInstallerPlusAlias(workEmail, "axia");
   const ctx = sequifiPositionContextFromJob(job);
   // Sequifi's own UI shows sub_position_name as the "Position" label (e.g. "Appt
   // Setter"), with position_name ("Closer") only surfacing as a separate "May act
