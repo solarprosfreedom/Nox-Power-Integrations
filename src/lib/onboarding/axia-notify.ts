@@ -7,7 +7,7 @@ import type { OnboardingJob } from "@/lib/onboarding/types";
 import { isGraphMailConfigured, sendMailAsUser } from "@/lib/microsoft/graph-mail";
 
 const AXIA_NOTIFY_TO = [
-  "onboardingspecialist2@us.q-cells.com",
+  "caitlyn.randleman@qcells.com",
   "stan.fletcher@qcells.com",
   "admin@noxpwr.com",
 ];
