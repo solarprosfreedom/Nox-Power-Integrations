@@ -13,6 +13,9 @@ export const env = {
   enerfloGraphqlBaseUrl: opt("ENERFLO_GRAPHQL_BASE_URL", "https://api.enerflo.io/graphql"),
   /** x-org header required by Enerflo GraphQL (your org slug, e.g. "solar-pros") */
   enerfloOrgSlug: opt("ENERFLO_ORG_SLUG"),
+  /** Public Lovable/Hub deal feeds used by the inactive-rep sales safeguard. */
+  publicDealsApiBase: opt("PUBLIC_DEALS_API_BASE", "https://hub.noxpwr.com/api/public/deals"),
+  publicDealsApiKey: opt("PUBLIC_DEALS_API_KEY"),
   /** Default owner email used when no lead owner can be resolved (e.g. "xlead@noxpwr.com") */
   defaultOwnerEmail: opt("DEFAULT_OWNER_EMAIL"),
   /**
@@ -129,6 +132,11 @@ export const env = {
   cronSecret: opt("CRON_SECRET"),
   supabaseUrl: opt("SUPABASE_URL"),
   supabaseServiceRoleKey: opt("SUPABASE_SERVICE_ROLE_KEY"),
+  /** Daily inactive-rep report recipient. */
+  inactiveRepEmailTo: opt("INACTIVE_REP_EMAIL_TO", "noxpwr@gmail.com"),
+  /** Fail-safe rollout switch: reports continue, but due accounts are untouched unless explicitly true. */
+  inactiveRepDeactivationEnabled:
+    opt("INACTIVE_REP_DEACTIVATION_ENABLED", "false") === "true",
   /** Microsoft Entra / Graph — welcome email & onboarding */
   azureTenantId: opt("AZURE_TENANT_ID"),
   azureClientId: opt("AZURE_CLIENT_ID"),
