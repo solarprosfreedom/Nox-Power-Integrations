@@ -3,6 +3,9 @@
 The production cron calls `GET /api/cron/inactive-rep-deactivation` every day at
 15:00 UTC, which is 08:00 in `America/Phoenix` year-round.
 
+Production deployments are triggered from `main`; feature-branch deployments are
+previews and do not register the production cron schedule.
+
 ## Rollout
 
 1. Apply `supabase/migrations/004_inactive_rep_deactivation.sql` to the configured
