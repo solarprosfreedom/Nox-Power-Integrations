@@ -14,11 +14,15 @@
     },
     {
       "path": "/api/cron/inactive-rep-deactivation",
-      "schedule": "*/15 14 * * *"
+      "schedule": "0,15,30 14 * * *"
+    },
+    {
+      "path": "/api/cron/inactive-rep-report-prepare",
+      "schedule": "45 14 * * *"
     },
     {
       "path": "/api/cron/inactive-rep-report",
-      "schedule": "0 15 * * *"
+      "schedule": "0,5,10,20 15 * * *"
     }
   ],
   "functions": {
@@ -31,6 +35,10 @@
       "maxDuration": 300
     },
     "src/app/api/cron/inactive-rep-deactivation/route.ts": {
+      "memory": 1536,
+      "maxDuration": 300
+    },
+    "src/app/api/cron/inactive-rep-report-prepare/route.ts": {
       "memory": 1536,
       "maxDuration": 300
     },

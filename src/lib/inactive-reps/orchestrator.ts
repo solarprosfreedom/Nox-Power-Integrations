@@ -13,6 +13,7 @@ import {
   claimBatchForEmail,
   claimBatchForProcessing,
   ensureBatchActions,
+  getBatchByReportDate,
   listBatchActions,
   listDueBatches,
   updateAction,
@@ -196,17 +197,23 @@ async function processDueBatch(
   });
 }
 
-export async function runInactiveRepReport(
-  options?: { now?: Date },
-): Promise<Pick<CronRunSummary, "report" | "sourceSummary" | "exclusions">> {
-  const now = options?.now ?? new Date();
+function reportContext(now: Date): { reportDate: string; recipient: string; subject: string } {
   const reportDate = phoenixDateString(now);
   const recipient = env.inactiveRepEmailTo?.trim() || "noxpwr@gmail.com";
-  const subject = `[Inactive Rep Review] ${reportDate} (Phoenix)`;
+  return {
+    reportDate,
+    recipient,
+    subject: `[Inactive Rep Review] ${reportDate} (Phoenix)`,
+  };
+}
+
+export async function prepareInactiveRepReport(options?: { now?: Date }) {
+  const now = options?.now ?? new Date();
+  const { reportDate, recipient, subject } = reportContext(now);
   const source = await fetchInactiveRepSourceSnapshot();
   const result = buildInactiveRepCandidates(source, now);
   const csv = buildCandidateCsv(result.candidates);
-  const { batch } = await createOrLoadPreparingBatch({
+  const { batch, created } = await createOrLoadPreparingBatch({
     reportDate,
     subject,
     emailTo: recipient,
@@ -214,6 +221,34 @@ export async function runInactiveRepReport(
     result,
     csv,
   });
+
+  return {
+    preparation: {
+      reportDate,
+      status: created ? ("prepared" as const) : ("already_exists" as const),
+      batchId: batch.id,
+      batchStatus: batch.status,
+      candidates: batch.candidates.length,
+      accounts: accountCount(batch.candidates),
+    },
+    sourceSummary: result.sourceSummary,
+    exclusions: result.exclusions,
+  };
+}
+
+export async function runInactiveRepReport(
+  options?: { now?: Date },
+): Promise<Pick<CronRunSummary, "report"> & { preparedOnDemand: boolean }> {
+  const now = options?.now ?? new Date();
+  const { reportDate } = reportContext(now);
+  let batch = await getBatchByReportDate(reportDate);
+  let preparedOnDemand = false;
+  if (!batch) {
+    await prepareInactiveRepReport({ now });
+    batch = await getBatchByReportDate(reportDate);
+    preparedOnDemand = true;
+  }
+  if (!batch) throw new Error(`Inactive-rep report batch ${reportDate} was not prepared`);
 
   let report: CronRunSummary["report"];
   if (["emailing", "emailed", "processing", "partial", "completed"].includes(batch.status)) {
@@ -275,8 +310,7 @@ export async function runInactiveRepReport(
 
   return {
     report,
-    sourceSummary: result.sourceSummary,
-    exclusions: result.exclusions,
+    preparedOnDemand,
   };
 }
 

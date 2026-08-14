@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   buildCandidateCsv,
   buildInactiveRepCandidates,
@@ -125,6 +126,16 @@ test("deactivation batches become due after 23 hours", () => {
     inactiveRepDeactivationDueBefore(new Date("2026-08-15T14:15:00.000Z")).toISOString(),
     "2026-08-14T15:15:00.000Z",
   );
+});
+
+test("Vercel cron splits deactivation, preparation, and delivery in Phoenix time", () => {
+  const config = JSON.parse(readFileSync("vercel.json", "utf8")) as {
+    crons: Array<{ path: string; schedule: string }>;
+  };
+  const schedule = new Map(config.crons.map(item => [item.path, item.schedule]));
+  assert.equal(schedule.get("/api/cron/inactive-rep-deactivation"), "0,15,30 14 * * *");
+  assert.equal(schedule.get("/api/cron/inactive-rep-report-prepare"), "45 14 * * *");
+  assert.equal(schedule.get("/api/cron/inactive-rep-report"), "0,5,10,20 15 * * *");
 });
 
 test("no-login history requires an account older than 30 days", () => {

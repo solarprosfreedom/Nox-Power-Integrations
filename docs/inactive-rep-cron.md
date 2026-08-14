@@ -1,11 +1,13 @@
 # Inactive rep Vercel cron
 
 The production deactivation cron calls `GET /api/cron/inactive-rep-deactivation`
-every 15 minutes from 14:00 through 14:45 UTC (07:00 through 07:45 in
+at 14:00, 14:15, and 14:30 UTC (07:00, 07:15, and 07:30 in
 `America/Phoenix`). It processes each emailed batch on the first run at least 23
-hours after the confirmed send time. The report cron calls
-`GET /api/cron/inactive-rep-report` at 15:00 UTC (08:00 Phoenix) after the prior
-batch has been processed.
+hours after the confirmed send time. At 14:45 UTC (07:45 Phoenix),
+`GET /api/cron/inactive-rep-report-prepare` pulls the live sources and stores the
+completed CSV. `GET /api/cron/inactive-rep-report` first attempts delivery at
+15:00 UTC (08:00 Phoenix), with idempotent retries at 08:05, 08:10, and 08:20.
+If preparation failed, the sender generates the batch on demand before delivery.
 
 Production deployments are triggered from `main`; feature-branch deployments are
 previews and do not register the production cron schedule.
