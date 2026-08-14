@@ -3,7 +3,7 @@ import { dirname, extname, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = process.cwd();
-const candidates = ["", ".ts", ".tsx", ".js", ".mjs", "/index.ts", "/index.tsx", "/index.js"];
+const candidates = [".ts", ".tsx", ".js", ".mjs", "/index.ts", "/index.tsx", "/index.js"];
 
 export async function resolve(specifier, context, defaultResolve) {
   if (specifier === "next/server" || specifier === "next/navigation") {

@@ -11,7 +11,6 @@ import SequifiOnboardingTab from "@/components/tabs/SequifiOnboardingTab";
 import SheetsRosterTab from "@/components/tabs/SheetsRosterTab";
 import ParagonSyncTab from "@/components/tabs/ParagonSyncTab";
 import LeaderboardFixTab from "@/components/tabs/LeaderboardFixTab";
-import InactiveRepLogsTab from "@/components/tabs/InactiveRepLogsTab";
 import { fetchStoredLogs } from "@/app/actions/enerflo";
 import { getIntegrationEnvStatus } from "@/app/actions/env-status";
 import type { ApiLog } from "@/lib/logger";
@@ -21,7 +20,6 @@ type SectionId =
   | "sequifi"
   | "terros"
   | "middleware"
-  | "inactive-reps"
   | "sync"
   | "users"
   | "migration"
@@ -141,23 +139,6 @@ export default function Dashboard() {
             <div className="min-w-0">
               <p className="text-sm font-medium truncate">Middleware</p>
               <p className="text-[10px] text-gray-600 truncate">Connect & automate</p>
-            </div>
-          </button>
-
-          <button
-            onClick={() => setSection("inactive-reps")}
-            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
-              ${section === "inactive-reps"
-                ? "bg-cyan-900/40 text-cyan-200"
-                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
-              }`}
-          >
-            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-cyan-400">
-              ◷
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-medium truncate">Inactive Reps</p>
-              <p className="text-[10px] text-gray-600 truncate">Email &amp; deactivation logs</p>
             </div>
           </button>
 
@@ -324,12 +305,6 @@ export default function Dashboard() {
               <h1 className="text-base font-semibold text-teal-300">Middleware</h1>
               <span className="text-xs text-gray-600">Automated data flows between integrations</span>
             </>
-          ) : section === "inactive-reps" ? (
-            <>
-              <span className="text-cyan-400">◷</span>
-              <h1 className="text-base font-semibold text-cyan-300">Inactive Reps</h1>
-              <span className="text-xs text-gray-600">Email delivery and account deactivation logs</span>
-            </>
           ) : section === "sync" ? (
             <>
               <span className="text-violet-400">⇄</span>
@@ -399,11 +374,6 @@ export default function Dashboard() {
           {section === "middleware" && (
             <div className="flex-1 overflow-y-auto px-8 py-8">
               <MiddlewarePanel logs={logs} />
-            </div>
-          )}
-          {section === "inactive-reps" && (
-            <div className="flex-1 overflow-y-auto px-8 py-8">
-              <InactiveRepLogsTab />
             </div>
           )}
           {section === "sync" && (

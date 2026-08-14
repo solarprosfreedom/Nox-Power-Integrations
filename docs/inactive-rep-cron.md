@@ -17,19 +17,26 @@ No inactive-rep cron runs on Saturday or Sunday. A Friday report therefore
 remains in review through the weekend and is first eligible for processing on
 Monday morning, after another complete live revalidation.
 
-The authenticated dashboard includes an **Inactive Reps** view. It reads the
-durable Supabase batch and action records to show confirmed report emails,
-recipients, review deadlines, and every platform-account outcome (pending,
-deactivated, skipped, blocked, or failed). The view refreshes automatically
-every minute and can also be refreshed manually.
+The inactive-rep review portal is separate from the integration dashboard. Open
+`/inactive-reps`, which redirects unauthenticated reviewers to
+`/inactive-reps/login`. Access is restricted to `jorgesalazar@noxpwr.com` and
+`jonaslim@noxpwr.com`; each sign-in requires a six-digit, one-time code sent by
+Microsoft Graph to the selected mailbox. Codes expire after 10 minutes, allow
+five attempts, and can only be requested once per minute. The portal uses a
+dedicated session cookie, so the main dashboard login does not grant access. It
+reads the durable Supabase batch and action records to show confirmed report
+emails, recipients, review deadlines, scheduled representatives, and manager
+protections. It refreshes automatically every minute and can also be refreshed
+manually.
 
 Production deployments are triggered from `main`; feature-branch deployments are
 previews and do not register the production cron schedule.
 
 ## Rollout
 
-1. Apply `supabase/migrations/004_inactive_rep_deactivation.sql` to the configured
-   Supabase project.
+1. Apply migrations `004_inactive_rep_deactivation.sql`,
+   `005_inactive_rep_exemptions.sql`, and `006_inactive_rep_otp_auth.sql` to the
+   configured Supabase project, in order.
 2. Configure the required production environment variables in Vercel.
 3. Deploy with `INACTIVE_REP_DEACTIVATION_ENABLED=false` and confirm the CSV email.
 4. After the report and stored batch have been reviewed, set
@@ -50,6 +57,8 @@ process due account actions.
 - `ENERFLO_ORG_SLUG`
 - `TERROS_API_KEY`
 - `PUBLIC_DEALS_API_KEY`
+- `INACTIVE_REPS_AUTH_SECRET` — independent session-signing secret; generate
+  with `openssl rand -hex 32` (minimum 32 characters)
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
 - `AZURE_CLIENT_SECRET`

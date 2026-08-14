@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { AUTH_EMAIL } from "@/lib/auth";
-import { isDashboardAuthed } from "@/lib/auth/require-dashboard";
+import { getInactiveRepSession } from "@/lib/auth/require-inactive-reps";
+import { requestIsSameOrigin } from "@/lib/auth/request-origin";
 import {
   protectInactiveRep,
   revokeInactiveRepExemption,
@@ -14,13 +14,9 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function requestIsSameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  return !origin || origin === new URL(request.url).origin;
-}
-
 export async function POST(request: Request) {
-  if (!(await isDashboardAuthed())) {
+  const session = await getInactiveRepSession();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   if (!requestIsSameOrigin(request)) {
@@ -40,7 +36,7 @@ export async function POST(request: Request) {
       if (!isUuid(exemptionId)) {
         return NextResponse.json({ error: "A valid exemptionId is required" }, { status: 400 });
       }
-      const revoked = await revokeInactiveRepExemption({ exemptionId, revokedBy: AUTH_EMAIL });
+      const revoked = await revokeInactiveRepExemption({ exemptionId, revokedBy: session.email });
       if (!revoked) {
         return NextResponse.json({ error: "Active persistent protection was not found" }, { status: 404 });
       }
@@ -73,7 +69,7 @@ export async function POST(request: Request) {
       identityKey,
       scope,
       reason,
-      createdBy: AUTH_EMAIL,
+      createdBy: session.email,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
