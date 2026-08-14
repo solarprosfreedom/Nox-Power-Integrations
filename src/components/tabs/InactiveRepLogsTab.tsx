@@ -162,10 +162,15 @@ export default function InactiveRepLogsTab() {
 
   const counts = useMemo(() => {
     const accounts = logs?.accounts ?? [];
+    const pendingRepCount = new Set(
+      accounts
+        .filter(account => account.status === "pending")
+        .map(account => account.identityKey || account.accountEmail.toLowerCase() || account.repName.toLowerCase()),
+    ).size;
     return {
       sent: (logs?.batches ?? []).filter(batch => Boolean(batch.emailedAt)).length,
       success: accounts.filter(account => account.status === "success" && !account.alreadyInactive).length,
-      pending: accounts.filter(account => account.status === "pending").length,
+      pending: pendingRepCount,
       attention: accounts.filter(account => ["blocked", "failed"].includes(account.status)).length,
       protected: accounts.filter(account => account.manuallyProtected).length,
     };
@@ -317,7 +322,7 @@ export default function InactiveRepLogsTab() {
         {[
           { label: "Emails confirmed", value: counts.sent, color: "text-blue-300" },
           { label: "Accounts deactivated", value: counts.success, color: "text-emerald-300" },
-          { label: "Pending review", value: counts.pending, color: "text-gray-200" },
+          { label: "Pending reps", value: counts.pending, color: "text-gray-200" },
           { label: "Needs attention", value: counts.attention, color: "text-amber-300" },
           { label: "Accounts protected", value: counts.protected, color: "text-violet-300" },
         ].map(item => (
