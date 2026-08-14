@@ -14,6 +14,10 @@
     },
     {
       "path": "/api/cron/inactive-rep-deactivation",
+      "schedule": "*/15 14 * * *"
+    },
+    {
+      "path": "/api/cron/inactive-rep-report",
       "schedule": "0 15 * * *"
     }
   ],
@@ -27,6 +31,10 @@
       "maxDuration": 300
     },
     "src/app/api/cron/inactive-rep-deactivation/route.ts": {
+      "memory": 1536,
+      "maxDuration": 300
+    },
+    "src/app/api/cron/inactive-rep-report/route.ts": {
       "memory": 1536,
       "maxDuration": 300
     }

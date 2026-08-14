@@ -1,7 +1,11 @@
 # Inactive rep Vercel cron
 
-The production cron calls `GET /api/cron/inactive-rep-deactivation` every day at
-15:00 UTC, which is 08:00 in `America/Phoenix` year-round.
+The production deactivation cron calls `GET /api/cron/inactive-rep-deactivation`
+every 15 minutes from 14:00 through 14:45 UTC (07:00 through 07:45 in
+`America/Phoenix`). It processes each emailed batch on the first run at least 23
+hours after the confirmed send time. The report cron calls
+`GET /api/cron/inactive-rep-report` at 15:00 UTC (08:00 Phoenix) after the prior
+batch has been processed.
 
 Production deployments are triggered from `main`; feature-branch deployments are
 previews and do not register the production cron schedule.
@@ -56,7 +60,7 @@ licenses.
 - Only verified Sales Rep, Setter, or Closer roles are eligible; admins, managers,
   operations, and service accounts are excluded.
 - The emailed batch is immutable. Only stable account IDs listed in that batch can
-  be processed, and each person is fully revalidated after the 24-hour wait.
+  be processed, and each person is fully revalidated after the 23-hour wait.
 - Microsoft direct licenses are removed first. If any license remains, including a
   group-based license, the Microsoft account is not disabled.
 - Enerflo users are set inactive. Terros users are archived, never hard-deleted.

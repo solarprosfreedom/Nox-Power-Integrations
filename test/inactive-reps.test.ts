@@ -6,7 +6,11 @@ import {
   evaluateAccountActivity,
 } from "@/lib/inactive-reps/evaluate";
 import { buildIdentityKey, fuzzyNameScore, matchSaleAttribution } from "@/lib/inactive-reps/identity";
-import { phoenixDateString } from "@/lib/inactive-reps/orchestrator";
+import {
+  inactiveRepDeactivationDueBefore,
+  INACTIVE_REP_DEACTIVATION_DELAY_HOURS,
+  phoenixDateString,
+} from "@/lib/inactive-reps/orchestrator";
 import type { InactiveRepSourceSnapshot, SourceAccount } from "@/lib/inactive-reps/sources";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
 
@@ -113,6 +117,14 @@ function sourceSnapshot(): InactiveRepSourceSnapshot {
 test("Phoenix date uses Arizona wall-clock time", () => {
   assert.equal(phoenixDateString(new Date("2026-08-15T06:30:00.000Z")), "2026-08-14");
   assert.equal(phoenixDateString(new Date("2026-08-15T15:00:00.000Z")), "2026-08-15");
+});
+
+test("deactivation batches become due after 23 hours", () => {
+  assert.equal(INACTIVE_REP_DEACTIVATION_DELAY_HOURS, 23);
+  assert.equal(
+    inactiveRepDeactivationDueBefore(new Date("2026-08-15T14:15:00.000Z")).toISOString(),
+    "2026-08-14T15:15:00.000Z",
+  );
 });
 
 test("no-login history requires an account older than 30 days", () => {

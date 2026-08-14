@@ -27,7 +27,13 @@ import {
   type InactiveRepCandidate,
 } from "@/lib/inactive-reps/types";
 
-const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+
+export const INACTIVE_REP_DEACTIVATION_DELAY_HOURS = 23;
+
+export function inactiveRepDeactivationDueBefore(date: Date): Date {
+  return new Date(date.getTime() - INACTIVE_REP_DEACTIVATION_DELAY_HOURS * HOUR_MS);
+}
 
 export function phoenixDateString(date: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -190,7 +196,9 @@ async function processDueBatch(
   });
 }
 
-export async function runInactiveRepCron(options?: { now?: Date }): Promise<CronRunSummary> {
+export async function runInactiveRepReport(
+  options?: { now?: Date },
+): Promise<Pick<CronRunSummary, "report" | "sourceSummary" | "exclusions">> {
   const now = options?.now ?? new Date();
   const reportDate = phoenixDateString(now);
   const recipient = env.inactiveRepEmailTo?.trim() || "noxpwr@gmail.com";
@@ -265,10 +273,18 @@ export async function runInactiveRepCron(options?: { now?: Date }): Promise<Cron
     }
   }
 
-  // Use the time after report generation/confirmation. The previous day's email
-  // is normally a few minutes later than the cron's nominal start time.
-  const dueReference = options?.now ?? new Date();
-  const dueBefore = new Date(dueReference.getTime() - DAY_MS);
+  return {
+    report,
+    sourceSummary: result.sourceSummary,
+    exclusions: result.exclusions,
+  };
+}
+
+export async function runInactiveRepDeactivation(
+  options?: { now?: Date },
+): Promise<Pick<CronRunSummary, "deactivation">> {
+  const now = options?.now ?? new Date();
+  const dueBefore = inactiveRepDeactivationDueBefore(now);
   const dueBatches = await listDueBatches(dueBefore);
   const counters: DeactivationCounters = {
     revalidatedPeople: 0,
@@ -277,7 +293,9 @@ export async function runInactiveRepCron(options?: { now?: Date }): Promise<Cron
     blocked: 0,
     failed: 0,
   };
-  if (env.inactiveRepDeactivationEnabled) {
+  if (env.inactiveRepDeactivationEnabled && dueBatches.length) {
+    const source = await fetchInactiveRepSourceSnapshot();
+    const result = buildInactiveRepCandidates(source, now);
     const currentCandidates = new Map(result.candidates.map(candidate => [candidate.identityKey, candidate]));
     for (const dueBatch of dueBatches) {
       await processDueBatch(dueBatch, currentCandidates, counters);
@@ -285,13 +303,10 @@ export async function runInactiveRepCron(options?: { now?: Date }): Promise<Cron
   }
 
   return {
-    report,
     deactivation: {
       enabled: env.inactiveRepDeactivationEnabled,
       dueBatches: dueBatches.length,
       ...counters,
     },
-    sourceSummary: result.sourceSummary,
-    exclusions: result.exclusions,
   };
 }

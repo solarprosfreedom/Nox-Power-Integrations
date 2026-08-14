@@ -82,7 +82,7 @@ export async function sendInactiveRepReport(options: {
     </ul>
     <p>Criteria: eligible Sales Rep, Setter, or Closer; no login within the rolling 30-day window on every existing platform account; and no confidently attributable sales activity within the rolling 30-day window.</p>
     <p>A no-login-history account is included only when it is more than 30 days old. A recent login on any existing platform protects the representative.</p>
-    <p>Every person will be checked again against live role, login, sales, account, and license data before action. Eligible accounts are processed no sooner than 24 hours after this email is confirmed in Sent Items.</p>
+    <p>Every person will be checked again against live role, login, sales, account, and license data before action. Eligible accounts are processed no sooner than 23 hours after this email is confirmed in Sent Items.</p>
   `;
   const res = await fetch(`${GRAPH_BASE}/users/${encodeURIComponent(from)}/sendMail`, {
     method: "POST",
