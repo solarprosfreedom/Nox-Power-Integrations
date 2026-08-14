@@ -52,16 +52,23 @@ export function buildIdentityKey(aliasesJson?: string): (value: unknown) => stri
 }
 
 export function normalizePersonName(value: unknown): string {
-  return String(value ?? "")
+  const normalized = String(value ?? "")
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
+    // OWE appends the sales organization after a pipe (for example,
+    // "Michael Davis | DRIVIN"). It is metadata, not part of the rep name.
+    .replace(/\s*\|.*$/, " ")
     .replace(/\([^)]*(closer|setter|sales|rep|advisor|owner)[^)]*\)/g, " ")
     .replace(/\b(closer|setter|sales rep|sales advisor)\b$/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/^e on\s+/, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const parts = normalized.split(" ").filter(Boolean);
+  if (parts[0] === "eddy" || parts[0] === "eddie") parts[0] = "edward";
+  return parts.join(" ");
 }
 
 export function levenshtein(a: string, b: string): number {

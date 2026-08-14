@@ -6,7 +6,12 @@ import {
   buildInactiveRepCandidates,
   evaluateAccountActivity,
 } from "@/lib/inactive-reps/evaluate";
-import { buildIdentityKey, fuzzyNameScore, matchSaleAttribution } from "@/lib/inactive-reps/identity";
+import {
+  buildIdentityKey,
+  fuzzyNameScore,
+  matchSaleAttribution,
+  normalizePersonName,
+} from "@/lib/inactive-reps/identity";
 import { inactiveRepReportRecipients } from "@/lib/inactive-reps/recipients";
 import {
   inactiveRepDeactivationDueBefore,
@@ -182,6 +187,91 @@ test("safe fuzzy attribution recognizes a unique last-name typo", () => {
   );
   assert.equal(result.matches.get("carolschroeder@noxpwr.com")?.method, "fuzzy_unique_best_name");
   assert.equal(result.ambiguousIdentityKeys.size, 0);
+});
+
+test("OWE partner suffixes and Eddy/Edward names match the correct reps", () => {
+  assert.equal(normalizePersonName("Michael Davis | DRIVIN"), "michael davis");
+  assert.equal(normalizePersonName("Eddy Schofield"), "edward schofield");
+  assert.equal(normalizePersonName("Edward Schofield | DRIVIN"), "edward schofield");
+
+  const identityKey = buildIdentityKey();
+  const result = matchSaleAttribution(
+    [],
+    [
+      { value: "Edward Schofield | DRIVIN", path: "project.closer_name" },
+      { value: "Michael Davis | DRIVIN", path: "project.setter_name" },
+    ],
+    [
+      {
+        identityKey: identityKey("eddyschofield@noxpwr.com"),
+        identityEmail: "eddyschofield@noxpwr.com",
+        name: "Eddy Schofield",
+      },
+      {
+        identityKey: identityKey("michaeldavis@noxpwr.com"),
+        identityEmail: "michaeldavis@noxpwr.com",
+        name: "Michael Davis",
+      },
+    ],
+    identityKey,
+  );
+
+  assert.equal(result.matches.get("eddyschofield@noxpwr.com")?.method, "exact_unique_name");
+  assert.equal(result.matches.get("michaeldavis@noxpwr.com")?.method, "exact_unique_name");
+  assert.equal(result.ambiguousIdentityKeys.size, 0);
+});
+
+test("recent OWE sales protect Eddy Schofield and Michael Davis from deactivation", () => {
+  const sequifiUsers = [
+    sequifi({ id: 10, name: "Eddy Schofield", email: "eddyschofield@noxpwr.com" }),
+    sequifi({ id: 11, name: "Michael Davis", email: "michaeldavis@noxpwr.com" }),
+  ];
+  const snapshot: InactiveRepSourceSnapshot = {
+    sequifiUsers,
+    accounts: {
+      enerflo: [
+        account({ platform: "enerflo", id: "ef-eddy", email: "eddyschofield@noxpwr.com" }),
+        account({ platform: "enerflo", id: "ef-michael", email: "michaeldavis@noxpwr.com" }),
+      ],
+      microsoft: [],
+      terros: [],
+    },
+    salesFeeds: [
+      {
+        installer: "owe",
+        table: "owe_deals",
+        primaryKey: "pid",
+        rows: [
+          {
+            project: {
+              contract_signed_date: "2026-07-24",
+              closer_name: "Edward Schofield | DRIVIN",
+            },
+            raw: {},
+          },
+          {
+            project: {
+              contract_signed_date: "2026-07-25",
+              setter_name: "Michael Davis | DRIVIN",
+            },
+            raw: {},
+          },
+        ],
+      },
+    ],
+    sourceSummary: {
+      sequifiUsers: 2,
+      enerfloRestUsers: 2,
+      enerfloGraphqlUsers: 2,
+      microsoftUsers: 0,
+      terrosUsers: 0,
+      salesRows: { owe: 2 },
+    },
+  };
+
+  const result = buildInactiveRepCandidates(snapshot, now);
+  assert.deepEqual(result.candidates, []);
+  assert.equal(result.exclusions["sales activity within the last 30 days"], 2);
 });
 
 test("inactive-rep reports include and deduplicate additional recipients", () => {
