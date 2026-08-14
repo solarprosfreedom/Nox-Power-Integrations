@@ -11,6 +11,8 @@ import {
   type InactiveRepBatchLog,
   type InactiveRepBatch,
   type InactiveRepCandidate,
+  type InactiveRepExemption,
+  type InactiveRepExemptionScope,
 } from "@/lib/inactive-reps/types";
 import { inactiveRepReportRecipients } from "@/lib/inactive-reps/recipients";
 
@@ -65,6 +67,77 @@ function actionFromRow(row: Record<string, unknown>): InactiveRepAction {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
+}
+
+function exemptionFromRow(row: Record<string, unknown>): InactiveRepExemption {
+  return {
+    id: String(row.id),
+    identityKey: String(row.identity_key),
+    displayName: String(row.display_name ?? ""),
+    scope: row.scope as InactiveRepExemptionScope,
+    batchId: row.batch_id == null ? null : String(row.batch_id),
+    reason: String(row.reason),
+    createdBy: String(row.created_by),
+    active: row.active === true,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export async function listActiveInactiveRepExemptions(): Promise<InactiveRepExemption[]> {
+  const { data, error } = await db()
+    .from("inactive_rep_exemptions")
+    .select("id,identity_key,display_name,scope,batch_id,reason,created_by,active,created_at,updated_at")
+    .eq("active", true)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`inactive_rep_exemptions list failed: ${error.message}`);
+  return (data ?? []).map(row => exemptionFromRow(row as Record<string, unknown>));
+}
+
+export async function listActivePersistentExemptionKeys(): Promise<Set<string>> {
+  const exemptions = await listActiveInactiveRepExemptions();
+  return new Set(
+    exemptions
+      .filter(exemption => exemption.scope === "persistent")
+      .map(exemption => exemption.identityKey),
+  );
+}
+
+export async function protectInactiveRep(options: {
+  batchId: string;
+  identityKey: string;
+  scope: InactiveRepExemptionScope;
+  reason: string;
+  createdBy: string;
+}): Promise<{ exemptionId: string; skippedActions: number }> {
+  const { data, error } = await db()
+    .rpc("protect_inactive_rep", {
+      p_batch_id: options.batchId,
+      p_identity_key: options.identityKey,
+      p_scope: options.scope,
+      p_reason: options.reason,
+      p_created_by: options.createdBy,
+    })
+    .single();
+  if (error) throw new Error(`Inactive-rep protection failed: ${error.message}`);
+  const row = data as Record<string, unknown> | null;
+  if (!row) throw new Error("Inactive-rep protection returned no result");
+  return {
+    exemptionId: String(row.exemption_id),
+    skippedActions: Number(row.skipped_actions ?? 0),
+  };
+}
+
+export async function revokeInactiveRepExemption(options: {
+  exemptionId: string;
+  revokedBy: string;
+}): Promise<boolean> {
+  const { data, error } = await db().rpc("revoke_inactive_rep_exemption", {
+    p_exemption_id: options.exemptionId,
+    p_revoked_by: options.revokedBy,
+  });
+  if (error) throw new Error(`Inactive-rep exemption revoke failed: ${error.message}`);
+  return data === true;
 }
 
 export async function getBatchByReportDate(reportDate: string): Promise<InactiveRepBatch | null> {
@@ -246,6 +319,11 @@ function actionLogDetail(row: Record<string, unknown>): string {
   const status = row.status as ActionStatus;
   const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
   const lastError = row.last_error == null ? "" : String(row.last_error);
+  if (metadata.manuallyProtected === true) {
+    const reason = String(metadata.protectionReason ?? "Manager confirmed the representative is active");
+    const by = String(metadata.protectedBy ?? "dashboard administrator");
+    return `Protected by ${by}: ${reason}`;
+  }
   if (lastError) return lastError;
   if (status === "pending") return "Waiting for the review window and live revalidation";
   if (metadata.alreadyInactive === true) return "Account was already inactive at processing time";
@@ -284,7 +362,7 @@ export async function listInactiveRepAutomationLogs(limit = 30): Promise<Inactiv
     ? await db()
         .from("inactive_rep_actions")
         .select(
-          "id,batch_id,platform,account_id,account_email,status,attempts,last_error,metadata,processed_at,created_at",
+          "id,batch_id,identity_key,platform,account_id,account_email,status,attempts,last_error,metadata,processed_at,created_at",
         )
         .in("batch_id", ids)
         .order("created_at", { ascending: false })
@@ -331,11 +409,19 @@ export async function listInactiveRepAutomationLogs(limit = 30): Promise<Inactiv
       reportDate: reportDateByBatch.get(batchId) ?? "",
       repName: String(metadata.emailedName ?? "Unknown representative"),
       repRole: String(metadata.emailedRole ?? ""),
+      identityKey: String(row.identity_key),
       platform: row.platform as InactiveRepAccountLog["platform"],
       accountId: String(row.account_id),
       accountEmail: String(row.account_email),
       status: row.status as ActionStatus,
       alreadyInactive: metadata.alreadyInactive === true || metadata.alreadyDisabled === true,
+      manuallyProtected: metadata.manuallyProtected === true,
+      protectionScope: metadata.protectionScope === "batch" || metadata.protectionScope === "persistent"
+        ? metadata.protectionScope
+        : null,
+      protectionReason: metadata.protectionReason == null ? null : String(metadata.protectionReason),
+      protectedBy: metadata.protectedBy == null ? null : String(metadata.protectedBy),
+      protectedAt: metadata.protectedAt == null ? null : String(metadata.protectedAt),
       attempts: Number(row.attempts ?? 0),
       detail: actionLogDetail(row as Record<string, unknown>),
       processedAt: row.processed_at == null ? null : String(row.processed_at),
@@ -343,11 +429,14 @@ export async function listInactiveRepAutomationLogs(limit = 30): Promise<Inactiv
     };
   });
 
+  const exemptions = await listActiveInactiveRepExemptions();
+
   return {
     fetchedAt: new Date().toISOString(),
     deactivationEnabled: env.inactiveRepDeactivationEnabled,
     batches,
     accounts,
+    exemptions,
   };
 }
 

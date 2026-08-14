@@ -16,6 +16,7 @@ import {
   getBatchByReportDate,
   listBatchActions,
   listDueBatches,
+  listActivePersistentExemptionKeys,
   updateAction,
   updateBatch,
 } from "@/lib/inactive-reps/repository";
@@ -27,6 +28,7 @@ import {
   type InactiveRepAction,
   type InactiveRepBatch,
   type InactiveRepCandidate,
+  type CandidateBuildResult,
 } from "@/lib/inactive-reps/types";
 
 const HOUR_MS = 3_600_000;
@@ -51,6 +53,24 @@ export function phoenixDateString(date: Date): string {
 
 function accountCount(candidates: InactiveRepCandidate[]): number {
   return candidates.reduce((sum, candidate) => sum + candidate.targets.length, 0);
+}
+
+export function applyInactiveRepExemptions(
+  result: CandidateBuildResult,
+  activeIdentityKeys: ReadonlySet<string>,
+): CandidateBuildResult {
+  if (!activeIdentityKeys.size) return result;
+  const candidates = result.candidates.filter(candidate => !activeIdentityKeys.has(candidate.identityKey));
+  const removed = result.candidates.length - candidates.length;
+  if (!removed) return result;
+  return {
+    ...result,
+    candidates,
+    exclusions: {
+      ...result.exclusions,
+      "active manager exemption": (result.exclusions["active manager exemption"] ?? 0) + removed,
+    },
+  };
 }
 
 async function markActions(
@@ -211,8 +231,14 @@ function reportContext(now: Date): { reportDate: string; recipient: string; subj
 export async function prepareInactiveRepReport(options?: { now?: Date }) {
   const now = options?.now ?? new Date();
   const { reportDate, recipient, subject } = reportContext(now);
-  const source = await fetchInactiveRepSourceSnapshot();
-  const result = buildInactiveRepCandidates(source, now);
+  const [source, activeExemptionKeys] = await Promise.all([
+    fetchInactiveRepSourceSnapshot(),
+    listActivePersistentExemptionKeys(),
+  ]);
+  const result = applyInactiveRepExemptions(
+    buildInactiveRepCandidates(source, now),
+    activeExemptionKeys,
+  );
   const csv = buildCandidateCsv(result.candidates);
   const { batch, created } = await createOrLoadPreparingBatch({
     reportDate,
@@ -372,8 +398,14 @@ export async function runInactiveRepDeactivation(
     failed: 0,
   };
   if (env.inactiveRepDeactivationEnabled && dueBatches.length) {
-    const source = await fetchInactiveRepSourceSnapshot();
-    const result = buildInactiveRepCandidates(source, now);
+    const [source, activeExemptionKeys] = await Promise.all([
+      fetchInactiveRepSourceSnapshot(),
+      listActivePersistentExemptionKeys(),
+    ]);
+    const result = applyInactiveRepExemptions(
+      buildInactiveRepCandidates(source, now),
+      activeExemptionKeys,
+    );
     const currentCandidates = new Map(result.candidates.map(candidate => [candidate.identityKey, candidate]));
     for (const dueBatch of dueBatches) {
       await processDueBatch(dueBatch, currentCandidates, counters);

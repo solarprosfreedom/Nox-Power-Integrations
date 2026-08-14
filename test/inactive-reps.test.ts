@@ -14,6 +14,7 @@ import {
 } from "@/lib/inactive-reps/identity";
 import { inactiveRepReportRecipients } from "@/lib/inactive-reps/recipients";
 import {
+  applyInactiveRepExemptions,
   inactiveRepDeactivationDueBefore,
   INACTIVE_REP_DEACTIVATION_DELAY_HOURS,
   phoenixDateString,
@@ -292,6 +293,17 @@ test("candidate criteria use AND across logins, exclude admins, unknown evidence
   assert.equal(result.exclusions["sales activity within the last 30 days"], 1);
   assert.equal(result.exclusions["Sequifi non-rep, inactive, admin, or manager"], 1);
   assert.equal(result.exclusions["missing or conflicting platform activity evidence"], 1);
+});
+
+test("persistent manager exemptions remove reps from reports and deactivation revalidation", () => {
+  const result = buildInactiveRepCandidates(sourceSnapshot(), now);
+  const protectedResult = applyInactiveRepExemptions(
+    result,
+    new Set(["bobinactive@noxpwr.com"]),
+  );
+
+  assert.deepEqual(protectedResult.candidates, []);
+  assert.equal(protectedResult.exclusions["active manager exemption"], 1);
 });
 
 test("CSV uses one row per representative with separate platform account fields", () => {

@@ -1,9 +1,10 @@
-export const INACTIVE_REP_CRITERIA_VERSION = "2026-08-15-v2";
+export const INACTIVE_REP_CRITERIA_VERSION = "2026-08-15-v3";
 export const INACTIVE_REP_WINDOW_DAYS = 30;
 export const INACTIVE_REP_DEACTIVATION_DELAY_HOURS = 23;
 
 export type InactiveRepPlatform = "enerflo" | "microsoft" | "terros";
 export type ActivityState = "inactive" | "recent" | "unknown";
+export type InactiveRepExemptionScope = "batch" | "persistent";
 
 export interface PlatformAccountSnapshot {
   platform: InactiveRepPlatform;
@@ -131,15 +132,34 @@ export interface InactiveRepAccountLog {
   reportDate: string;
   repName: string;
   repRole: string;
+  identityKey: string;
   platform: InactiveRepPlatform;
   accountId: string;
   accountEmail: string;
   status: ActionStatus;
   alreadyInactive: boolean;
+  manuallyProtected: boolean;
+  protectionScope: InactiveRepExemptionScope | null;
+  protectionReason: string | null;
+  protectedBy: string | null;
+  protectedAt: string | null;
   attempts: number;
   detail: string;
   processedAt: string | null;
   createdAt: string;
+}
+
+export interface InactiveRepExemption {
+  id: string;
+  identityKey: string;
+  displayName: string;
+  scope: InactiveRepExemptionScope;
+  batchId: string | null;
+  reason: string;
+  createdBy: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface InactiveRepAutomationLogs {
@@ -147,6 +167,7 @@ export interface InactiveRepAutomationLogs {
   deactivationEnabled: boolean;
   batches: InactiveRepBatchLog[];
   accounts: InactiveRepAccountLog[];
+  exemptions: InactiveRepExemption[];
 }
 
 export interface CronRunSummary {
