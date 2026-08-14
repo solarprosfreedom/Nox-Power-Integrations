@@ -40,10 +40,12 @@ test("inactive-rep auth only creates scoped sessions for the two approved review
     assert.deepEqual(INACTIVE_REPS_ALLOWED_EMAILS, [
       "jorgesalazar@noxpwr.com",
       "jonaslim@noxpwr.com",
+      "admin@noxpwr.com",
     ]);
     assert.equal(isInactiveRepAllowedEmail("JORGE.SALAZAR@noxpwr.com"), false);
     assert.equal(isInactiveRepAllowedEmail(" JORGESALAZAR@NOXPWR.COM "), true);
     assert.equal(isInactiveRepAllowedEmail("jonaslim@noxpwr.com"), true);
+    assert.equal(isInactiveRepAllowedEmail("admin@noxpwr.com"), true);
     assert.equal(isInactiveRepAllowedEmail(AUTH_EMAIL), false);
 
     for (const email of INACTIVE_REPS_ALLOWED_EMAILS) {

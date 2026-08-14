@@ -3,6 +3,7 @@ export const INACTIVE_REPS_SESSION_MAX_AGE_SEC = 60 * 60 * 12; // 12 hours
 export const INACTIVE_REPS_ALLOWED_EMAILS = [
   "jorgesalazar@noxpwr.com",
   "jonaslim@noxpwr.com",
+  "admin@noxpwr.com",
 ] as const;
 
 interface InactiveRepAuthConfig {

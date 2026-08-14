@@ -19,15 +19,15 @@ Monday morning, after another complete live revalidation.
 
 The inactive-rep review portal is separate from the integration dashboard. Open
 `/inactive-reps`, which redirects unauthenticated reviewers to
-`/inactive-reps/login`. Access is restricted to `jorgesalazar@noxpwr.com` and
-`jonaslim@noxpwr.com`; each sign-in requires a six-digit, one-time code sent by
-Microsoft Graph to the selected mailbox. Codes expire after 10 minutes, allow
-five attempts, and can only be requested once per minute. The portal uses a
-dedicated session cookie, so the main dashboard login does not grant access. It
-reads the durable Supabase batch and action records to show confirmed report
-emails, recipients, review deadlines, scheduled representatives, and manager
-protections. It refreshes automatically every minute and can also be refreshed
-manually.
+`/inactive-reps/login`. Access is restricted to `jorgesalazar@noxpwr.com`,
+`jonaslim@noxpwr.com`, and `admin@noxpwr.com`; each sign-in requires a six-digit,
+one-time code sent by Microsoft Graph to the selected mailbox. Codes expire
+after 10 minutes, allow five attempts, and can only be requested once per
+minute. The portal uses a dedicated session cookie, so the main dashboard login
+does not grant access. It reads the durable Supabase batch and action records to
+show confirmed report emails, recipients, review deadlines, scheduled
+representatives, and manager protections. It refreshes automatically every
+minute and can also be refreshed manually.
 
 Production deployments are triggered from `main`; feature-branch deployments are
 previews and do not register the production cron schedule.
