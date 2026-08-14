@@ -193,10 +193,16 @@ test("candidate criteria use AND across logins, exclude admins, unknown evidence
   assert.equal(result.exclusions["missing or conflicting platform activity evidence"], 1);
 });
 
-test("CSV keeps identity and platform emails separate and includes the reason", () => {
+test("CSV uses one row per representative with separate platform account fields", () => {
   const result = buildInactiveRepCandidates(sourceSnapshot(), now);
   const csv = buildCandidateCsv(result.candidates);
-  assert.match(csv, /account_email,microsoft_email,terros_email,enerflo_email/);
+  const lines = csv.trimEnd().split("\n");
+  assert.equal(lines.length, result.candidates.length + 1);
+  assert.match(csv, /account_email,microsoft_email,microsoft_account_id/);
+  assert.match(csv, /terros_email,terros_account_id/);
+  assert.match(csv, /enerflo_email,enerflo_account_id/);
   assert.match(csv, /reason_for_deactivation/);
   assert.match(csv, /bobinactive@noxpwr\.com/);
+  assert.match(csv, /ef-bob/);
+  assert.match(csv, /ms-bob/);
 });

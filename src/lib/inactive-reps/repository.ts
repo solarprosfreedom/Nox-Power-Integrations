@@ -110,9 +110,11 @@ export async function updateBatch(
   id: string,
   patch: Partial<{
     status: BatchStatus;
+    email_subject: string;
     email_from: string | null;
     emailed_at: string | null;
     sent_message_id: string | null;
+    report_csv: string;
     errors: string[];
     processing_started_at: string | null;
     completed_at: string | null;

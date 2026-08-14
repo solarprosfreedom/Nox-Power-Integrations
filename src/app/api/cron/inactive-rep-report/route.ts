@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { runInactiveRepReport } from "@/lib/inactive-reps/orchestrator";
+import {
+  runInactiveRepReport,
+  sendCorrectedInactiveRepReport,
+} from "@/lib/inactive-reps/orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +20,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
+    if (new URL(request.url).searchParams.get("correction") === "true") {
+      return NextResponse.json(await sendCorrectedInactiveRepReport());
+    }
     return NextResponse.json(await runInactiveRepReport());
   } catch (error) {
     return NextResponse.json(

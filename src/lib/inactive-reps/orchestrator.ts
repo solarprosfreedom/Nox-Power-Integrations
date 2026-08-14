@@ -314,6 +314,49 @@ export async function runInactiveRepReport(
   };
 }
 
+export async function sendCorrectedInactiveRepReport(options?: { now?: Date }) {
+  const now = options?.now ?? new Date();
+  const { reportDate } = reportContext(now);
+  const batch = await getBatchByReportDate(reportDate);
+  if (!batch) throw new Error(`Inactive-rep report batch ${reportDate} does not exist`);
+  if (["processing", "partial", "completed"].includes(batch.status)) {
+    throw new Error(`Inactive-rep report batch ${reportDate} can no longer be corrected`);
+  }
+
+  const subject = `[Inactive Rep Review - Corrected] ${reportDate} (Phoenix)`;
+  const csv = buildCandidateCsv(batch.candidates);
+  const mail = await sendInactiveRepReport({
+    subject,
+    reportDate,
+    recipient: batch.email_to,
+    csv,
+    candidates: batch.candidates,
+    corrected: true,
+  });
+  await updateBatch(batch.id, {
+    status: "emailed",
+    email_subject: subject,
+    email_from: mail.from,
+    emailed_at: mail.sentAt,
+    sent_message_id: mail.messageId,
+    report_csv: csv,
+    errors: [],
+  });
+
+  return {
+    report: {
+      reportDate,
+      status: mail.alreadySent ? ("already_sent" as const) : ("sent" as const),
+      corrected: true,
+      batchId: batch.id,
+      candidates: batch.candidates.length,
+      accounts: accountCount(batch.candidates),
+      rows: batch.candidates.length,
+      reviewWindowStartsAt: mail.sentAt,
+    },
+  };
+}
+
 export async function runInactiveRepDeactivation(
   options?: { now?: Date },
 ): Promise<Pick<CronRunSummary, "deactivation">> {

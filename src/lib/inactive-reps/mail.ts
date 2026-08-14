@@ -58,6 +58,7 @@ export async function sendInactiveRepReport(options: {
   recipient: string;
   csv: string;
   candidates: InactiveRepCandidate[];
+  corrected?: boolean;
 }): Promise<{ from: string; messageId: string; sentAt: string; alreadySent: boolean }> {
   const { from } = requireAzureConfig();
   const expectedRecipient = env.inactiveRepEmailTo?.trim() || "noxpwr@gmail.com";
@@ -72,8 +73,11 @@ export async function sendInactiveRepReport(options: {
 
   const token = await getGraphAccessToken();
   const counts = accountCounts(options.candidates);
+  const introduction = options.corrected
+    ? `Attached is the <strong>corrected</strong> inactive sales-rep account report for <strong>${htmlEscape(options.reportDate)}</strong>. It replaces the earlier attachment and contains one row per representative.`
+    : `Attached is the inactive sales-rep account report for <strong>${htmlEscape(options.reportDate)}</strong>.`;
   const body = `
-    <p>Attached is the inactive sales-rep account report for <strong>${htmlEscape(options.reportDate)}</strong>.</p>
+    <p>${introduction}</p>
     <ul>
       <li>Unique representatives: ${options.candidates.length}</li>
       <li>Enerflo accounts: ${counts.enerflo}</li>
@@ -95,7 +99,7 @@ export async function sendInactiveRepReport(options: {
         attachments: [
           {
             "@odata.type": "#microsoft.graph.fileAttachment",
-            name: `inactive-rep-deactivation-${options.reportDate}.csv`,
+            name: `${options.corrected ? "corrected-" : ""}inactive-rep-deactivation-${options.reportDate}.csv`,
             contentType: "text/csv",
             contentBytes: Buffer.from(options.csv, "utf8").toString("base64"),
           },

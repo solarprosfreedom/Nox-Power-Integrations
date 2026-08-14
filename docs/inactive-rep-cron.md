@@ -8,6 +8,8 @@ hours after the confirmed send time. At 14:45 UTC (07:45 Phoenix),
 completed CSV. `GET /api/cron/inactive-rep-report` first attempts delivery at
 15:00 UTC (08:00 Phoenix), with idempotent retries at 08:05, 08:10, and 08:20.
 If preparation failed, the sender generates the batch on demand before delivery.
+The CSV contains one row per representative, with separate account ID, status,
+creation, last-login, and inactivity-evidence columns for each platform.
 
 Production deployments are triggered from `main`; feature-branch deployments are
 previews and do not register the production cron schedule.
