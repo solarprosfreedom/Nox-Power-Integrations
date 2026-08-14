@@ -7,6 +7,7 @@ import {
   evaluateAccountActivity,
 } from "@/lib/inactive-reps/evaluate";
 import { buildIdentityKey, fuzzyNameScore, matchSaleAttribution } from "@/lib/inactive-reps/identity";
+import { inactiveRepReportRecipients } from "@/lib/inactive-reps/mail";
 import {
   inactiveRepDeactivationDueBefore,
   INACTIVE_REP_DEACTIVATION_DELAY_HOURS,
@@ -181,6 +182,16 @@ test("safe fuzzy attribution recognizes a unique last-name typo", () => {
   );
   assert.equal(result.matches.get("carolschroeder@noxpwr.com")?.method, "fuzzy_unique_best_name");
   assert.equal(result.ambiguousIdentityKeys.size, 0);
+});
+
+test("inactive-rep reports include and deduplicate additional recipients", () => {
+  assert.deepEqual(
+    inactiveRepReportRecipients(
+      "noxpwr@gmail.com",
+      "admin@noxpwr.com, NOXPWR@gmail.com;admin@noxpwr.com",
+    ),
+    ["noxpwr@gmail.com", "admin@noxpwr.com"],
+  );
 });
 
 test("candidate criteria use AND across logins, exclude admins, unknown evidence, and recent sales", () => {

@@ -46,6 +46,10 @@ process due account actions.
 Optional controls:
 
 - `INACTIVE_REP_EMAIL_TO` defaults to `noxpwr@gmail.com`
+- `INACTIVE_REP_EMAIL_ADDITIONAL_RECIPIENTS` defaults to `admin@noxpwr.com`;
+  separate multiple addresses with commas. Every scheduled report is sent to the
+  primary and additional recipients in one message, and retries verify that all
+  configured recipients are present in Sent Items.
 - `INACTIVE_REP_DEACTIVATION_ENABLED` defaults to `false`
 - `PUBLIC_DEALS_API_BASE` defaults to `https://hub.noxpwr.com/api/public/deals`
 - `USER_EMAIL_ALIASES_JSON` supplies explicit cross-platform email aliases

@@ -9,6 +9,19 @@ interface SentMessage {
   sentDateTime: string;
 }
 
+export function inactiveRepReportRecipients(
+  primaryRecipient: string,
+  additionalRecipients = env.inactiveRepEmailAdditionalRecipients,
+): string[] {
+  const recipients = [
+    primaryRecipient,
+    ...(additionalRecipients ?? "").split(/[;,\s]+/),
+  ]
+    .map(normalizeEmail)
+    .filter(Boolean);
+  return [...new Set(recipients)];
+}
+
 function htmlEscape(value: unknown): string {
   return String(value ?? "").replace(
     /[&<>"']/g,
@@ -16,7 +29,7 @@ function htmlEscape(value: unknown): string {
   );
 }
 
-async function findSentMessage(subject: string, recipient: string): Promise<SentMessage | null> {
+async function findSentMessage(subject: string, recipients: string[]): Promise<SentMessage | null> {
   const { from } = requireAzureConfig();
   const token = await getGraphAccessToken();
   const url = `${GRAPH_BASE}/users/${encodeURIComponent(from)}/mailFolders/SentItems/messages?$top=50&$orderby=sentDateTime%20desc&$select=id,subject,sentDateTime,toRecipients`;
@@ -30,15 +43,18 @@ async function findSentMessage(subject: string, recipient: string): Promise<Sent
       toRecipients?: Array<{ emailAddress?: { address?: string } }>;
     }>;
   };
-  const match = (payload.value ?? []).find(
-    message =>
+  const expectedRecipients = new Set(recipients.map(normalizeEmail));
+  const match = (payload.value ?? []).find(message => {
+    const actualRecipients = new Set(
+      (message.toRecipients ?? []).map(item => normalizeEmail(item.emailAddress?.address)),
+    );
+    return (
       message.id &&
       message.subject === subject &&
       message.sentDateTime &&
-      message.toRecipients?.some(
-        item => normalizeEmail(item.emailAddress?.address) === normalizeEmail(recipient),
-      ),
-  );
+      [...expectedRecipients].every(recipient => actualRecipients.has(recipient))
+    );
+  });
   return match
     ? { id: match.id!, subject: match.subject!, sentDateTime: match.sentDateTime! }
     : null;
@@ -65,8 +81,9 @@ export async function sendInactiveRepReport(options: {
   if (normalizeEmail(options.recipient) !== normalizeEmail(expectedRecipient)) {
     throw new Error("Inactive-rep recipient does not match INACTIVE_REP_EMAIL_TO");
   }
+  const recipients = inactiveRepReportRecipients(options.recipient);
 
-  const existing = await findSentMessage(options.subject, options.recipient);
+  const existing = await findSentMessage(options.subject, recipients);
   if (existing) {
     return { from, messageId: existing.id, sentAt: existing.sentDateTime, alreadySent: true };
   }
@@ -95,7 +112,7 @@ export async function sendInactiveRepReport(options: {
       message: {
         subject: options.subject,
         body: { contentType: "HTML", content: body },
-        toRecipients: [{ emailAddress: { address: options.recipient } }],
+        toRecipients: recipients.map(address => ({ emailAddress: { address } })),
         attachments: [
           {
             "@odata.type": "#microsoft.graph.fileAttachment",
@@ -115,7 +132,7 @@ export async function sendInactiveRepReport(options: {
 
   for (let attempt = 0; attempt < 6; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 2_000));
-    const sent = await findSentMessage(options.subject, options.recipient);
+    const sent = await findSentMessage(options.subject, recipients);
     if (sent) return { from, messageId: sent.id, sentAt: sent.sentDateTime, alreadySent: false };
   }
   throw new Error("Microsoft Graph accepted the report but it was not confirmed in Sent Items");

@@ -134,6 +134,11 @@ export const env = {
   supabaseServiceRoleKey: opt("SUPABASE_SERVICE_ROLE_KEY"),
   /** Daily inactive-rep report recipient. */
   inactiveRepEmailTo: opt("INACTIVE_REP_EMAIL_TO", "noxpwr@gmail.com"),
+  /** Additional recipients for every inactive-rep report. */
+  inactiveRepEmailAdditionalRecipients: opt(
+    "INACTIVE_REP_EMAIL_ADDITIONAL_RECIPIENTS",
+    "admin@noxpwr.com",
+  ),
   /** Fail-safe rollout switch: reports continue, but due accounts are untouched unless explicitly true. */
   inactiveRepDeactivationEnabled:
     opt("INACTIVE_REP_DEACTIVATION_ENABLED", "false") === "true",
