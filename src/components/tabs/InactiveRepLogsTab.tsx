@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
-  ActionStatus,
   BatchStatus,
   InactiveRepAccountLog,
   InactiveRepAutomationLogs,
@@ -10,8 +9,6 @@ import type {
   InactiveRepExemption,
   InactiveRepExemptionScope,
 } from "@/lib/inactive-reps/types";
-
-type AccountFilter = "all" | ActionStatus;
 
 interface ScheduledRep {
   key: string;
@@ -22,22 +19,6 @@ interface ScheduledRep {
   accounts: InactiveRepAccountLog[];
   exemption: InactiveRepExemption | null;
 }
-
-interface AccountGroup {
-  key: string;
-  repName: string;
-  repRole: string;
-  accounts: InactiveRepAccountLog[];
-}
-
-const ACCOUNT_FILTERS: Array<{ id: AccountFilter; label: string }> = [
-  { id: "all", label: "All accounts" },
-  { id: "pending", label: "Pending" },
-  { id: "success", label: "Deactivated" },
-  { id: "skipped", label: "Skipped" },
-  { id: "blocked", label: "Blocked" },
-  { id: "failed", label: "Failed" },
-];
 
 const DATE_TIME = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Phoenix",
@@ -62,14 +43,6 @@ function batchStatus(status: BatchStatus): { label: string; style: string } {
   if (status === "emailed") return { label: "Email sent", style: "bg-blue-950 text-blue-300 ring-blue-800" };
   if (status === "email_failed") return { label: "Email failed", style: "bg-red-950 text-red-300 ring-red-800" };
   return { label: status === "emailing" ? "Sending" : "Preparing", style: "bg-gray-800 text-gray-300 ring-gray-700" };
-}
-
-function actionStatus(status: ActionStatus): { label: string; style: string } {
-  if (status === "success") return { label: "Deactivated", style: "bg-emerald-950 text-emerald-300 ring-emerald-800" };
-  if (status === "skipped") return { label: "Skipped", style: "bg-sky-950 text-sky-300 ring-sky-800" };
-  if (status === "blocked") return { label: "Blocked", style: "bg-amber-950 text-amber-300 ring-amber-800" };
-  if (status === "failed") return { label: "Failed", style: "bg-red-950 text-red-300 ring-red-800" };
-  return { label: "Pending", style: "bg-gray-800 text-gray-300 ring-gray-700" };
 }
 
 function scheduledRepStatus(rep: ScheduledRep): { label: string; style: string } {
@@ -149,76 +122,10 @@ function EmailLog({ batch }: { batch: InactiveRepBatchLog }) {
   );
 }
 
-function accountDisplayStatus(account: InactiveRepAccountLog): { label: string; style: string } {
-  return account.manuallyProtected
-    ? { label: "Protected", style: "bg-violet-950 text-violet-300 ring-violet-800" }
-    : account.status === "success" && account.alreadyInactive
-      ? { label: "Already inactive", style: "bg-sky-950 text-sky-300 ring-sky-800" }
-      : actionStatus(account.status);
-}
-
-function platformBadgeStyle(platform: InactiveRepAccountLog["platform"]): string {
-  return platform === "enerflo"
-    ? "bg-orange-950 text-orange-300"
-    : platform === "microsoft"
-      ? "bg-blue-950 text-blue-300"
-      : "bg-sky-950 text-sky-300";
-}
-
-function AccountGroupRow({ group }: { group: AccountGroup }) {
-  const emails = [...new Set(group.accounts.map(account => account.accountEmail).filter(Boolean))];
-  return (
-    <tr className="border-t border-gray-800/80 align-top hover:bg-gray-900/80">
-      <td className="px-4 py-3">
-        <p className="font-medium text-gray-200">{group.repName}</p>
-        <p className="mt-0.5 text-[11px] text-gray-600">{group.repRole || "Rep role unavailable"}</p>
-      </td>
-      <td className="px-4 py-3">
-        <div className="space-y-1.5">
-          {emails.map(email => (
-            <p key={email} className="break-all text-gray-300">{email}</p>
-          ))}
-          {emails.length === 0 && <p className="text-gray-600">No account email</p>}
-        </div>
-      </td>
-      <td className="min-w-[32rem] px-4 py-3">
-        <div className="space-y-2">
-          {group.accounts.map(account => {
-            const status = accountDisplayStatus(account);
-            return (
-              <div
-                key={account.id}
-                className="grid gap-2 rounded-lg border border-gray-800/80 bg-gray-900/45 p-3 sm:grid-cols-[7rem_9rem_minmax(0,1fr)] sm:items-start"
-              >
-                <div>
-                  <span className={`inline-flex rounded-md px-2 py-1 text-[11px] font-semibold capitalize ${platformBadgeStyle(account.platform)}`}>
-                    {account.platform}
-                  </span>
-                  <p className="mt-1 break-all text-[10px] text-gray-700">ID {account.accountId}</p>
-                </div>
-                <div><StatusBadge {...status} /></div>
-                <div>
-                  <p className="text-gray-400">{account.detail}</p>
-                  <p className="mt-1 text-[11px] text-gray-600">
-                    {account.processedAt ? formatDateTime(account.processedAt) : `Report ${account.reportDate}`}
-                    {account.attempts > 0 ? ` · ${account.attempts} attempt${account.attempts === 1 ? "" : "s"}` : ""}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </td>
-    </tr>
-  );
-}
-
 export default function InactiveRepLogsTab() {
   const [logs, setLogs] = useState<InactiveRepAutomationLogs | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<AccountFilter>("all");
-  const [query, setQuery] = useState("");
   const [protectionTarget, setProtectionTarget] = useState<ScheduledRep | null>(null);
   const [protectionScope, setProtectionScope] = useState<InactiveRepExemptionScope>("persistent");
   const [protectionReason, setProtectionReason] = useState("");
@@ -252,40 +159,6 @@ export default function InactiveRepLogsTab() {
       window.clearInterval(timer);
     };
   }, [loadLogs]);
-
-  const filteredAccounts = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return (logs?.accounts ?? []).filter(account => {
-      if (filter !== "all" && account.status !== filter) return false;
-      if (!normalizedQuery) return true;
-      return [account.repName, account.repRole, account.accountEmail, account.accountId, account.platform]
-        .some(value => value.toLowerCase().includes(normalizedQuery));
-    });
-  }, [filter, logs?.accounts, query]);
-
-  const groupedAccounts = useMemo(() => {
-    const groups = new Map<string, AccountGroup>();
-    for (const account of filteredAccounts) {
-      const key = account.identityKey || account.accountEmail.toLowerCase() || account.repName.toLowerCase();
-      const existing = groups.get(key);
-      if (existing) {
-        existing.accounts.push(account);
-        continue;
-      }
-      groups.set(key, {
-        key,
-        repName: account.repName,
-        repRole: account.repRole,
-        accounts: [account],
-      });
-    }
-    for (const group of groups.values()) {
-      group.accounts.sort((left, right) =>
-        left.platform.localeCompare(right.platform) || right.reportDate.localeCompare(left.reportDate),
-      );
-    }
-    return [...groups.values()].sort((left, right) => left.repName.localeCompare(right.repName));
-  }, [filteredAccounts]);
 
   const counts = useMemo(() => {
     const accounts = logs?.accounts ?? [];
@@ -585,53 +458,6 @@ export default function InactiveRepLogsTab() {
             <div className="rounded-xl border border-dashed border-gray-800 py-12 text-center text-sm text-gray-600">
               No inactive-rep report emails have been recorded yet.
             </div>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-white">Account actions</h3>
-            <p className="mt-0.5 text-xs text-gray-600">
-              {groupedAccounts.length} representatives · {filteredAccounts.length} visible platform accounts
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <input
-              type="search"
-              value={query}
-              onChange={event => setQuery(event.target.value)}
-              placeholder="Search rep, email, ID…"
-              className="w-64 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-xs text-gray-200 outline-none placeholder:text-gray-600 focus:border-cyan-700"
-            />
-            <select
-              value={filter}
-              onChange={event => setFilter(event.target.value as AccountFilter)}
-              className="rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-xs text-gray-300 outline-none focus:border-cyan-700"
-            >
-              {ACCOUNT_FILTERS.map(option => (
-                <option key={option.id} value={option.id}>{option.label}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-3 overflow-x-auto rounded-xl border border-gray-800 bg-gray-950/40">
-          <table className="min-w-full text-left text-xs">
-            <thead className="bg-gray-900/90 text-[10px] uppercase tracking-wider text-gray-600">
-              <tr>
-                <th className="px-4 py-3 font-semibold">Representative</th>
-                <th className="px-4 py-3 font-semibold">Account email</th>
-                <th className="px-4 py-3 font-semibold">Platforms, status, and result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groupedAccounts.map(group => <AccountGroupRow key={group.key} group={group} />)}
-            </tbody>
-          </table>
-          {!loading && filteredAccounts.length === 0 && (
-            <div className="py-12 text-center text-sm text-gray-600">No account logs match this filter.</div>
           )}
         </div>
       </section>
