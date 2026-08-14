@@ -2,14 +2,20 @@
 
 The production deactivation cron calls `GET /api/cron/inactive-rep-deactivation`
 at 14:00, 14:15, and 14:30 UTC (07:00, 07:15, and 07:30 in
-`America/Phoenix`). It processes each emailed batch on the first run at least 23
-hours after the confirmed send time. At 14:45 UTC (07:45 Phoenix),
+`America/Phoenix`) Monday through Friday. It processes each emailed batch on the
+first weekday run at least 23 hours after the confirmed send time. At 14:45 UTC
+(07:45 Phoenix) on weekdays,
 `GET /api/cron/inactive-rep-report-prepare` pulls the live sources and stores the
 completed CSV. `GET /api/cron/inactive-rep-report` first attempts delivery at
-15:00 UTC (08:00 Phoenix), with idempotent retries at 08:05, 08:10, and 08:20.
+15:00 UTC (08:00 Phoenix) on weekdays, with idempotent retries at 08:05, 08:10,
+and 08:20.
 If preparation failed, the sender generates the batch on demand before delivery.
 The CSV contains one row per representative, with separate account ID, status,
 creation, last-login, and inactivity-evidence columns for each platform.
+
+No inactive-rep cron runs on Saturday or Sunday. A Friday report therefore
+remains in review through the weekend and is first eligible for processing on
+Monday morning, after another complete live revalidation.
 
 The authenticated dashboard includes an **Inactive Reps** view. It reads the
 durable Supabase batch and action records to show confirmed report emails,

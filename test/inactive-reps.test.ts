@@ -129,14 +129,14 @@ test("deactivation batches become due after 23 hours", () => {
   );
 });
 
-test("Vercel cron splits deactivation, preparation, and delivery in Phoenix time", () => {
+test("Vercel cron runs deactivation, preparation, and delivery on Phoenix weekdays", () => {
   const config = JSON.parse(readFileSync("vercel.json", "utf8")) as {
     crons: Array<{ path: string; schedule: string }>;
   };
   const schedule = new Map(config.crons.map(item => [item.path, item.schedule]));
-  assert.equal(schedule.get("/api/cron/inactive-rep-deactivation"), "0,15,30 14 * * *");
-  assert.equal(schedule.get("/api/cron/inactive-rep-report-prepare"), "45 14 * * *");
-  assert.equal(schedule.get("/api/cron/inactive-rep-report"), "0,5,10,20 15 * * *");
+  assert.equal(schedule.get("/api/cron/inactive-rep-deactivation"), "0,15,30 14 * * 1-5");
+  assert.equal(schedule.get("/api/cron/inactive-rep-report-prepare"), "45 14 * * 1-5");
+  assert.equal(schedule.get("/api/cron/inactive-rep-report"), "0,5,10,20 15 * * 1-5");
 });
 
 test("no-login history requires an account older than 30 days", () => {
