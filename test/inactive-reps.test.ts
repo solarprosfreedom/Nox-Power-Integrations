@@ -7,7 +7,7 @@ import {
   evaluateAccountActivity,
 } from "@/lib/inactive-reps/evaluate";
 import { buildIdentityKey, fuzzyNameScore, matchSaleAttribution } from "@/lib/inactive-reps/identity";
-import { inactiveRepReportRecipients } from "@/lib/inactive-reps/mail";
+import { inactiveRepReportRecipients } from "@/lib/inactive-reps/recipients";
 import {
   inactiveRepDeactivationDueBefore,
   INACTIVE_REP_DEACTIVATION_DELAY_HOURS,

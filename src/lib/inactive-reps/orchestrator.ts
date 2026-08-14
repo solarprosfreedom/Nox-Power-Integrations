@@ -22,6 +22,7 @@ import {
 import { fetchInactiveRepSourceSnapshot } from "@/lib/inactive-reps/sources";
 import {
   INACTIVE_REP_CRITERIA_VERSION,
+  INACTIVE_REP_DEACTIVATION_DELAY_HOURS,
   type CronRunSummary,
   type InactiveRepAction,
   type InactiveRepBatch,
@@ -30,7 +31,7 @@ import {
 
 const HOUR_MS = 3_600_000;
 
-export const INACTIVE_REP_DEACTIVATION_DELAY_HOURS = 23;
+export { INACTIVE_REP_DEACTIVATION_DELAY_HOURS } from "@/lib/inactive-reps/types";
 
 export function inactiveRepDeactivationDueBefore(date: Date): Date {
   return new Date(date.getTime() - INACTIVE_REP_DEACTIVATION_DELAY_HOURS * HOUR_MS);

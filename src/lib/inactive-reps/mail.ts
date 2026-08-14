@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
 import { normalizeEmail } from "@/lib/inactive-reps/identity";
+import { inactiveRepReportRecipients } from "@/lib/inactive-reps/recipients";
 import type { InactiveRepCandidate } from "@/lib/inactive-reps/types";
 import { getGraphAccessToken, GRAPH_BASE, requireAzureConfig } from "@/lib/microsoft/graph-auth";
 
@@ -7,19 +8,6 @@ interface SentMessage {
   id: string;
   subject: string;
   sentDateTime: string;
-}
-
-export function inactiveRepReportRecipients(
-  primaryRecipient: string,
-  additionalRecipients = env.inactiveRepEmailAdditionalRecipients,
-): string[] {
-  const recipients = [
-    primaryRecipient,
-    ...(additionalRecipients ?? "").split(/[;,\s]+/),
-  ]
-    .map(normalizeEmail)
-    .filter(Boolean);
-  return [...new Set(recipients)];
 }
 
 function htmlEscape(value: unknown): string {

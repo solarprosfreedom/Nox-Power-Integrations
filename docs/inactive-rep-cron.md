@@ -11,6 +11,12 @@ If preparation failed, the sender generates the batch on demand before delivery.
 The CSV contains one row per representative, with separate account ID, status,
 creation, last-login, and inactivity-evidence columns for each platform.
 
+The authenticated dashboard includes an **Inactive Reps** view. It reads the
+durable Supabase batch and action records to show confirmed report emails,
+recipients, review deadlines, and every platform-account outcome (pending,
+deactivated, skipped, blocked, or failed). The view refreshes automatically
+every minute and can also be refreshed manually.
+
 Production deployments are triggered from `main`; feature-branch deployments are
 previews and do not register the production cron schedule.
 

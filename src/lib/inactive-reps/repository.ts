@@ -1,13 +1,18 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
-import type {
-  ActionStatus,
-  BatchStatus,
-  CandidateBuildResult,
-  InactiveRepAction,
-  InactiveRepBatch,
-  InactiveRepCandidate,
+import {
+  INACTIVE_REP_DEACTIVATION_DELAY_HOURS,
+  type ActionStatus,
+  type BatchStatus,
+  type CandidateBuildResult,
+  type InactiveRepAction,
+  type InactiveRepAccountLog,
+  type InactiveRepAutomationLogs,
+  type InactiveRepBatchLog,
+  type InactiveRepBatch,
+  type InactiveRepCandidate,
 } from "@/lib/inactive-reps/types";
+import { inactiveRepReportRecipients } from "@/lib/inactive-reps/recipients";
 
 let client: SupabaseClient | null = null;
 
@@ -235,6 +240,115 @@ export async function listBatchActions(batchId: string): Promise<InactiveRepActi
     .order("created_at", { ascending: true });
   if (error) throw new Error(`inactive_rep_actions list failed: ${error.message}`);
   return (data ?? []).map(row => actionFromRow(row as Record<string, unknown>));
+}
+
+function actionLogDetail(row: Record<string, unknown>): string {
+  const status = row.status as ActionStatus;
+  const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
+  const lastError = row.last_error == null ? "" : String(row.last_error);
+  if (lastError) return lastError;
+  if (status === "pending") return "Waiting for the review window and live revalidation";
+  if (metadata.alreadyInactive === true) return "Account was already inactive at processing time";
+  const removed = Number(metadata.directLicensesRemoved ?? 0);
+  if (metadata.alreadyDisabled === true) {
+    return removed > 0
+      ? `${removed} direct Microsoft license${removed === 1 ? "" : "s"} removed; account was already disabled`
+      : "Microsoft account was already disabled";
+  }
+  if (removed > 0) {
+    return `${removed} direct Microsoft license${removed === 1 ? "" : "s"} removed; account disabled and verified`;
+  }
+  if (metadata.verifiedDisabled === true) return "Microsoft account disabled and verified";
+  if (metadata.verifiedArchived === true) return "Terros account archived and verified";
+  if (metadata.verifiedActive === false) return "Enerflo account deactivated and verified";
+  if (status === "success") return "Account deactivation completed and verified";
+  if (status === "skipped") return "Skipped during live revalidation";
+  if (status === "blocked") return "Blocked during account deactivation";
+  return "Account deactivation failed";
+}
+
+export async function listInactiveRepAutomationLogs(limit = 30): Promise<InactiveRepAutomationLogs> {
+  const safeLimit = Math.max(1, Math.min(90, Math.trunc(limit)));
+  const { data: batchRows, error: batchError } = await db()
+    .from("inactive_rep_batches")
+    .select(
+      "id,report_date,status,email_subject,email_from,email_to,emailed_at,candidates,errors,completed_at",
+    )
+    .order("report_date", { ascending: false })
+    .limit(safeLimit);
+  if (batchError) throw new Error(`inactive_rep_batches log query failed: ${batchError.message}`);
+
+  const rows = (batchRows ?? []) as Record<string, unknown>[];
+  const ids = rows.map(row => String(row.id));
+  const { data: actionRows, error: actionError } = ids.length
+    ? await db()
+        .from("inactive_rep_actions")
+        .select(
+          "id,batch_id,platform,account_id,account_email,status,attempts,last_error,metadata,processed_at,created_at",
+        )
+        .in("batch_id", ids)
+        .order("created_at", { ascending: false })
+    : { data: [], error: null };
+  if (actionError) throw new Error(`inactive_rep_actions log query failed: ${actionError.message}`);
+
+  const reportDateByBatch = new Map(rows.map(row => [String(row.id), String(row.report_date)]));
+  const actionCountByBatch = new Map<string, number>();
+  for (const row of actionRows ?? []) {
+    const batchId = String(row.batch_id);
+    actionCountByBatch.set(batchId, (actionCountByBatch.get(batchId) ?? 0) + 1);
+  }
+
+  const batches: InactiveRepBatchLog[] = rows.map(row => {
+    const emailedAt = row.emailed_at == null ? null : String(row.emailed_at);
+    const candidates = Array.isArray(row.candidates) ? (row.candidates as InactiveRepCandidate[]) : [];
+    const targetCount = candidates.reduce((sum, candidate) => sum + candidate.targets.length, 0);
+    return {
+      id: String(row.id),
+      reportDate: String(row.report_date),
+      status: row.status as BatchStatus,
+      subject: String(row.email_subject),
+      from: row.email_from == null ? null : String(row.email_from),
+      recipients: inactiveRepReportRecipients(String(row.email_to)),
+      emailedAt,
+      deactivationDueAt: emailedAt
+        ? new Date(
+            Date.parse(emailedAt) + INACTIVE_REP_DEACTIVATION_DELAY_HOURS * 60 * 60 * 1_000,
+          ).toISOString()
+        : null,
+      completedAt: row.completed_at == null ? null : String(row.completed_at),
+      candidateCount: candidates.length,
+      accountCount: actionCountByBatch.get(String(row.id)) ?? targetCount,
+      errors: Array.isArray(row.errors) ? row.errors.map(String) : [],
+    };
+  });
+
+  const accounts: InactiveRepAccountLog[] = (actionRows ?? []).map(row => {
+    const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
+    const batchId = String(row.batch_id);
+    return {
+      id: String(row.id),
+      batchId,
+      reportDate: reportDateByBatch.get(batchId) ?? "",
+      repName: String(metadata.emailedName ?? "Unknown representative"),
+      repRole: String(metadata.emailedRole ?? ""),
+      platform: row.platform as InactiveRepAccountLog["platform"],
+      accountId: String(row.account_id),
+      accountEmail: String(row.account_email),
+      status: row.status as ActionStatus,
+      alreadyInactive: metadata.alreadyInactive === true || metadata.alreadyDisabled === true,
+      attempts: Number(row.attempts ?? 0),
+      detail: actionLogDetail(row as Record<string, unknown>),
+      processedAt: row.processed_at == null ? null : String(row.processed_at),
+      createdAt: String(row.created_at),
+    };
+  });
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    deactivationEnabled: env.inactiveRepDeactivationEnabled,
+    batches,
+    accounts,
+  };
 }
 
 export async function updateAction(
