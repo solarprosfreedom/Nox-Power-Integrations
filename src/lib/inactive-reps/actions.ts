@@ -96,9 +96,11 @@ export async function deactivateEnerfloAccounts(
     const user = byId.get(execution.account.id);
     if (!user) {
       results.set(execution.action.id, {
-        status: "failed",
-        error: "Enerflo user was not found during read-back verification",
-        metadata: {},
+        status: "success",
+        metadata: {
+          verifiedActive: false,
+          verificationMethod: "absent_from_active_user_list_after_accepted_deactivation",
+        },
       });
       continue;
     }

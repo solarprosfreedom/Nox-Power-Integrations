@@ -179,20 +179,49 @@ export default function InactiveRepLogsTab() {
   const scheduledReps = useMemo(() => {
     const batches = new Map((logs?.batches ?? []).map(batch => [batch.id, batch]));
     const exemptions = logs?.exemptions ?? [];
-    const grouped = new Map<string, ScheduledRep>();
+    const effectiveAccounts = new Map<string, InactiveRepAccountLog>();
     for (const account of logs?.accounts ?? []) {
       const batch = batches.get(account.batchId);
       if (!batch?.emailedAt) continue;
-      const key = `${account.batchId}|${account.identityKey}`;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.accounts.push(account);
+      const accountKey = `${account.identityKey}|${account.platform}|${account.accountId}`;
+      const existing = effectiveAccounts.get(accountKey);
+      if (!existing) {
+        effectiveAccounts.set(accountKey, account);
         continue;
       }
-      const exemption = exemptions.find(item =>
-        item.identityKey === account.identityKey &&
-        (item.scope === "persistent" || item.batchId === account.batchId),
-      ) ?? null;
+      const existingBatch = batches.get(existing.batchId);
+      const existingTime = Date.parse(existing.processedAt ?? existing.createdAt);
+      const accountTime = Date.parse(account.processedAt ?? account.createdAt);
+      if (
+        accountTime > existingTime ||
+        (accountTime === existingTime &&
+          batch.reportDate.localeCompare(existingBatch?.reportDate ?? "") > 0)
+      ) {
+        effectiveAccounts.set(accountKey, account);
+      }
+    }
+
+    const grouped = new Map<string, ScheduledRep>();
+    for (const account of effectiveAccounts.values()) {
+      const batch = batches.get(account.batchId);
+      if (!batch) continue;
+      const key = account.identityKey;
+      const existing = grouped.get(key);
+      if (existing) {
+        const existingHasPending = existing.accounts.some(item =>
+          ["pending", "blocked", "failed"].includes(item.status),
+        );
+        const accountIsPending = ["pending", "blocked", "failed"].includes(account.status);
+        existing.accounts.push(account);
+        if (
+          (accountIsPending && !existingHasPending) ||
+          (accountIsPending === existingHasPending &&
+            batch.reportDate.localeCompare(existing.batch.reportDate) > 0)
+        ) {
+          existing.batch = batch;
+        }
+        continue;
+      }
       grouped.set(key, {
         key,
         batch,
@@ -200,8 +229,14 @@ export default function InactiveRepLogsTab() {
         repName: account.repName,
         repRole: account.repRole,
         accounts: [account],
-        exemption,
+        exemption: null,
       });
+    }
+    for (const rep of grouped.values()) {
+      rep.exemption = exemptions.find(item =>
+        item.identityKey === rep.identityKey &&
+        (item.scope === "persistent" || item.batchId === rep.batch.id),
+      ) ?? null;
     }
     return [...grouped.values()].sort((left, right) =>
       right.batch.reportDate.localeCompare(left.batch.reportDate) || left.repName.localeCompare(right.repName),
@@ -360,7 +395,10 @@ export default function InactiveRepLogsTab() {
               {scheduledReps.map(rep => {
                 const status = scheduledRepStatus(rep);
                 const canProtect = ["emailed", "partial"].includes(rep.batch.status) &&
-                  rep.accounts.some(account => ["pending", "blocked", "failed"].includes(account.status));
+                  rep.accounts.some(account =>
+                    account.batchId === rep.batch.id &&
+                    ["pending", "blocked", "failed"].includes(account.status),
+                  );
                 return (
                   <tr key={rep.key} className="border-t border-gray-800/80 align-top hover:bg-gray-900/80">
                     <td className="px-4 py-3">
