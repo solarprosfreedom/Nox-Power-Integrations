@@ -189,6 +189,17 @@ export default function InactiveRepLogsTab() {
         effectiveAccounts.set(accountKey, account);
         continue;
       }
+      const existingSuccessTime =
+        existing.status === "success" && existing.processedAt ? Date.parse(existing.processedAt) : null;
+      const accountSuccessTime =
+        account.status === "success" && account.processedAt ? Date.parse(account.processedAt) : null;
+      if (existingSuccessTime !== null && Date.parse(account.createdAt) <= existingSuccessTime) {
+        continue;
+      }
+      if (accountSuccessTime !== null && Date.parse(existing.createdAt) <= accountSuccessTime) {
+        effectiveAccounts.set(accountKey, account);
+        continue;
+      }
       const existingBatch = batches.get(existing.batchId);
       const existingTime = Date.parse(existing.processedAt ?? existing.createdAt);
       const accountTime = Date.parse(account.processedAt ?? account.createdAt);
