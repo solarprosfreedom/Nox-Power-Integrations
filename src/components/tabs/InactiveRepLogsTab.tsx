@@ -131,6 +131,7 @@ export default function InactiveRepLogsTab() {
   const [protectionReason, setProtectionReason] = useState("");
   const [mutationPending, setMutationPending] = useState(false);
   const [mutationMessage, setMutationMessage] = useState<string | null>(null);
+  const [repView, setRepView] = useState<"deactivated" | "scheduled">("deactivated");
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
@@ -253,6 +254,15 @@ export default function InactiveRepLogsTab() {
       right.batch.reportDate.localeCompare(left.batch.reportDate) || left.repName.localeCompare(right.repName),
     );
   }, [logs]);
+
+  const visibleReps = useMemo(
+    () => scheduledReps.filter(rep =>
+      repView === "deactivated"
+        ? rep.accounts.some(account => account.status === "success")
+        : rep.accounts.some(account => ["pending", "blocked", "failed"].includes(account.status)),
+    ),
+    [repView, scheduledReps],
+  );
 
   const persistentExemptions = useMemo(
     () => (logs?.exemptions ?? []).filter(exemption => exemption.scope === "persistent"),
@@ -382,12 +392,44 @@ export default function InactiveRepLogsTab() {
       <section>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-white">Scheduled representatives</h3>
+            <h3 className="text-sm font-semibold text-white">Representatives</h3>
             <p className="mt-0.5 text-xs text-gray-600">
-              One row per rep included in a confirmed email. Remove a rep before processing begins.
+              One row per representative, separated by current automation outcome.
             </p>
           </div>
-          <p className="text-[11px] text-gray-600">{scheduledReps.length} emailed representative records</p>
+          <p className="text-[11px] text-gray-600">{visibleReps.length} representative records</p>
+        </div>
+
+        <div className="mt-3 flex w-fit rounded-xl border border-gray-800 bg-gray-950/60 p-1">
+          {[
+            {
+              id: "deactivated" as const,
+              label: "Deactivated reps",
+              count: scheduledReps.filter(rep =>
+                rep.accounts.some(account => account.status === "success"),
+              ).length,
+            },
+            {
+              id: "scheduled" as const,
+              label: "Scheduled",
+              count: scheduledReps.filter(rep =>
+                rep.accounts.some(account => ["pending", "blocked", "failed"].includes(account.status)),
+              ).length,
+            },
+          ].map(view => (
+            <button
+              key={view.id}
+              type="button"
+              onClick={() => setRepView(view.id)}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                repView === view.id
+                  ? "bg-gray-800 text-white"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              {view.label} <span className="ml-1 text-[10px] text-gray-500">{view.count}</span>
+            </button>
+          ))}
         </div>
 
         <div className="mt-3 overflow-x-auto rounded-xl border border-gray-800 bg-gray-950/40">
@@ -403,7 +445,7 @@ export default function InactiveRepLogsTab() {
               </tr>
             </thead>
             <tbody>
-              {scheduledReps.map(rep => {
+              {visibleReps.map(rep => {
                 const status = scheduledRepStatus(rep);
                 const canProtect = ["emailed", "partial"].includes(rep.batch.status) &&
                   rep.accounts.some(account =>
@@ -455,9 +497,11 @@ export default function InactiveRepLogsTab() {
               })}
             </tbody>
           </table>
-          {!loading && scheduledReps.length === 0 && (
+          {!loading && visibleReps.length === 0 && (
             <div className="py-12 text-center text-sm text-gray-600">
-              No emailed representatives have scheduled account actions.
+              {repView === "deactivated"
+                ? "No representatives have completed deactivation actions."
+                : "No representatives currently have scheduled account actions."}
             </div>
           )}
         </div>
