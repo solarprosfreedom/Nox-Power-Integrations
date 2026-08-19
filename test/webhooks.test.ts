@@ -18,7 +18,9 @@ import {
   stripEmailAlias,
   terrosJsonBodyIndicatesSuccess as terrosWebhookSuccess,
   terrosUserFromAccount,
+  POST as postTerrosWebhook,
 } from "../src/app/api/webhooks/terros/route";
+import { isIntegrationDirectionAllowed } from "../src/lib/integration-direction";
 import {
   buildLocationFromAppointmentCustomer,
   buildTerrosAccountFieldsFromAppointment,
@@ -35,6 +37,12 @@ import {
 } from "../src/app/api/webhooks/enerflo-v2/route";
 
 describe("generic webhook helpers", () => {
+  test("allows Enerflo → Terros but blocks Terros → Enerflo", () => {
+    assert.equal(isIntegrationDirectionAllowed("enerflo", "terros"), true);
+    assert.equal(isIntegrationDirectionAllowed("terros", "enerflo"), false);
+    assert.equal(isIntegrationDirectionAllowed("sequifi", "enerflo"), true);
+  });
+
   test("resolves nested payload values by dot path", () => {
     const source = { lead: { assign_to_email: "rep@example.com" } };
     assert.equal(getNestedValue(source, "lead.assign_to_email"), "rep@example.com");
@@ -71,6 +79,21 @@ describe("Enerflo v1 webhook helpers", () => {
 });
 
 describe("Terros webhook helpers", () => {
+  test("acknowledges Terros webhooks without parsing or processing them", async () => {
+    const response = await postTerrosWebhook(
+      new Request("http://localhost/api/webhooks/terros", {
+        method: "POST",
+        body: "not-json",
+      }) as never,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      received: true,
+      skipped: true,
+      reason: "Terros → Enerflo synchronization is disabled",
+    });
+  });
+
   test("recognizes Terros JSON error envelopes", () => {
     assert.equal(terrosWebhookSuccess('{"type":"error","message":"nope"}'), false);
     assert.equal(terrosWebhookSuccess('{"account":{"accountId":"Account.1"}}'), true);

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { env } from "@/lib/env";
 import { enerfloRequest, enerfloRequestParsed } from "@/lib/enerflo/client";
+import { isIntegrationDirectionAllowed } from "@/lib/integration-direction";
 import {
   writeApiLog,
   getEnerfloAppointmentIdByTerrosEventId,
@@ -719,21 +720,21 @@ export function buildEnerfloUpdatePayload(
 export async function GET() {
   return NextResponse.json({
     ok: true,
-    description:
-      "Inbound Terros webhooks (Settings → Webhooks → Entity Account + Entity Event). POST JSON from Terros here.",
+    enabled: false,
+    description: "Terros → Enerflo synchronization is disabled. POST requests are acknowledged without processing.",
     path: "/api/webhooks/terros",
-    handles: [
-      { entity: "Account", actions: ["add", "update"] },
-      { entity: "Event",   actions: ["add"] },
-    ],
-    outbound: [
-      "Account add/update: Terros Owner → Enerflo Setter (setter_user_id / setter_email); Terros Closer → Enerflo Lead Owner (agent_user_id / assign_to_email), mirroring the Owner into Lead Owner too when there's no Closer yet (overwritten once a Closer is set). Links Terros externalLeadId after create.",
-      "Event add: Creates an Enerflo appointment via POST /api/v1/appointments; resolves numeric customer ID from externalLeadId and numeric user ID from owner.email. Stamps [Enerflo:ID] back onto the Terros event notes.",
-    ],
   });
 }
 
 export async function POST(req: NextRequest) {
+  if (!isIntegrationDirectionAllowed("terros", "enerflo")) {
+    return NextResponse.json({
+      received: true,
+      skipped: true,
+      reason: "Terros → Enerflo synchronization is disabled",
+    });
+  }
+
   const secret = env.terrosWebhookSecret?.trim();
   if (secret) {
     const got =

@@ -86,13 +86,6 @@ export interface InstallsRow {
 
 export type { ProjectFieldPreviewItem };
 
-export interface SyncPreviewResult {
-  enerfloToTerros: E2TRow[];
-  terrosToEnerflo: T2ERow[];
-  installsResync: InstallsRow[];
-  errors: string[];
-}
-
 export interface UserRow {
   name: string;
   email: string;
@@ -568,22 +561,6 @@ export async function buildT2EPreview(): Promise<{ rows: T2ERow[]; errors: strin
     }));
 
   return { rows, errors: enerfloResult.errs };
-}
-
-// ── Combined preview (legacy) ───────────────────────────────────────────────
-
-export async function buildSyncPreview(): Promise<SyncPreviewResult> {
-  const [installs, e2t, t2e] = await Promise.all([
-    buildInstallsPreview(),
-    buildE2TPreview(),
-    buildT2EPreview(),
-  ]);
-  return {
-    enerfloToTerros: e2t.rows,
-    terrosToEnerflo: t2e.rows,
-    installsResync: installs.rows,
-    errors: [...installs.errors, ...e2t.errors, ...t2e.errors],
-  };
 }
 
 // ── Users preview ──────────────────────────────────────────────────────────

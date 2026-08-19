@@ -9,6 +9,7 @@ import {
 } from "@/lib/automations";
 import { writeApiLog } from "@/lib/logger";
 import { env } from "@/lib/env";
+import { isIntegrationDirectionAllowed } from "@/lib/integration-direction";
 import type { Automation, AutomationSystem } from "@/lib/automations-types";
 
 // ── Fetch all automations ────────────────────────────────────────────────
@@ -21,6 +22,14 @@ export async function setAutomationEnabled(
   id: string,
   enabled: boolean
 ): Promise<Automation | null> {
+  const automation = getAllAutomations().find((item) => item.id === id);
+  if (
+    enabled &&
+    automation &&
+    !isIntegrationDirectionAllowed(automation.trigger.system, automation.action.system)
+  ) {
+    return null;
+  }
   return toggleAutomation(id, enabled);
 }
 
@@ -35,6 +44,9 @@ export async function addAutomation(formData: FormData): Promise<Automation> {
 
   const triggerSystem = get("trigger_system") as AutomationSystem;
   const actionSystem  = get("action_system")  as AutomationSystem;
+  if (!isIntegrationDirectionAllowed(triggerSystem, actionSystem)) {
+    throw new Error("Terros → Enerflo automations are disabled");
+  }
 
   // Parse field mapping lines: "source.field -> target_field"
   const mappingRaw = get("field_mapping");
@@ -76,6 +88,15 @@ export async function runAutomation(id: string): Promise<{
   const automation = all.find((a) => a.id === id);
   if (!automation) {
     return { automation: null, httpStatus: null, ok: false, response: "Automation not found", hadApiKey: false };
+  }
+  if (!isIntegrationDirectionAllowed(automation.trigger.system, automation.action.system)) {
+    return {
+      automation,
+      httpStatus: null,
+      ok: false,
+      response: "Terros → Enerflo automations are disabled",
+      hadApiKey: false,
+    };
   }
 
   const { action } = automation;

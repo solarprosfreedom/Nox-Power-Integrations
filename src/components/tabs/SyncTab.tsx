@@ -5,30 +5,22 @@ import {
   previewSyncInstalls,
   previewSyncCoperniqToEnerflo,
   previewSyncE2T,
-  previewSyncT2E,
   executeSyncE2T,
-  executeSyncT2E,
   executeSyncInstalls,
   executeSyncCoperniqToEnerflo,
 } from "@/app/actions/sync";
-import type { E2TRow, T2ERow, InstallsRow } from "@/lib/sync/preview";
+import type { E2TRow, InstallsRow } from "@/lib/sync/preview";
 import type { CoperniqToEnerfloRow } from "@/lib/sync/coperniq-enerflo";
 import type { ExecuteResultRow } from "@/lib/sync/execute";
 
 type RowStatus = "pending" | "syncing" | "created" | "error";
-type SyncSubTab = "installs" | "coperniq" | "e2t" | "t2e";
+type SyncSubTab = "installs" | "coperniq" | "e2t";
 
 interface E2TUiRow extends E2TRow {
   rowStatus: RowStatus;
   errorMsg?: string;
   targetId?: string;
   installCount?: number;
-}
-
-interface T2EUiRow extends T2ERow {
-  rowStatus: RowStatus;
-  errorMsg?: string;
-  targetId?: string;
 }
 
 interface InstallsUiRow extends InstallsRow {
@@ -135,39 +127,6 @@ function E2TTable({ rows, onSyncAll, onSyncRow, syncing }: {
                 </span>
               )}
             </div>
-          </td>
-        </tr>
-      ))}
-    </TableShell>
-  );
-}
-
-function T2ETable({ rows, onSyncAll, onSyncRow, syncing }: {
-  rows: T2EUiRow[]; onSyncAll: () => void;
-  onSyncRow: (idx: number) => void; syncing: boolean;
-}) {
-  return (
-    <TableShell
-      title="Terros → Enerflo" dot="bg-sky-400"
-      count={rows.filter(r => r.rowStatus === "pending").length}
-      onSyncAll={onSyncAll} syncing={syncing}
-      headers={["Name", "Email", "Phone", "Address", "Owner", "Status", ""]}
-    >
-      {rows.map((row, i) => (
-        <tr key={`${row.terrosAccountId}-${i}`} className="transition-colors hover:bg-gray-800/30">
-          <td className="px-4 py-2.5 text-gray-200 font-medium whitespace-nowrap">{row.name || "—"}</td>
-          <td className="px-4 py-2.5 text-gray-400 whitespace-nowrap">{row.email || "—"}</td>
-          <td className="px-4 py-2.5 text-gray-400 whitespace-nowrap">{row.phone || "—"}</td>
-          <td className="px-4 py-2.5 text-gray-400 max-w-[180px] truncate" title={row.addressFull}>{row.addressFull || "—"}</td>
-          <td className="px-4 py-2.5 text-gray-400 whitespace-nowrap">{row.ownerEmail || "—"}</td>
-          <td className="px-4 py-2.5 whitespace-nowrap"><SyncBadge status={row.rowStatus} errorMsg={row.errorMsg} /></td>
-          <td className="px-4 py-2.5 whitespace-nowrap">
-            {row.rowStatus === "pending" && (
-              <button onClick={() => onSyncRow(i)} disabled={syncing}
-                className="rounded bg-gray-700 px-2 py-1 text-[10px] font-medium text-gray-300 hover:bg-gray-600 disabled:opacity-40">
-                Sync
-              </button>
-            )}
           </td>
         </tr>
       ))}
@@ -358,12 +317,6 @@ const SUB_TABS: { id: SyncSubTab; label: string; dot: string; description: strin
     dot: "bg-orange-400",
     description: "Create Enerflo customers that are missing in Terros.",
   },
-  {
-    id: "t2e",
-    label: "Terros → Enerflo",
-    dot: "bg-sky-400",
-    description: "Create Terros accounts that are missing in Enerflo.",
-  },
 ];
 
 function PreviewEmpty({ onLoad, loading, loaded, loadingHint }: {
@@ -423,12 +376,6 @@ export default function SyncTab() {
   const [e2tRows, setE2tRows]                       = useState<E2TUiRow[]>([]);
   const [e2tSyncing, setE2tSyncing]                 = useState(false);
 
-  const [t2eLoaded, setT2eLoaded]                 = useState(false);
-  const [t2eLoading, setT2eLoading]                 = useState(false);
-  const [t2eErrors, setT2eErrors]                   = useState<string[]>([]);
-  const [t2eRows, setT2eRows]                       = useState<T2EUiRow[]>([]);
-  const [t2eSyncing, setT2eSyncing]                 = useState(false);
-
   async function handleLoadInstallsPreview() {
     setInstallsLoading(true);
     setInstallsErrors([]);
@@ -485,46 +432,25 @@ export default function SyncTab() {
     }
   }
 
-  async function handleLoadT2EPreview() {
-    setT2eLoading(true);
-    setT2eErrors([]);
-    try {
-      const result = await previewSyncT2E();
-      if (result.fetchError) {
-        setT2eErrors([result.fetchError]);
-      } else {
-        setT2eErrors(result.errors ?? []);
-        setT2eRows(result.rows.map(r => ({ ...r, rowStatus: "pending" as RowStatus })));
-        setT2eLoaded(true);
-      }
-    } finally {
-      setT2eLoading(false);
-    }
-  }
-
   function handleLoadActivePreview() {
     if (activeTab === "installs") return handleLoadInstallsPreview();
     if (activeTab === "coperniq") return handleLoadCoperniqPreview();
-    if (activeTab === "e2t") return handleLoadE2TPreview();
-    return handleLoadT2EPreview();
+    return handleLoadE2TPreview();
   }
 
   const activeMeta = SUB_TABS.find(t => t.id === activeTab)!;
   const activeLoading =
     activeTab === "installs" ? installsLoading
     : activeTab === "coperniq" ? coperniqLoading
-    : activeTab === "e2t" ? e2tLoading
-    : t2eLoading;
+    : e2tLoading;
   const activeLoaded =
     activeTab === "installs" ? installsLoaded
     : activeTab === "coperniq" ? coperniqLoaded
-    : activeTab === "e2t" ? e2tLoaded
-    : t2eLoaded;
+    : e2tLoaded;
   const activeErrors =
     activeTab === "installs" ? installsErrors
     : activeTab === "coperniq" ? coperniqErrors
-    : activeTab === "e2t" ? e2tErrors
-    : t2eErrors;
+    : e2tErrors;
 
   function pendingCount(tab: SyncSubTab): number | null {
     if (tab === "installs") return installsLoaded ? installsRows.filter(r => r.rowStatus === "pending").length : null;
@@ -533,8 +459,7 @@ export default function SyncTab() {
         ? coperniqRows.filter(r => r.action === "create" && r.rowStatus === "pending").length
         : null;
     }
-    if (tab === "e2t") return e2tLoaded ? e2tRows.filter(r => r.rowStatus === "pending").length : null;
-    return t2eLoaded ? t2eRows.filter(r => r.rowStatus === "pending").length : null;
+    return e2tLoaded ? e2tRows.filter(r => r.rowStatus === "pending").length : null;
   }
 
   function applyE2TResults(results: ExecuteResultRow[]) {
@@ -544,18 +469,6 @@ export default function SyncTab() {
         const idx = next.findIndex(row => row.enerfloId === r.id);
         if (idx === -1) continue;
         next[idx] = { ...next[idx]!, rowStatus: r.status, targetId: r.targetId, errorMsg: r.error, installCount: r.installCount };
-      }
-      return next;
-    });
-  }
-
-  function applyT2EResults(results: ExecuteResultRow[]) {
-    setT2eRows(prev => {
-      const next = [...prev];
-      for (const r of results) {
-        const idx = next.findIndex(row => row.terrosAccountId === r.id);
-        if (idx === -1) continue;
-        next[idx] = { ...next[idx]!, rowStatus: r.status, targetId: r.targetId, errorMsg: r.error };
       }
       return next;
     });
@@ -581,31 +494,6 @@ export default function SyncTab() {
       applyE2TResults(result.results);
     } catch (e) {
       setE2tRows(prev => prev.map((r, i) =>
-        i === idx ? { ...r, rowStatus: "error", errorMsg: e instanceof Error ? e.message : String(e) } : r
-      ));
-    }
-  }
-
-  async function handleSyncAllT2E() {
-    const pending = t2eRows.filter(r => r.rowStatus === "pending");
-    if (!pending.length) return;
-    setT2eSyncing(true);
-    setT2eRows(prev => prev.map(r => r.rowStatus === "pending" ? { ...r, rowStatus: "syncing" } : r));
-    try {
-      const result = await executeSyncT2E(pending);
-      applyT2EResults(result.results);
-    } finally { setT2eSyncing(false); }
-  }
-
-  async function handleSyncRowT2E(idx: number) {
-    const row = t2eRows[idx];
-    if (!row || row.rowStatus !== "pending") return;
-    setT2eRows(prev => prev.map((r, i) => i === idx ? { ...r, rowStatus: "syncing" } : r));
-    try {
-      const result = await executeSyncT2E([row]);
-      applyT2EResults(result.results);
-    } catch (e) {
-      setT2eRows(prev => prev.map((r, i) =>
         i === idx ? { ...r, rowStatus: "error", errorMsg: e instanceof Error ? e.message : String(e) } : r
       ));
     }
@@ -799,13 +687,6 @@ export default function SyncTab() {
         )
       )}
 
-      {activeTab === "t2e" && (
-        t2eLoaded && !t2eLoading ? (
-          <T2ETable rows={t2eRows} onSyncAll={handleSyncAllT2E} onSyncRow={handleSyncRowT2E} syncing={t2eSyncing} />
-        ) : (
-          <PreviewEmpty onLoad={handleLoadT2EPreview} loading={t2eLoading} loaded={t2eLoaded} />
-        )
-      )}
     </div>
   );
 }
