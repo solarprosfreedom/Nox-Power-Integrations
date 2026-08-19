@@ -259,50 +259,6 @@ const SEED: Automation[] = [
     runCount: 0,
     createdAt: new Date().toISOString(),
   },
-  {
-    id: "tpl-terros-enerflo-knock",
-    name: "Terros Knock Interested → Create Enerflo Lead",
-    description:
-      "When a rep marks a door knock as 'Interested' in Terros, automatically push the homeowner's info into Enerflo as a new lead so the CRM pipeline starts immediately.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "terros",
-      event: "knock.interested",
-      eventLabel: "Knock Marked as Interested",
-    },
-    action: {
-      system: "enerflo",
-      operation: "create_lead",
-      operationLabel: "Create Lead",
-      endpoint: "/api/v1/partner/action/lead/add",
-      method: "POST",
-      fieldMapping: {
-        "knock.homeowner_first_name": "lead.first_name",
-        "knock.homeowner_last_name": "lead.last_name",
-        "knock.address": "lead.address",
-        "knock.city": "lead.city",
-        "knock.state": "lead.state",
-        "knock.zip": "lead.zip",
-        "knock.rep_email": "lead.setter_email",
-      },
-      samplePayload: {
-        lead: {
-          first_name: "John",
-          last_name: "Doe",
-          address: "123 Solar Ave",
-          city: "Phoenix",
-          state: "AZ",
-          zip: "85001",
-          setter_email: "rep@company.com",
-          lead_source: "door-knock",
-          integration_record_id: "terros-knock-001",
-        },
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
 ];
 
 // ── Storage helpers ───────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
   type Automation,
   type AutomationSystem,
 } from "@/lib/automations-types";
+import { isIntegrationDirectionAllowed } from "@/lib/integration-direction";
 
 const SYSTEMS: AutomationSystem[] = ["enerflo", "sequifi", "terros"];
 
@@ -24,6 +25,9 @@ export default function AutomationBuilder({ onCreated, onCancel }: Props) {
 
   const triggerEvents    = TRIGGER_EVENTS[triggerSystem];
   const actionOperations = ACTION_OPERATIONS[actionSystem];
+  const availableActionSystems = SYSTEMS.filter((system) =>
+    isIntegrationDirectionAllowed(triggerSystem, system),
+  );
   const triggerMeta      = SYSTEM_META[triggerSystem];
   const actionMeta       = SYSTEM_META[actionSystem];
 
@@ -101,10 +105,16 @@ export default function AutomationBuilder({ onCreated, onCancel }: Props) {
             <label className="mb-1 block text-xs font-medium text-gray-400">Source System</label>
             <select
               value={triggerSystem}
-              onChange={(e) => setTriggerSystem(e.target.value as AutomationSystem)}
+              onChange={(e) => {
+                const next = e.target.value as AutomationSystem;
+                setTriggerSystem(next);
+                if (!isIntegrationDirectionAllowed(next, actionSystem)) {
+                  setActionSystem("terros");
+                }
+              }}
               className={`${selectCls} mb-3`}
             >
-              {SYSTEMS.map((s) => (
+              {availableActionSystems.map((s) => (
                 <option key={s} value={s}>{SYSTEM_META[s].label}</option>
               ))}
             </select>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAllAutomations, recordRun } from "@/lib/automations";
 import { writeApiLog } from "@/lib/logger";
 import { env } from "@/lib/env";
+import { isIntegrationDirectionAllowed } from "@/lib/integration-direction";
 import type { AutomationSystem, Automation } from "@/lib/automations-types";
 
 const VALID_SYSTEMS: AutomationSystem[] = ["enerflo", "sequifi", "terros"];
@@ -30,7 +31,11 @@ export async function POST(
   // Find all enabled automations that match this system + event
   const all = getAllAutomations();
   const matched = all.filter(
-    (a) => a.enabled && a.trigger.system === system && a.trigger.event === incomingEvent
+    (a) =>
+      a.enabled &&
+      a.trigger.system === system &&
+      a.trigger.event === incomingEvent &&
+      isIntegrationDirectionAllowed(a.trigger.system, a.action.system),
   );
 
   if (matched.length === 0) {
@@ -62,7 +67,12 @@ export async function GET(
 ) {
   const { system } = await params;
   const all = getAllAutomations();
-  const active = all.filter((a) => a.enabled && a.trigger.system === system);
+  const active = all.filter(
+    (a) =>
+      a.enabled &&
+      a.trigger.system === system &&
+      isIntegrationDirectionAllowed(a.trigger.system, a.action.system),
+  );
 
   return NextResponse.json({
     ok: true,
