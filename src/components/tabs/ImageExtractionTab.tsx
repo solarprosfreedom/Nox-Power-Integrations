@@ -22,7 +22,10 @@ export default function ImageExtractionTab() {
   const [copied, setCopied] = useState(false);
 
   const formatted = address
-    ? [address.street, `${address.city}, ${address.state} ${address.zip}`.replace(/^, /, "").trim()]
+    ? [
+        address.street,
+        [address.city, [address.state, address.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+      ]
         .filter(Boolean)
         .join(", ")
     : "";
@@ -54,7 +57,7 @@ export default function ImageExtractionTab() {
       if (!text) {
         setError("No text found. Try a clearer, well-lit photo of the ID.");
       } else if (!parsed) {
-        setError("Text was found, but no US mailing address could be parsed. Copy from the raw OCR below.");
+        setError("Text was found, but no mailing address could be parsed. Copy from the raw OCR below.");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

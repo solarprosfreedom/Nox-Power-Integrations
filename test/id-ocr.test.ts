@@ -45,6 +45,24 @@ describe("extractAddressFromOcrText", () => {
     assert.equal(result.zip, "62521");
   });
 
+  test("parses a sample ID street and city without state or zip", () => {
+    const text = `
+      ID : 123456789
+      Lars Peeters
+      Assistant Manager
+      123 Anywhere St., Any City
+      +123-456-7890
+      www.reallygreatsite.com
+    `;
+    const result = extractAddressFromOcrText(text);
+    assert.ok(result);
+    assert.match(result.street, /123 Anywhere St/i);
+    assert.match(result.city, /Any City/i);
+    assert.equal(result.state, "");
+    assert.equal(result.zip, "");
+    assert.match(result.formatted, /123 Anywhere St/i);
+  });
+
   test("returns null when no address is present", () => {
     assert.equal(extractAddressFromOcrText("SEX F\nDOB 01/01/1990\nEXP 01/01/2030"), null);
   });
