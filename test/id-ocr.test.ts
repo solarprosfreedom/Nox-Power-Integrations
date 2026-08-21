@@ -45,6 +45,30 @@ describe("extractAddressFromOcrText", () => {
     assert.equal(result.zip, "62521");
   });
 
+  test("parses a California ID address on one line", () => {
+    const text = `
+      CALIFORNIA IDENTIFICATION CARD
+      LN JUMIO, FN MARIE
+      1234 ABC STREET, ANYTOWN, CA 91234
+      A123456789
+      EXP 01/01/2025
+      DOB 01/01/1975
+      SEX F HGT 5'-05" HAIR BRN WGT 125 lb EYES BRN ISS 01/01/1990
+      200 Hgt 5'-05" Wgt 1251b Iss
+    `;
+    const result = extractAddressFromOcrText(text);
+    assert.ok(result);
+    assert.match(result.street, /1234 Abc Street/i);
+    assert.match(result.city, /Anytown/i);
+    assert.equal(result.state, "CA");
+    assert.equal(result.zip, "91234");
+  });
+
+  test("does not treat height and weight OCR as a street", () => {
+    const result = extractAddressFromOcrText(`200 Hgt 5'-05" Wgt 1251b Iss\nSEX F\nISS 01/01/1990`);
+    assert.equal(result, null);
+  });
+
   test("parses a sample ID street and city without state or zip", () => {
     const text = `
       ID : 123456789
