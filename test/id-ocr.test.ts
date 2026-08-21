@@ -64,6 +64,29 @@ describe("extractAddressFromOcrText", () => {
     assert.equal(result.zip, "91234");
   });
 
+  test("parses noisy Tesseract output from a California ID photo", () => {
+    const text = `
+C ALIFORNIA: IDENTIFICATION
+ip A123456789 | A
+xp 01/01/2025
+| tn JUMIO
+~< FN MARIE
+> & 1234 ABC STREET
+y ANYTOWN, CA 91234 ==
+< pos 01/01/1975 -
+: as A123456789
+SEX F HAIR BRN EYES BRN
+- 200 HGT 5'-05" WGT 1251b ISS
+farce Fz 01/01/1990
+    `;
+    const result = extractAddressFromOcrText(text);
+    assert.ok(result);
+    assert.match(result.street, /1234 Abc Street/i);
+    assert.match(result.city, /Anytown/i);
+    assert.equal(result.state, "CA");
+    assert.equal(result.zip, "91234");
+  });
+
   test("does not treat height and weight OCR as a street", () => {
     const result = extractAddressFromOcrText(`200 Hgt 5'-05" Wgt 1251b Iss\nSEX F\nISS 01/01/1990`);
     assert.equal(result, null);

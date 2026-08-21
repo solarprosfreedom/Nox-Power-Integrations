@@ -57,10 +57,35 @@ function fixOcrState(raw: string): string {
 
 function cleanLine(line: string): string {
   return line
-    .replace(/[|]+/g, " ")
+    .replace(/[|~<>*_•·=]+/g, " ")
+    .replace(/&/g, " ")
     .replace(/\s+/g, " ")
-    .replace(/^[\s,:;\-]+|[\s,:;\-]+$/g, "")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/[^A-Za-z0-9]+$/, "")
+    .replace(/^[a-z]\s+/, "")
     .trim();
+}
+
+const BLOB_ADDRESS =
+  /(\d{2,6}\s+(?:(?!address|residence)[A-Za-z0-9]+\s+){0,6}(?:avenue|street|drive|lane|road|blvd|court|circle|pkwy|highway|ave|st|dr|ln|rd|ct|cir|hwy|way)\.?)(?:\s*,)?\s+(?:[a-z]\s+)?([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,3}),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)/i;
+
+function parseAddressInBlob(text: string): ExtractedIdAddress | null {
+  const blob = String(text ?? "")
+    .replace(/[|~<>*_•·=]+/g, " ")
+    .replace(/&/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const match = blob.match(BLOB_ADDRESS);
+  if (!match) return null;
+  const state = fixOcrState(match[3] ?? "");
+  if (!US_STATES.has(state)) return null;
+  if (PHYSICAL_ATTR.test(match[1] ?? "") || PHYSICAL_ATTR.test(match[2] ?? "")) return null;
+  return formatAddress({
+    street: titleCase(match[1] ?? ""),
+    city: titleCase(match[2] ?? ""),
+    state,
+    zip: match[4] ?? "",
+  });
 }
 
 function looksLikeStreet(line: string): boolean {
@@ -131,6 +156,9 @@ function parseLooseStreetCity(line: string): ExtractedIdAddress | null {
 }
 
 export function extractAddressFromOcrText(text: string): ExtractedIdAddress | null {
+  const fromBlob = parseAddressInBlob(text);
+  if (fromBlob) return fromBlob;
+
   const lines = String(text ?? "")
     .split(/\r?\n/)
     .map(cleanLine)
