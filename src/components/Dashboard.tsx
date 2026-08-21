@@ -11,6 +11,7 @@ import SequifiOnboardingTab from "@/components/tabs/SequifiOnboardingTab";
 import SheetsRosterTab from "@/components/tabs/SheetsRosterTab";
 import ParagonSyncTab from "@/components/tabs/ParagonSyncTab";
 import LeaderboardFixTab from "@/components/tabs/LeaderboardFixTab";
+import ImageExtractionTab from "@/components/tabs/ImageExtractionTab";
 import { fetchStoredLogs } from "@/app/actions/enerflo";
 import { getIntegrationEnvStatus } from "@/app/actions/env-status";
 import type { ApiLog } from "@/lib/logger";
@@ -26,7 +27,8 @@ type SectionId =
   | "welcome-email"
   | "sheets-roster"
   | "paragon-sync"
-  | "leaderboard-fix";
+  | "leaderboard-fix"
+  | "image-extraction";
 
 const VENDORS: { id: SectionId; label: string; color: string; dot: string; tagline: string }[] = [
   { id: "enerflo",    label: "Enerflo",    color: "text-orange-400", dot: "bg-orange-400", tagline: "CRM & Solar Sales" },
@@ -260,6 +262,23 @@ export default function Dashboard() {
               <p className="text-[10px] text-gray-600 truncate">CSV → fix workflowHistory credit</p>
             </div>
           </button>
+
+          <button
+            onClick={() => setSection("image-extraction")}
+            className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors
+              ${section === "image-extraction"
+                ? "bg-amber-900/40 text-amber-200"
+                : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              }`}
+          >
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-amber-400">
+              ▣
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">Image Extraction</p>
+              <p className="text-[10px] text-gray-600 truncate">OCR address from an ID photo</p>
+            </div>
+          </button>
         </nav>
 
         {/* Footer — reflects server env (.env.local), not .env.local.example */}
@@ -347,6 +366,12 @@ export default function Dashboard() {
               <h1 className="text-base font-semibold text-sky-300">Leaderboard Fix</h1>
               <span className="text-xs text-gray-600">Rewrite workflowHistory credit from CSV export</span>
             </>
+          ) : section === "image-extraction" ? (
+            <>
+              <span className="text-amber-400">▣</span>
+              <h1 className="text-base font-semibold text-amber-300">Image Extraction</h1>
+              <span className="text-xs text-gray-600">OCR a driver license or state ID and pull the address</span>
+            </>
           ) : activeVendor ? (
             <>
               <span className={`h-3 w-3 rounded-full ${activeVendor.dot}`} />
@@ -409,6 +434,11 @@ export default function Dashboard() {
           {section === "leaderboard-fix" && (
             <div className="flex-1 overflow-y-auto px-8 py-8">
               <LeaderboardFixTab />
+            </div>
+          )}
+          {section === "image-extraction" && (
+            <div className="flex-1 overflow-y-auto px-8 py-8">
+              <ImageExtractionTab />
             </div>
           )}
         </div>
