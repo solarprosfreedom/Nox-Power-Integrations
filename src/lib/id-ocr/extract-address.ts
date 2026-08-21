@@ -83,10 +83,31 @@ function titleCase(value: string): string {
 function formatAddress(parts: Omit<ExtractedIdAddress, "formatted">): ExtractedIdAddress {
   const street = parts.street.trim();
   const city = parts.city.trim();
-  const formatted = [street, `${city}, ${parts.state} ${parts.zip}`.replace(/^, /, "").trim()]
-    .filter(Boolean)
-    .join(", ");
+  const cityLine = [city, [parts.state, parts.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const formatted = [street, cityLine].filter(Boolean).join(", ");
   return { ...parts, street, city, formatted };
+}
+
+const PHONE_OR_URL = /www\.|https?:\/\/|\+\d|\d{3}[-.\s]\d{3}[-.\s]\d{4}/i;
+
+const STREET_THEN_CITY =
+  /^(\d{1,6}\s+.+?(?:ave|avenue|st|street|rd|road|dr|drive|ln|lane|blvd|ct|court|way|cir|pkwy)\.?)\s*,\s*([A-Za-z][A-Za-z .'-]+)$/i;
+
+function parseLooseStreetCity(line: string): ExtractedIdAddress | null {
+  if (PHONE_OR_URL.test(line)) return null;
+  const match = line.match(STREET_THEN_CITY);
+  if (match) {
+    return formatAddress({
+      street: titleCase(match[1] ?? ""),
+      city: titleCase(match[2] ?? ""),
+      state: "",
+      zip: "",
+    });
+  }
+  if (/^\d{1,6}\s+\S+/.test(line) && STREET_HINT.test(line) && !CITY_STATE_ZIP.test(line) && !STATE_ZIP_ONLY.test(line)) {
+    return formatAddress({ street: titleCase(line), city: "", state: "", zip: "" });
+  }
+  return null;
 }
 
 export function extractAddressFromOcrText(text: string): ExtractedIdAddress | null {
@@ -131,6 +152,11 @@ export function extractAddressFromOcrText(text: string): ExtractedIdAddress | nu
       state,
       zip: stateZip[2] ?? "",
     });
+  }
+
+  for (const line of usable) {
+    const loose = parseLooseStreetCity(line);
+    if (loose) return loose;
   }
 
   return null;
