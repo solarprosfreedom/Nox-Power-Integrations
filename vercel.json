@@ -53,6 +53,10 @@
     "src/app/api/cron/inactive-closer-report/route.ts": {
       "memory": 1536,
       "maxDuration": 300
+    },
+    "src/app/api/cron/eiec-map-screenshot/route.ts": {
+      "memory": 3008,
+      "maxDuration": 120
     }
   }
 }

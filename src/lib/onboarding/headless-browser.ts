@@ -44,23 +44,51 @@ async function resolveServerlessExecutablePath(
   return chromium.executablePath(remote);
 }
 
+async function launchServerlessChromium(options: {
+  graphics: boolean;
+  viewport: { width: number; height: number };
+}): Promise<HeadlessBrowser> {
+  const chromium = (await import("@sparticuz/chromium")).default;
+  const puppeteer = await import("puppeteer-core");
+  chromium.setGraphicsMode = options.graphics;
+  const executablePath = await resolveServerlessExecutablePath(chromium);
+  return (await puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: options.viewport,
+    executablePath,
+    headless: true,
+  })) as unknown as HeadlessBrowser;
+}
+
 export async function launchHeadlessBrowser(): Promise<HeadlessBrowser> {
   if (isServerlessRuntime()) {
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const puppeteer = await import("puppeteer-core");
-
     // Smaller /tmp footprint; graphics unused for form fills.
-    chromium.setGraphicsMode = false;
-
-    const executablePath = await resolveServerlessExecutablePath(chromium);
-    return (await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: { width: 1280, height: 720 },
-      executablePath,
-      headless: true,
-    })) as unknown as HeadlessBrowser;
+    return launchServerlessChromium({
+      graphics: false,
+      viewport: { width: 1280, height: 720 },
+    });
   }
 
   const puppeteer = await import("puppeteer");
   return (await puppeteer.launch({ headless: true })) as unknown as HeadlessBrowser;
+}
+
+/**
+ * Headless Chromium with SwiftShader WebGL. Needed for ArcGIS Instant Apps.
+ * Do not reuse {@link launchHeadlessBrowser} — that turns graphics off.
+ */
+export async function launchMapScreenshotBrowser(): Promise<HeadlessBrowser> {
+  if (isServerlessRuntime()) {
+    return launchServerlessChromium({
+      graphics: true,
+      viewport: { width: 1440, height: 900 },
+    });
+  }
+
+  const puppeteer = await import("puppeteer");
+  return (await puppeteer.launch({
+    headless: true,
+    defaultViewport: { width: 1440, height: 900 },
+    args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+  })) as unknown as HeadlessBrowser;
 }
