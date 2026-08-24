@@ -25,7 +25,7 @@ export function buildGoodPwrTextMessage(): string {
     `Hello! You have been onboarded for GoodPWR. You should receive your invite ` +
     `emails soon for the different platforms and financiers. You can access their ` +
     `link tree using this link:\n\n${linksUrl}\n\n` +
-    `Please feel free to reach out to me or your manager if you have any further questions.\n\n` +
+    `Please feel free to reach out to admin@noxpwr.com or your manager if you have any further questions.\n\n` +
     `Thanks!`
   );
 }

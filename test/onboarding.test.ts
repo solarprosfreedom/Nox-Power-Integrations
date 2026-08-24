@@ -778,6 +778,7 @@ describe("GoodPWR JotForm submission and text message", () => {
     const message = buildGoodPwrTextMessage();
     assert.match(message, /Hello! You have been onboarded for GoodPWR\./);
     assert.match(message, /https:\/\/sites\.google\.com\/goodpwr\.com\/goodpwr\/sales-partners/);
+    assert.match(message, /reach out to admin@noxpwr\.com or your manager/);
     assert.match(message, /Thanks!$/);
   });
 
