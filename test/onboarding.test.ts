@@ -826,6 +826,16 @@ describe("Better Earth form submission (Fillout.com — direct REST, no browser 
       resolveBetterEarthStates({
         raw_sequifi_payload: {
           employee_personal_detail: [
+            { field_name: "Please provide the state(s) you will be working in.", value: "Tx IL" },
+          ],
+        },
+      } as never),
+      { supported: ["Texas"], unsupported: ["IL"] },
+    );
+    assert.deepEqual(
+      resolveBetterEarthStates({
+        raw_sequifi_payload: {
+          employee_personal_detail: [
             { field_name: "Please provide the market(s) you will be working in?", value: "Arizona/Florida" },
           ],
         },

@@ -117,7 +117,14 @@ export function resolveBetterEarthStates(job: Pick<OnboardingJob, "raw_sequifi_p
   const supported = new Set<string>();
   const unsupported = new Set<string>();
 
-  for (const part of markets.split(/[,/;]+/)) {
+  const parts = markets.split(/[,/;]+/).flatMap(part => {
+    const trimmed = part.trim();
+    return /^(?:[A-Za-z]{2}\s+)+[A-Za-z]{2}$/.test(trimmed)
+      ? trimmed.split(/\s+/)
+      : [trimmed];
+  });
+
+  for (const part of parts) {
     const token = part.trim();
     if (!token) continue;
     const full = STATE_ABBREVIATIONS[token.toUpperCase()] ?? token;
