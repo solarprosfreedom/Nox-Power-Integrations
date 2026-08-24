@@ -17,6 +17,12 @@ No inactive-rep cron runs on Saturday or Sunday. A Friday report therefore
 remains in review through the weekend and is first eligible for processing on
 Monday morning, after another complete live revalidation.
 
+A separate weekly job, `GET /api/cron/inactive-closer-report`, is not the
+deactivation report. It emails the inactive-closers-with-tied-projects CSV
+(one row per project) at 15:00 UTC on Mondays, with an idempotent retry at
+15:10 UTC. That is 11:00 PM and 11:10 PM in `Asia/Manila`. Recipients are
+`samjensen@noxpwr.com` and `noxpwr@gmail.com`.
+
 The inactive-rep review portal is separate from the integration dashboard. Open
 `/inactive-reps`, which redirects unauthenticated reviewers to
 `/inactive-reps/login`. Access is restricted to `jorgesalazar@noxpwr.com`,

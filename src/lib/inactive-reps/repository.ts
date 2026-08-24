@@ -150,6 +150,18 @@ export async function getBatchByReportDate(reportDate: string): Promise<Inactive
   return data ? batchFromRow(data as Record<string, unknown>) : null;
 }
 
+export async function listLatestEmailedInactiveRepBatch(): Promise<InactiveRepBatch | null> {
+  const { data, error } = await db()
+    .from("inactive_rep_batches")
+    .select("*")
+    .not("emailed_at", "is", null)
+    .order("emailed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`inactive_rep_batches latest emailed lookup failed: ${error.message}`);
+  return data ? batchFromRow(data as Record<string, unknown>) : null;
+}
+
 export async function createOrLoadPreparingBatch(options: {
   reportDate: string;
   subject: string;
