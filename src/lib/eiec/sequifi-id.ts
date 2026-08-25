@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { sequifiFetch } from "@/lib/sequifi/fetch";
 
 const ID_TYPE_ID = 2;
 const ID_TYPE_NAME = /driver|passport|license/i;
@@ -16,7 +17,7 @@ function sequifiBearer(): string {
 }
 
 async function sequifiJson(path: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${sequifiBase()}${path}`, {
+  const res = await sequifiFetch(`${sequifiBase()}${path}`, {
     headers: { Authorization: `Bearer ${sequifiBearer()}`, Accept: "application/json" },
   });
   const json = (await res.json()) as Record<string, unknown>;

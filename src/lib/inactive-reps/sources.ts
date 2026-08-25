@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { sequifiFetch } from "@/lib/sequifi/fetch";
 import { getGraphAccessToken, GRAPH_BASE, requireAzureConfig } from "@/lib/microsoft/graph-auth";
 import { sequifiUserFromApi } from "@/lib/onboarding/normalize";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
@@ -63,7 +64,8 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: controller.signal, cache: "no-store" });
+    const fetchImpl = url.includes("sequifi.com") ? sequifiFetch : fetch;
+    return await fetchImpl(url, { ...init, signal: controller.signal, cache: "no-store" });
   } finally {
     clearTimeout(timer);
   }

@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { sequifiFetch } from "@/lib/sequifi/fetch";
 import { normalizeEmail } from "@/lib/inactive-reps/identity";
 import { listLatestEmailedInactiveRepBatch } from "@/lib/inactive-reps/repository";
 import { listFromPayload } from "@/lib/inactive-reps/sources";
@@ -14,7 +15,8 @@ function requireSetting(value: string | undefined, name: string): string {
 }
 
 async function fetchJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
-  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: "no-store" });
+  const fetchImpl = url.includes("sequifi.com") ? sequifiFetch : fetch;
+  const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: "no-store" });
   const text = await res.text();
   if (!res.ok) throw new Error(`${url} failed (${res.status}): ${text.slice(0, 200)}`);
   return JSON.parse(text) as Record<string, unknown>;

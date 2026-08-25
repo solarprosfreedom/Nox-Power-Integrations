@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { sequifiUserFromApi } from "@/lib/onboarding/normalize";
 import type { SequifiUserRecord } from "@/lib/onboarding/types";
+import { sequifiFetch } from "@/lib/sequifi/fetch";
 
 function getSequifiBearer(): string {
   const token =
@@ -34,7 +35,7 @@ export async function fetchSequifiUsersByStatus(
 
   for (let page = 1; page <= 100; page++) {
     const url = `${baseUrl()}/v1/users?page=${page}&per_page=100&status=${status}`;
-    const res = await fetch(url, {
+    const res = await sequifiFetch(url, {
       headers: { Authorization: `Bearer ${bearer}`, Accept: "application/json" },
     });
     const text = await res.text();
@@ -83,7 +84,7 @@ export async function fetchAllSequifiUsers(): Promise<SequifiUserRecord[]> {
 export async function fetchSequifiUserById(id: number): Promise<SequifiUserRecord | null> {
   const bearer = getSequifiBearer();
   const url = `${baseUrl()}/v1/users/${id}`;
-  const res = await fetch(url, {
+  const res = await sequifiFetch(url, {
     headers: { Authorization: `Bearer ${bearer}`, Accept: "application/json" },
   });
   const text = await res.text();
