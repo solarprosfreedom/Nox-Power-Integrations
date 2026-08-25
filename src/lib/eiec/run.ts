@@ -14,7 +14,7 @@ import { downloadSequifiIdPhoto } from "@/lib/eiec/sequifi-id";
 import { isGraphMailConfigured, sendMailAsUser } from "@/lib/microsoft/graph-mail";
 import {
   fetchAllSequifiUsers,
-  fetchSequifiUserById,
+  fetchSequifiUserByIdAnyStatus,
   filterUsersByGoLive,
   filterUsersByOnboardingComplete,
 } from "@/lib/sequifi/client";
@@ -43,8 +43,8 @@ export async function runEiecEligibilityCycle(options?: {
   const ledger = await loadProcessedLedger();
   let candidates: SequifiUserRecord[];
   if (options?.forceUserId) {
-    const user = await fetchSequifiUserById(options.forceUserId);
-    candidates = user && isIllinoisSellingMarket(user.raw) ? [user] : [];
+    const user = await fetchSequifiUserByIdAnyStatus(options.forceUserId);
+    candidates = user ? [user] : [];
   } else {
     const hired = filterUsersByOnboardingComplete(
       filterUsersByGoLive(await fetchAllSequifiUsers()),

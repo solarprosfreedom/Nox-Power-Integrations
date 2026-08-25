@@ -26,13 +26,14 @@ export function isActiveSequifiUser(user: SequifiUserRecord): boolean {
   return user.status_id === ACTIVE_STATUS_ID;
 }
 
-/** Fetches active reps only (`status=active` / status_id = 1). */
-export async function fetchAllSequifiUsers(): Promise<SequifiUserRecord[]> {
+export async function fetchSequifiUsersByStatus(
+  status: "active" | "inactive",
+): Promise<SequifiUserRecord[]> {
   const bearer = getSequifiBearer();
   const all: SequifiUserRecord[] = [];
 
   for (let page = 1; page <= 100; page++) {
-    const url = `${baseUrl()}/v1/users?page=${page}&per_page=100&status=active`;
+    const url = `${baseUrl()}/v1/users?page=${page}&per_page=100&status=${status}`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${bearer}`, Accept: "application/json" },
     });
@@ -56,7 +57,9 @@ export async function fetchAllSequifiUsers(): Promise<SequifiUserRecord[]> {
     for (const item of batch) {
       if (item && typeof item === "object") {
         const rec = sequifiUserFromApi(item as Record<string, unknown>);
-        if (rec && isActiveSequifiUser(rec)) all.push(rec);
+        if (!rec) continue;
+        if (status === "active" && !isActiveSequifiUser(rec)) continue;
+        all.push(rec);
       }
     }
 
@@ -70,6 +73,11 @@ export async function fetchAllSequifiUsers(): Promise<SequifiUserRecord[]> {
   }
 
   return all;
+}
+
+/** Fetches active reps only (`status=active` / status_id = 1). */
+export async function fetchAllSequifiUsers(): Promise<SequifiUserRecord[]> {
+  return fetchSequifiUsersByStatus("active");
 }
 
 export async function fetchSequifiUserById(id: number): Promise<SequifiUserRecord | null> {
@@ -106,8 +114,21 @@ export async function fetchSequifiUserById(id: number): Promise<SequifiUserRecor
   if (!fromUsers && !data?.user && "users" in raw) return null;
 
   const rec = sequifiUserFromApi(raw);
-  if (!rec) return null;
+  if (!rec || rec.id !== id) return null;
   return rec;
+}
+
+/** GET /v1/users/{id} misses inactive reps; fall back to status lists. */
+export async function fetchSequifiUserByIdAnyStatus(
+  id: number,
+): Promise<SequifiUserRecord | null> {
+  const direct = await fetchSequifiUserById(id);
+  if (direct) return direct;
+  for (const status of ["active", "inactive"] as const) {
+    const match = (await fetchSequifiUsersByStatus(status)).find((user) => user.id === id);
+    if (match) return match;
+  }
+  return null;
 }
 
 export function filterUsersByGoLive(users: SequifiUserRecord[]): SequifiUserRecord[] {
