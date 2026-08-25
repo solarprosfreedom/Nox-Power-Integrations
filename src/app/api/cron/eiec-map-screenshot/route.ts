@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import {
   screenshotEiecInstantApp,
-  uploadJaneDoeScreenshot,
+  uploadEiecTestScreenshot,
 } from "@/lib/eiec/instant-app-screenshot";
 
 export const maxDuration = 120;
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const shot = await screenshotEiecInstantApp(address);
     const fileName = `EIEC map screenshot - vercel trial - ${Date.now()}.png`;
     const uploaded = upload
-      ? await uploadJaneDoeScreenshot(fileName, shot.png)
+      ? await uploadEiecTestScreenshot(fileName, shot.png)
       : null;
 
     return NextResponse.json({
