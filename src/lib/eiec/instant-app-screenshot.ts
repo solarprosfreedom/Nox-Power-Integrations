@@ -99,7 +99,7 @@ export async function uploadEiecTestScreenshot(fileName: string, png: Buffer): P
         Authorization: `Bearer ${token}`,
         "Content-Type": "image/png",
       },
-      body: png,
+      body: new Uint8Array(png),
     },
   );
   const putJson = (await putRes.json()) as {

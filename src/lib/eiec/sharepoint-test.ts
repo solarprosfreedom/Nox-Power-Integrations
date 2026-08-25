@@ -60,7 +60,7 @@ export async function uploadTestFile(
       Authorization: `Bearer ${token}`,
       "Content-Type": contentType,
     },
-    body,
+    body: new Uint8Array(body),
   });
   const json = (await res.json()) as {
     name?: string;
