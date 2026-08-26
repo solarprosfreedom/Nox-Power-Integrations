@@ -27,10 +27,6 @@
     {
       "path": "/api/cron/inactive-closer-report",
       "schedule": "0,10 15 * * 1"
-    },
-    {
-      "path": "/api/cron/eiec-eligibility",
-      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {
