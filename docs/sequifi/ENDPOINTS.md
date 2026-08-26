@@ -24,6 +24,19 @@ POST {SEQUIFI_API_BASE_URL}/v1/users/termination
 
 Use-case: **after hire**, active users appear in `/v1/users?status=active` (`status_id = 1`). Auto-provisioning only runs when **`onboarding_complete = 1`** (unless `ONBOARDING_REQUIRE_SEQUIFI_COMPLETE=false`). Our middleware polls this list every 5 minutes (Vercel cron) and provisions Microsoft + Enerflo + Terros for eligible reps missing a member `@noxpwr.com` account, then appends each new Microsoft account to the Google Sheets **EMPWR** roster tab. Inactive users are excluded.
 
+Home address (same names as `POST /v1/users`) is on both the list and by-id routes:
+
+| Field | Notes |
+|---|---|
+| `home_address` | Formatted single line, e.g. `1124 Jefferson St, Hillsboro, IL, 62049` |
+| `home_address_line_1` | Street |
+| `home_address_line_2` | Apt/suite; null for nearly everyone |
+| `home_address_city` | City |
+| `home_address_state` | 2-letter code |
+| `home_address_zip` | ZIP |
+
+All six are **null** until the rep finishes the profile address step during onboarding. Treat the address as optional. `state_code` is still the selling/office market, not residence.
+
 ---
 
 ## Onboarding (pre-hire pipeline — not used as trigger)

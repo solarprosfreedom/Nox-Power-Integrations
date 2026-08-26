@@ -1,8 +1,13 @@
 import { env } from "@/lib/env";
 import { eiecEmailRecipients, formatEiecResultEmail } from "@/lib/eiec/email";
 import { lookupEiecEligibility } from "@/lib/eiec/feature-server";
-import { addressMatchesId, extractAddressFromIdImage } from "@/lib/eiec/gpt-address";
-import { isIllinoisSellingMarket } from "@/lib/eiec/illinois-market";
+import { extractAddressFromIdImage, normalizeUsState, type GptIdAddress } from "@/lib/eiec/gpt-address";
+import {
+  isIllinoisHomeAddress,
+  parseSequifiHomeAddress,
+  sequifiAddressMatchesId,
+  shouldQueueEiecCheck,
+} from "@/lib/eiec/home-address";
 import { screenshotEiecInstantApp } from "@/lib/eiec/instant-app-screenshot";
 import {
   loadProcessedLedger,
@@ -42,6 +47,7 @@ export async function runEiecEligibilityCycle(options?: {
 }): Promise<{ processed: EiecRunResult[]; checked: number }> {
   const limit = Math.max(1, options?.limit ?? 1);
   const ledger = await loadProcessedLedger();
+  const force = Boolean(options?.forceUserId);
   let candidates: SequifiUserRecord[];
   if (options?.forceUserId) {
     const user = await fetchSequifiUserByIdAnyStatus(options.forceUserId);
@@ -51,13 +57,13 @@ export async function runEiecEligibilityCycle(options?: {
       filterUsersByGoLive(await fetchAllSequifiUsers()),
     );
     candidates = hired.filter(
-      (user) => isIllinoisSellingMarket(user.raw) && !ledger.users[String(user.id)],
+      (user) => shouldQueueEiecCheck(user) && !ledger.users[String(user.id)],
     );
   }
 
   const processed: EiecRunResult[] = [];
   for (const user of candidates.slice(0, limit)) {
-    processed.push(await processUser(user, ledger));
+    processed.push(await processUser(user, ledger, { force }));
   }
   await saveProcessedLedger(ledger);
   return { processed, checked: candidates.length };
@@ -66,48 +72,73 @@ export async function runEiecEligibilityCycle(options?: {
 async function processUser(
   user: SequifiUserRecord,
   ledger: Awaited<ReturnType<typeof loadProcessedLedger>>,
+  options: { force: boolean },
 ): Promise<EiecRunResult> {
   const name = displayName(user);
+  const home = parseSequifiHomeAddress(user);
   const idFile = await downloadSequifiIdPhoto(user.id);
+
+  let idAddress: GptIdAddress | null = null;
+  let idReason: string | undefined;
   if (!idFile) {
-    const result = await finish(user, ledger, {
-      name,
-      eligible: false,
-      skipped: false,
-      reason: "no ID document",
-    });
-    return result;
+    idReason = "no ID document";
+  } else if (idFile.mimeType === "application/pdf") {
+    idReason = "ID is PDF (vision needs an image)";
+  } else {
+    idAddress = await extractAddressFromIdImage(idFile.bytes, idFile.mimeType);
+    if (!idAddress.readable) idReason = "ID address unreadable";
   }
-  if (idFile.mimeType === "application/pdf") {
+
+  const homeIsIl = isIllinoisHomeAddress(home);
+  const idIsIl = Boolean(idAddress?.readable && normalizeUsState(idAddress.state) === "IL");
+  if (!options.force && !homeIsIl && !idIsIl) {
+    if (!home && !idFile) {
+      return {
+        name,
+        sequifiUserId: user.id,
+        eligible: false,
+        skipped: true,
+        reason: "no Sequifi home address and no ID",
+      };
+    }
+    return finish(
+      user,
+      ledger,
+      {
+        name,
+        eligible: false,
+        skipped: true,
+        reason: "not an Illinois home address or IL ID",
+        addressMatchesId: sequifiAddressMatchesId(home, idAddress),
+      },
+      { email: false },
+    );
+  }
+
+  const lookupAddress = home?.formatted || (idAddress?.readable ? idAddress.formatted : "");
+  if (!lookupAddress) {
     return finish(user, ledger, {
       name,
       eligible: false,
       skipped: false,
-      reason: "ID is PDF (vision needs an image)",
+      reason: idReason ?? "no address to check",
+      addressMatchesId: sequifiAddressMatchesId(home, idAddress),
     });
   }
 
-  const address = await extractAddressFromIdImage(idFile.bytes, idFile.mimeType);
-  if (!address.readable) {
-    return finish(user, ledger, {
-      name,
-      eligible: false,
-      skipped: false,
-      reason: "ID address unreadable",
-    });
-  }
-
-  const lookup = await lookupEiecEligibility(address.formatted);
+  const lookup = await lookupEiecEligibility(lookupAddress);
   let folderCreated = false;
   if (lookup.eligible) {
     const folder = `${safeRepFolderName(name)} (Eligible)`;
-    await uploadTestFile(
-      `${folder}/Photo Of Driver's License Or Passport${extFor(idFile.fileName, idFile.mimeType)}`,
-      idFile.bytes,
-      idFile.mimeType,
-    );
+    if (idFile && idFile.mimeType !== "application/pdf") {
+      await uploadTestFile(
+        `${folder}/Photo Of Driver's License Or Passport${extFor(idFile.fileName, idFile.mimeType)}`,
+        idFile.bytes,
+        idFile.mimeType,
+      );
+    }
     try {
-      const shot = await screenshotEiecInstantApp(address.formatted);
+      const shot = await screenshotEiecInstantApp(lookupAddress);
       await uploadTestFile(`${folder}/EIEC map screenshot.png`, shot.png, "image/png");
     } catch (err) {
       await uploadTestFile(
@@ -123,9 +154,10 @@ async function processUser(
     name,
     eligible: lookup.eligible,
     skipped: false,
-    address: address.formatted,
-    addressMatchesId: addressMatchesId(address.issuedState, address.state),
+    address: lookupAddress,
+    addressMatchesId: sequifiAddressMatchesId(home, idAddress),
     folderCreated,
+    reason: idReason,
   });
 }
 
@@ -133,6 +165,7 @@ async function finish(
   user: SequifiUserRecord,
   ledger: Awaited<ReturnType<typeof loadProcessedLedger>>,
   result: Omit<EiecRunResult, "sequifiUserId">,
+  options?: { email?: boolean },
 ): Promise<EiecRunResult> {
   ledger.users[String(user.id)] = {
     at: new Date().toISOString(),
@@ -141,7 +174,7 @@ async function finish(
     reason: result.reason,
   };
   let emailed = false;
-  if (isGraphMailConfigured()) {
+  if (options?.email !== false && isGraphMailConfigured()) {
     const to = eiecEmailRecipients(env.eiecEmailTo);
     await sendMailAsUser({
       to,

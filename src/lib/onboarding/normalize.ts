@@ -9,6 +9,13 @@ export function normalizeEmail(email: string): string {
   return `${baseLocal}@${domain}`;
 }
 
+function optionalText(value: unknown): string | null {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text || text.toLowerCase() === "null") return null;
+  return text;
+}
+
 export function sequifiUserFromApi(raw: Record<string, unknown>): SequifiUserRecord | null {
   const id = typeof raw.id === "number" ? raw.id : Number(raw.id);
   const employee_id = String(raw.employee_id ?? "").trim();
@@ -29,6 +36,12 @@ export function sequifiUserFromApi(raw: Record<string, unknown>): SequifiUserRec
     status_id: typeof raw.status_id === "number" ? raw.status_id : null,
     onboarding_complete:
       typeof raw.onboarding_complete === "number" ? raw.onboarding_complete : null,
+    home_address: optionalText(raw.home_address),
+    home_address_line_1: optionalText(raw.home_address_line_1),
+    home_address_line_2: optionalText(raw.home_address_line_2),
+    home_address_city: optionalText(raw.home_address_city),
+    home_address_state: optionalText(raw.home_address_state),
+    home_address_zip: optionalText(raw.home_address_zip),
     created_at: raw.created_at != null ? String(raw.created_at) : null,
     updated_at: raw.updated_at != null ? String(raw.updated_at) : null,
     raw,

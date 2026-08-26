@@ -3,7 +3,14 @@ import { describe, test } from "node:test";
 
 import { eiecEmailRecipients, formatEiecResultEmail } from "../src/lib/eiec/email";
 import { addressMatchesId, parseGptAddressJson } from "../src/lib/eiec/gpt-address";
+import {
+  isIllinoisHomeAddress,
+  parseSequifiHomeAddress,
+  sequifiAddressMatchesId,
+  shouldQueueEiecCheck,
+} from "../src/lib/eiec/home-address";
 import { isIllinoisSellingMarket } from "../src/lib/eiec/illinois-market";
+import { sequifiUserFromApi } from "../src/lib/onboarding/normalize";
 
 describe("isIllinoisSellingMarket", () => {
   test("matches state_code IL", () => {
@@ -57,5 +64,114 @@ describe("parseGptAddressJson", () => {
     assert.equal(parsed.state, "WY");
     assert.equal(parsed.issuedState, "WY");
     assert.match(parsed.formatted, /Mountain View/);
+  });
+});
+
+describe("parseSequifiHomeAddress", () => {
+  test("treats missing profile address as optional/null", () => {
+    const user = sequifiUserFromApi({
+      id: 384,
+      employee_id: "384",
+      email: "rep@example.com",
+      first_name: "Troy",
+      last_name: "Sheridan",
+      home_address: null,
+      home_address_line_1: null,
+      home_address_line_2: null,
+      home_address_city: null,
+      home_address_state: null,
+      home_address_zip: null,
+    });
+    assert.ok(user);
+    assert.equal(user.home_address, null);
+    assert.equal(parseSequifiHomeAddress(user), null);
+    assert.equal(shouldQueueEiecCheck(user), true);
+  });
+
+  test("reads structured Illinois home address", () => {
+    const fields = {
+      home_address: "1124 Jefferson St, Hillsboro, IL, 62049",
+      home_address_line_1: "1124 Jefferson St",
+      home_address_line_2: null,
+      home_address_city: "Hillsboro",
+      home_address_state: "IL",
+      home_address_zip: "62049",
+    };
+    const home = parseSequifiHomeAddress(fields);
+    assert.ok(home);
+    assert.equal(home.state, "IL");
+    assert.equal(isIllinoisHomeAddress(home), true);
+    assert.equal(shouldQueueEiecCheck(fields), true);
+  });
+
+  test("does not queue a filled non-Illinois home address", () => {
+    assert.equal(
+      shouldQueueEiecCheck({
+        home_address_line_1: "1 Main St",
+        home_address_city: "Austin",
+        home_address_state: "TX",
+        home_address_zip: "78701",
+      }),
+      false,
+    );
+  });
+});
+
+describe("sequifiAddressMatchesId", () => {
+  const kyle = parseSequifiHomeAddress({
+    home_address: "1124 Jefferson St, Hillsboro, IL, 62049",
+    home_address_line_1: "1124 Jefferson St",
+    home_address_city: "Hillsboro",
+    home_address_state: "IL",
+    home_address_zip: "62049",
+  });
+
+  test("matches street abbreviations and same city/state/zip", () => {
+    assert.equal(
+      sequifiAddressMatchesId(kyle, {
+        readable: true,
+        street: "1124 Jefferson Street",
+        city: "Hillsboro",
+        state: "Illinois",
+        zip: "62049",
+      }),
+      true,
+    );
+  });
+
+  test("rejects a different street number", () => {
+    assert.equal(
+      sequifiAddressMatchesId(
+        {
+          line1: "808 E Converse St",
+          line2: "",
+          city: "Springfield",
+          state: "IL",
+          zip: "62702",
+          formatted: "808 E Converse St, Springfield, IL, 62702",
+        },
+        {
+          readable: true,
+          street: "812 E Converse Ave",
+          city: "Springfield",
+          state: "IL",
+          zip: "62702",
+        },
+      ),
+      false,
+    );
+  });
+
+  test("is n/a when Sequifi address is still null", () => {
+    assert.equal(
+      sequifiAddressMatchesId(null, {
+        readable: true,
+        street: "1124 Jefferson St",
+        city: "Hillsboro",
+        state: "IL",
+        zip: "62049",
+      }),
+      null,
+    );
   });
 });

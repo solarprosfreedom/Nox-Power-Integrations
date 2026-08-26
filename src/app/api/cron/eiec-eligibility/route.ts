@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { runEiecEligibilityCycle } from "@/lib/eiec/run";
 
-/** Scheduled Vercel cron is paused until Sequifi exposes a home-address field. Manual ?userId= still works. */
 export const maxDuration = 180;
 
 function authorizeCron(request: Request): boolean {
@@ -20,15 +19,6 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const limit = Number(url.searchParams.get("limit") ?? "1") || 1;
   const forceUserId = Number(url.searchParams.get("userId") ?? "") || undefined;
-
-  // Paused until Sequifi adds a home-address field. Manual ?userId= still allowed.
-  if (!forceUserId) {
-    return NextResponse.json({
-      ok: true,
-      paused: true,
-      reason: "EIEC cron is paused until Sequifi exposes a home-address field on the user endpoint.",
-    });
-  }
 
   try {
     const summary = await runEiecEligibilityCycle({ limit, forceUserId });

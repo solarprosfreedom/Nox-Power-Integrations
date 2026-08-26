@@ -22,6 +22,14 @@ export interface SequifiUserRecord {
   status_id?: number | null;
   /** Sequifi GET /v1/users — 1 when onboarding paperwork is complete. */
   onboarding_complete?: number | null;
+  /** Null until the rep finishes the Sequifi profile address step. */
+  home_address?: string | null;
+  home_address_line_1?: string | null;
+  home_address_line_2?: string | null;
+  home_address_city?: string | null;
+  /** Two-letter code, e.g. IL. */
+  home_address_state?: string | null;
+  home_address_zip?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   raw: Record<string, unknown>;
