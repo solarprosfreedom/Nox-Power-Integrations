@@ -7,7 +7,6 @@ import {
   isIllinoisHomeAddress,
   parseSequifiHomeAddress,
   sequifiAddressMatchesId,
-  shouldQueueEiecCheck,
 } from "../src/lib/eiec/home-address";
 import { isIllinoisSellingMarket } from "../src/lib/eiec/illinois-market";
 import { sequifiUserFromApi } from "../src/lib/onboarding/normalize";
@@ -85,35 +84,20 @@ describe("parseSequifiHomeAddress", () => {
     assert.ok(user);
     assert.equal(user.home_address, null);
     assert.equal(parseSequifiHomeAddress(user), null);
-    assert.equal(shouldQueueEiecCheck(user), true);
   });
 
   test("reads structured Illinois home address", () => {
-    const fields = {
+    const home = parseSequifiHomeAddress({
       home_address: "1124 Jefferson St, Hillsboro, IL, 62049",
       home_address_line_1: "1124 Jefferson St",
       home_address_line_2: null,
       home_address_city: "Hillsboro",
       home_address_state: "IL",
       home_address_zip: "62049",
-    };
-    const home = parseSequifiHomeAddress(fields);
+    });
     assert.ok(home);
     assert.equal(home.state, "IL");
     assert.equal(isIllinoisHomeAddress(home), true);
-    assert.equal(shouldQueueEiecCheck(fields), true);
-  });
-
-  test("does not queue a filled non-Illinois home address", () => {
-    assert.equal(
-      shouldQueueEiecCheck({
-        home_address_line_1: "1 Main St",
-        home_address_city: "Austin",
-        home_address_state: "TX",
-        home_address_zip: "78701",
-      }),
-      false,
-    );
   });
 });
 

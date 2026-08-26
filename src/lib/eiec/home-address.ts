@@ -103,16 +103,6 @@ export function isIllinoisHomeAddress(
   return address?.state === "IL";
 }
 
-/**
- * Scheduled EIEC gate: Illinois home address, or no address yet (check the ID later).
- * A filled non-IL home address is not an EIEC candidate.
- */
-export function shouldQueueEiecCheck(user: HomeAddressFields): boolean {
-  const home = parseSequifiHomeAddress(user);
-  if (!home) return true;
-  return isIllinoisHomeAddress(home);
-}
-
 export function sequifiAddressMatchesId(
   home: SequifiHomeAddress | null | undefined,
   id: {
