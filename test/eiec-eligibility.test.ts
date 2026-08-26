@@ -10,6 +10,7 @@ import {
   sequifiAddressMatchesId,
 } from "../src/lib/eiec/home-address";
 import { isIllinoisSellingMarket } from "../src/lib/eiec/illinois-market";
+import { eiecEligibleFolderName } from "../src/lib/eiec/sharepoint-test";
 import { sequifiUserFromApi } from "../src/lib/onboarding/normalize";
 
 describe("isIllinoisSellingMarket", () => {
@@ -172,6 +173,19 @@ describe("sequifiAddressMatchesId", () => {
         zip: "62049",
       }),
       null,
+    );
+  });
+});
+
+describe("eiecEligibleFolderName", () => {
+  test("uses only the rep name when the address matches", () => {
+    assert.equal(eiecEligibleFolderName("Kyle Earl", true), "Kyle Earl");
+  });
+
+  test("adds address not match when Sequifi and ID differ", () => {
+    assert.equal(
+      eiecEligibleFolderName("Christopher Hall", false),
+      "Christopher Hall (address not match)",
     );
   });
 });

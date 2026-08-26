@@ -76,3 +76,13 @@ export async function uploadTestFile(
 export function safeRepFolderName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim() || "Unknown Rep";
 }
+
+/** Eligible-only folders. Suffix only when Sequifi home address does not match the ID. */
+export function eiecEligibleFolderName(
+  name: string,
+  addressMatchesId?: boolean | null,
+): string {
+  const base = safeRepFolderName(name);
+  if (addressMatchesId === false) return `${base} (address not match)`;
+  return base;
+}

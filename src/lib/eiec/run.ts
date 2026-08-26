@@ -9,8 +9,8 @@ import {
 } from "@/lib/eiec/home-address";
 import { screenshotEiecInstantApp } from "@/lib/eiec/instant-app-screenshot";
 import {
+  eiecEligibleFolderName,
   loadProcessedLedger,
-  safeRepFolderName,
   saveProcessedLedger,
   uploadTestFile,
 } from "@/lib/eiec/sharepoint-test";
@@ -98,9 +98,10 @@ async function processUser(
   }
 
   const lookup = await lookupEiecEligibility(lookupAddress);
+  const addressMatchesId = sequifiAddressMatchesId(home, idAddress);
   let folderCreated = false;
   if (lookup.eligible) {
-    const folder = `${safeRepFolderName(name)} (Eligible)`;
+    const folder = eiecEligibleFolderName(name, addressMatchesId);
     if (idFile && idFile.mimeType !== "application/pdf") {
       await uploadTestFile(
         `${folder}/Photo Of Driver's License Or Passport${extFor(idFile.fileName, idFile.mimeType)}`,
@@ -126,7 +127,7 @@ async function processUser(
     eligible: lookup.eligible,
     skipped: false,
     address: lookupAddress,
-    addressMatchesId: sequifiAddressMatchesId(home, idAddress),
+    addressMatchesId,
     folderCreated,
     reason: idReason,
   });
