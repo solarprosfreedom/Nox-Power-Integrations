@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { formatEiecResultEmail } from "../src/lib/eiec/email";
+import { eiecEmailRecipients, formatEiecResultEmail } from "../src/lib/eiec/email";
 import { addressMatchesId, parseGptAddressJson } from "../src/lib/eiec/gpt-address";
 import { isIllinoisSellingMarket } from "../src/lib/eiec/illinois-market";
 
@@ -12,6 +12,17 @@ describe("isIllinoisSellingMarket", () => {
 
   test("skips other states", () => {
     assert.equal(isIllinoisSellingMarket({ state_code: "TX" }), false);
+  });
+});
+
+describe("eiecEmailRecipients", () => {
+  test("always includes admin@noxpwr.com", () => {
+    assert.deepEqual(eiecEmailRecipients(), ["noxpwr@gmail.com", "admin@noxpwr.com"]);
+    assert.deepEqual(eiecEmailRecipients("noxpwr@gmail.com"), [
+      "noxpwr@gmail.com",
+      "admin@noxpwr.com",
+    ]);
+    assert.ok(eiecEmailRecipients("admin@noxpwr.com").includes("admin@noxpwr.com"));
   });
 });
 

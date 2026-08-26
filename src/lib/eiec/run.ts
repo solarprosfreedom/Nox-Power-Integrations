@@ -1,5 +1,5 @@
 import { env } from "@/lib/env";
-import { formatEiecResultEmail } from "@/lib/eiec/email";
+import { eiecEmailRecipients, formatEiecResultEmail } from "@/lib/eiec/email";
 import { lookupEiecEligibility } from "@/lib/eiec/feature-server";
 import { addressMatchesId, extractAddressFromIdImage } from "@/lib/eiec/gpt-address";
 import { isIllinoisSellingMarket } from "@/lib/eiec/illinois-market";
@@ -142,7 +142,7 @@ async function finish(
   };
   let emailed = false;
   if (isGraphMailConfigured()) {
-    const to = env.eiecEmailTo?.trim() || "noxpwr@gmail.com";
+    const to = eiecEmailRecipients(env.eiecEmailTo);
     await sendMailAsUser({
       to,
       subject: `Illinois EIEC: ${result.name} — ${result.eligible ? "yes" : "no"}`,

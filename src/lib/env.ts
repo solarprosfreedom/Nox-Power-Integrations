@@ -99,6 +99,7 @@ export const env = {
   sequifiAccessToken: opt("SEQUIFI_ACCESS_TOKEN"),
   sequifiRefreshToken: opt("SEQUIFI_REFRESH_TOKEN"),
   openaiApiKey: opt("OPENAI_API_KEY"),
+  /** Comma-separated. admin@noxpwr.com is always added. */
   eiecEmailTo: opt("EIEC_EMAIL_TO", "noxpwr@gmail.com"),
   /** ISO date — only process Sequifi users created on/after this (avoids backfill). */
   onboardingGoLiveAt: opt("ONBOARDING_GO_LIVE_AT"),
