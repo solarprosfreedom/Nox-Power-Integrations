@@ -127,38 +127,28 @@ describe("sequifiAddressMatchesId", () => {
     home_address_zip: "62049",
   });
 
-  test("matches street abbreviations and same city/state/zip", () => {
+  test("matches when Sequifi and ID are both Illinois, even if the street differs", () => {
     assert.equal(
       sequifiAddressMatchesId(kyle, {
         readable: true,
-        street: "1124 Jefferson Street",
-        city: "Hillsboro",
+        street: "812 E Converse Ave",
+        city: "Springfield",
         state: "Illinois",
-        zip: "62049",
+        zip: "62702",
       }),
       true,
     );
   });
 
-  test("rejects a different street number", () => {
+  test("does not match when the ID address is not Illinois", () => {
     assert.equal(
-      sequifiAddressMatchesId(
-        {
-          line1: "808 E Converse St",
-          line2: "",
-          city: "Springfield",
-          state: "IL",
-          zip: "62702",
-          formatted: "808 E Converse St, Springfield, IL, 62702",
-        },
-        {
-          readable: true,
-          street: "812 E Converse Ave",
-          city: "Springfield",
-          state: "IL",
-          zip: "62702",
-        },
-      ),
+      sequifiAddressMatchesId(kyle, {
+        readable: true,
+        street: "1 Main St",
+        city: "Austin",
+        state: "TX",
+        zip: "78701",
+      }),
       false,
     );
   });
@@ -182,7 +172,7 @@ describe("eiecEligibleFolderName", () => {
     assert.equal(eiecEligibleFolderName("Kyle Earl", true), "Kyle Earl");
   });
 
-  test("adds address not match when Sequifi and ID differ", () => {
+  test("adds address not match when the ID is not Illinois", () => {
     assert.equal(
       eiecEligibleFolderName("Christopher Hall", false),
       "Christopher Hall (address not match)",
