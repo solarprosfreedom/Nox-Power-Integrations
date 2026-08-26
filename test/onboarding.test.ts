@@ -112,6 +112,7 @@ import {
 import { buildSolqTextMessage, solqTextAlreadySent } from "../src/lib/onboarding/solq-text";
 import {
   buildTerrosTeamCatalog,
+  buildTerrosTeamCatalogFromTeams,
   canonicalTeamKey,
   matchTerrosTeamForOffice,
 } from "../src/lib/onboarding/terros-team";
@@ -1252,6 +1253,22 @@ describe("Terros team resolution (POST /user/add now requires a team)", () => {
       { teamId: "Team.1rCXqxgG", teamName: "Beast Coast (Abundance)" },
     ]);
     assert.equal(catalog.get("drivin")?.length, 2);
+  });
+
+  test("builds the complete catalog from /team/list, including empty teams with current names", () => {
+    const catalog = buildTerrosTeamCatalogFromTeams([
+      { teamId: "Team.wZeb2NmE", name: "Solar X (Drivin)" },
+      { teamId: "Team.YlqqQkBV", name: "Aethon (Abundance)" },
+    ]);
+
+    assert.deepEqual(matchTerrosTeamForOffice("Solar X (Drivin)", catalog), {
+      ok: true,
+      team: { teamId: "Team.wZeb2NmE", teamName: "Solar X (Drivin)" },
+    });
+    assert.deepEqual(matchTerrosTeamForOffice("Aethon (Abundance)", catalog), {
+      ok: true,
+      team: { teamId: "Team.YlqqQkBV", teamName: "Aethon (Abundance)" },
+    });
   });
 
   test("matches when Sequifi's office_name suffix differs from Terros's own suffix", () => {

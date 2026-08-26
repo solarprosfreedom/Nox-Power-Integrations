@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { postTerros } from "@/lib/sync/terros-api";
 import { fetchTerrosUsers } from "@/lib/sync/terros-users";
 import { parseOfficeName } from "@/lib/google-sheets/roster-map";
 
@@ -50,6 +51,28 @@ export function buildTerrosTeamCatalog(users: Record<string, unknown>[]): Map<st
       list.push({ teamId, teamName: name });
       byKey.set(canonical, list);
     }
+  }
+
+  return byKey;
+}
+
+/** Build the complete catalog from Terros /team/list, including empty teams. */
+export function buildTerrosTeamCatalogFromTeams(
+  teams: Record<string, unknown>[],
+): Map<string, TerrosTeamRef[]> {
+  const byKey = new Map<string, TerrosTeamRef[]>();
+  const seenTeamIds = new Set<string>();
+
+  for (const row of teams) {
+    const teamId = String(row.teamId ?? "").trim();
+    const name = String(row.name ?? "").trim();
+    if (!teamId || !name || seenTeamIds.has(teamId)) continue;
+    seenTeamIds.add(teamId);
+
+    const canonical = canonicalTeamKey(name);
+    const list = byKey.get(canonical) ?? [];
+    list.push({ teamId, teamName: name });
+    byKey.set(canonical, list);
   }
 
   return byKey;
@@ -135,15 +158,37 @@ const CATALOG_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Builds (and caches for 10 min, since a single onboarding cron run can
- * process several jobs) the team catalog from Terros's live /user/list.
+ * process several jobs) the team catalog from Terros's live /team/list.
+ * Unlike team references embedded in /user/list, /team/list includes empty
+ * teams and current names. Fall back to /user/list only if the endpoint fails.
  */
 async function loadTeamCatalog(base: string, key: string): Promise<Map<string, TerrosTeamRef[]>> {
   if (cachedCatalog && Date.now() - cachedCatalog.fetchedAt < CATALOG_TTL_MS) {
     return cachedCatalog.byKey;
   }
 
-  const users = await fetchTerrosUsers(base, key);
-  const byKey = buildTerrosTeamCatalog(users);
+  let byKey = new Map<string, TerrosTeamRef[]>();
+  try {
+    const result = await postTerros(base, key, "/team/list", {});
+    if (result.ok) {
+      const parsed = JSON.parse(result.text) as Record<string, unknown>;
+      const teams = parsed.teams;
+      if (Array.isArray(teams)) {
+        byKey = buildTerrosTeamCatalogFromTeams(
+          teams.filter((team): team is Record<string, unknown> =>
+            Boolean(team) && typeof team === "object" && !Array.isArray(team),
+          ),
+        );
+      }
+    }
+  } catch {
+    /* fall back to the membership-derived catalog below */
+  }
+
+  if (byKey.size === 0) {
+    const users = await fetchTerrosUsers(base, key);
+    byKey = buildTerrosTeamCatalog(users);
+  }
   cachedCatalog = { byKey, fetchedAt: Date.now() };
   return byKey;
 }
