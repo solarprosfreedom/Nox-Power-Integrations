@@ -4,6 +4,7 @@ import { describe, test } from "node:test";
 import { eiecEmailRecipients, formatEiecResultEmail } from "../src/lib/eiec/email";
 import { addressMatchesId, parseGptAddressJson } from "../src/lib/eiec/gpt-address";
 import {
+  hasIllinoisHomeAddress,
   isIllinoisHomeAddress,
   parseSequifiHomeAddress,
   sequifiAddressMatchesId,
@@ -84,20 +85,35 @@ describe("parseSequifiHomeAddress", () => {
     assert.ok(user);
     assert.equal(user.home_address, null);
     assert.equal(parseSequifiHomeAddress(user), null);
+    assert.equal(hasIllinoisHomeAddress(user), false);
   });
 
   test("reads structured Illinois home address", () => {
-    const home = parseSequifiHomeAddress({
+    const fields = {
       home_address: "1124 Jefferson St, Hillsboro, IL, 62049",
       home_address_line_1: "1124 Jefferson St",
       home_address_line_2: null,
       home_address_city: "Hillsboro",
       home_address_state: "IL",
       home_address_zip: "62049",
-    });
+    };
+    const home = parseSequifiHomeAddress(fields);
     assert.ok(home);
     assert.equal(home.state, "IL");
     assert.equal(isIllinoisHomeAddress(home), true);
+    assert.equal(hasIllinoisHomeAddress(fields), true);
+  });
+
+  test("does not treat a non-Illinois home address as a check", () => {
+    assert.equal(
+      hasIllinoisHomeAddress({
+        home_address_line_1: "1 Main St",
+        home_address_city: "Austin",
+        home_address_state: "TX",
+        home_address_zip: "78701",
+      }),
+      false,
+    );
   });
 });
 

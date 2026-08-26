@@ -103,6 +103,11 @@ export function isIllinoisHomeAddress(
   return address?.state === "IL";
 }
 
+/** True only when Sequifi has a complete home address in Illinois. Null/other states wait. */
+export function hasIllinoisHomeAddress(user: HomeAddressFields): boolean {
+  return isIllinoisHomeAddress(parseSequifiHomeAddress(user));
+}
+
 export function sequifiAddressMatchesId(
   home: SequifiHomeAddress | null | undefined,
   id: {

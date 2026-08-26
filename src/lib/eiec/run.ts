@@ -2,8 +2,11 @@ import { env } from "@/lib/env";
 import { eiecEmailRecipients, formatEiecResultEmail } from "@/lib/eiec/email";
 import { lookupEiecEligibility } from "@/lib/eiec/feature-server";
 import { extractAddressFromIdImage, type GptIdAddress } from "@/lib/eiec/gpt-address";
-import { parseSequifiHomeAddress, sequifiAddressMatchesId } from "@/lib/eiec/home-address";
-import { isIllinoisSellingMarket } from "@/lib/eiec/illinois-market";
+import {
+  hasIllinoisHomeAddress,
+  parseSequifiHomeAddress,
+  sequifiAddressMatchesId,
+} from "@/lib/eiec/home-address";
 import { screenshotEiecInstantApp } from "@/lib/eiec/instant-app-screenshot";
 import {
   loadProcessedLedger,
@@ -52,7 +55,7 @@ export async function runEiecEligibilityCycle(options?: {
       filterUsersByGoLive(await fetchAllSequifiUsers()),
     );
     candidates = hired.filter(
-      (user) => isIllinoisSellingMarket(user.raw) && !ledger.users[String(user.id)],
+      (user) => hasIllinoisHomeAddress(user) && !ledger.users[String(user.id)],
     );
   }
 
