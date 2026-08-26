@@ -1271,6 +1271,19 @@ describe("Terros team resolution (POST /user/add now requires a team)", () => {
     });
   });
 
+  test("selects the unique level-1 rep team when a Terros hierarchy repeats the same name", () => {
+    const catalog = buildTerrosTeamCatalogFromTeams([
+      { teamId: "Team.CbUz5znE", name: "Uncommon", level: 3 },
+      { teamId: "Team.k2MldJQl", name: "Uncommon", level: 2 },
+      { teamId: "Team.M75720zQ", name: "Uncommon", level: 1 },
+    ]);
+
+    assert.deepEqual(matchTerrosTeamForOffice("Uncommon", catalog), {
+      ok: true,
+      team: { teamId: "Team.M75720zQ", teamName: "Uncommon", level: 1 },
+    });
+  });
+
   test("matches when Sequifi's office_name suffix differs from Terros's own suffix", () => {
     const catalog = buildTerrosTeamCatalog(terrosUsers as never);
 

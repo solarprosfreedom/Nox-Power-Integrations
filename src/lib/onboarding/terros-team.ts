@@ -6,6 +6,7 @@ import { parseOfficeName } from "@/lib/google-sheets/roster-map";
 export interface TerrosTeamRef {
   teamId: string;
   teamName: string;
+  level?: number;
 }
 
 export type TerrosTeamResolution = { ok: true; team: TerrosTeamRef } | { ok: false; reason: string };
@@ -71,7 +72,8 @@ export function buildTerrosTeamCatalogFromTeams(
 
     const canonical = canonicalTeamKey(name);
     const list = byKey.get(canonical) ?? [];
-    list.push({ teamId, teamName: name });
+    const level = typeof row.level === "number" ? row.level : undefined;
+    list.push({ teamId, teamName: name, ...(level != null ? { level } : {}) });
     byKey.set(canonical, list);
   }
 
@@ -132,6 +134,12 @@ export function matchTerrosTeamForOffice(
 
   if (matches.length === 1) {
     return { ok: true, team: matches[0]! };
+  }
+  // /team/list can contain an entire hierarchy with the same display name.
+  // Terros assigns users to the unique level-1 (rep-facing) team.
+  const repTeams = matches.filter(match => match.level === 1);
+  if (repTeams.length === 1) {
+    return { ok: true, team: repTeams[0]! };
   }
   if (matches.length === 0) {
     const lookedFor = aliasTo ? `${lookupName} (alias for "${baseName}")` : baseName;
