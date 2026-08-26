@@ -1,5 +1,5 @@
 import { getGraphAccessToken, GRAPH_BASE } from "@/lib/microsoft/graph-auth";
-import { EIEC_TEST_FOLDER, EIEC_TEST_SITE } from "@/lib/eiec/instant-app-screenshot";
+import { EIEC_SHAREPOINT_FOLDER, EIEC_SHAREPOINT_SITE } from "@/lib/eiec/instant-app-screenshot";
 
 export type EiecProcessedEntry = {
   at: string;
@@ -16,7 +16,7 @@ const LEDGER_NAME = "_eiec-processed.json";
 
 async function siteId(): Promise<string> {
   const token = await getGraphAccessToken();
-  const res = await fetch(`${GRAPH_BASE}/sites/${EIEC_TEST_SITE}`, {
+  const res = await fetch(`${GRAPH_BASE}/sites/${EIEC_SHAREPOINT_SITE}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const json = (await res.json()) as { id?: string; error?: { message?: string } };
@@ -27,7 +27,7 @@ async function siteId(): Promise<string> {
 }
 
 function itemUrl(id: string, relPath: string): string {
-  return `${GRAPH_BASE}/sites/${id}/drive/root:/${encodeURIComponent(`${EIEC_TEST_FOLDER}/${relPath}`)}`;
+  return `${GRAPH_BASE}/sites/${id}/drive/root:/${encodeURIComponent(`${EIEC_SHAREPOINT_FOLDER}/${relPath}`)}`;
 }
 
 export async function loadProcessedLedger(): Promise<EiecProcessedLedger> {

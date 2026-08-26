@@ -4,9 +4,9 @@ import { launchMapScreenshotBrowser } from "@/lib/onboarding/headless-browser";
 export const EIEC_INSTANT_APP_URL =
   "https://illinois.maps.arcgis.com/apps/instant/lookup/index.html?appid=dece08e33d2a49ba8f30cba986a2c298";
 
-/** Testing-only SharePoint target. Not the live Illinois MES Reps library. */
-export const EIEC_TEST_SITE = "noxpwr.sharepoint.com:/sites/CommissionMigrationTest";
-export const EIEC_TEST_FOLDER = "Test Eligibility";
+/** Live Illinois MES Reps library. */
+export const EIEC_SHAREPOINT_SITE = "noxpwr.sharepoint.com:/sites/NOXAdmin";
+export const EIEC_SHAREPOINT_FOLDER = "Illinois MES Reps";
 
 const ELIGIBLE_RE = /this area is an equity investment eligible community/i;
 const NOT_ELIGIBLE_RE = /this area is not an equity investment eligible community/i;
@@ -82,7 +82,7 @@ export async function uploadEiecTestScreenshot(fileName: string, png: Buffer): P
   webUrl: string | null;
 }> {
   const token = await getGraphAccessToken();
-  const siteRes = await fetch(`${GRAPH_BASE}/sites/${EIEC_TEST_SITE}`, {
+  const siteRes = await fetch(`${GRAPH_BASE}/sites/${EIEC_SHAREPOINT_SITE}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const site = (await siteRes.json()) as { id?: string; error?: { message?: string } };
@@ -90,7 +90,7 @@ export async function uploadEiecTestScreenshot(fileName: string, png: Buffer): P
     throw new Error(site.error?.message ?? `Graph site lookup failed (${siteRes.status})`);
   }
 
-  const encoded = encodeURIComponent(`${EIEC_TEST_FOLDER}/${fileName}`);
+  const encoded = encodeURIComponent(`${EIEC_SHAREPOINT_FOLDER}/${fileName}`);
   const putRes = await fetch(
     `${GRAPH_BASE}/sites/${site.id}/drive/root:/${encoded}:/content`,
     {
