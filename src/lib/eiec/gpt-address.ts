@@ -8,7 +8,77 @@ export type GptIdAddress = {
   zip: string;
   formatted: string;
   documentType: string;
+  issuedState: string;
 };
+
+const STATE_NAMES: Record<string, string> = {
+  ALABAMA: "AL",
+  ALASKA: "AK",
+  ARIZONA: "AZ",
+  ARKANSAS: "AR",
+  CALIFORNIA: "CA",
+  COLORADO: "CO",
+  CONNECTICUT: "CT",
+  DELAWARE: "DE",
+  FLORIDA: "FL",
+  GEORGIA: "GA",
+  HAWAII: "HI",
+  IDAHO: "ID",
+  ILLINOIS: "IL",
+  INDIANA: "IN",
+  IOWA: "IA",
+  KANSAS: "KS",
+  KENTUCKY: "KY",
+  LOUISIANA: "LA",
+  MAINE: "ME",
+  MARYLAND: "MD",
+  MASSACHUSETTS: "MA",
+  MICHIGAN: "MI",
+  MINNESOTA: "MN",
+  MISSISSIPPI: "MS",
+  MISSOURI: "MO",
+  MONTANA: "MT",
+  NEBRASKA: "NE",
+  NEVADA: "NV",
+  "NEW HAMPSHIRE": "NH",
+  "NEW JERSEY": "NJ",
+  "NEW MEXICO": "NM",
+  "NEW YORK": "NY",
+  "NORTH CAROLINA": "NC",
+  "NORTH DAKOTA": "ND",
+  OHIO: "OH",
+  OKLAHOMA: "OK",
+  OREGON: "OR",
+  PENNSYLVANIA: "PA",
+  "RHODE ISLAND": "RI",
+  "SOUTH CAROLINA": "SC",
+  "SOUTH DAKOTA": "SD",
+  TENNESSEE: "TN",
+  TEXAS: "TX",
+  UTAH: "UT",
+  VERMONT: "VT",
+  VIRGINIA: "VA",
+  WASHINGTON: "WA",
+  "WEST VIRGINIA": "WV",
+  WISCONSIN: "WI",
+  WYOMING: "WY",
+  "DISTRICT OF COLUMBIA": "DC",
+};
+
+export function normalizeUsState(value: string): string {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw) return "";
+  if (/^[A-Z]{2}$/.test(raw)) return raw;
+  return STATE_NAMES[raw] ?? raw;
+}
+
+/** True when the ID issuing state matches the address printed on the ID. */
+export function addressMatchesId(issuedState: string, addressState: string): boolean | null {
+  const issued = normalizeUsState(issuedState);
+  const address = normalizeUsState(addressState);
+  if (!issued || !address) return null;
+  return issued === address;
+}
 
 export function parseGptAddressJson(text: string): GptIdAddress {
   const cleaned = String(text ?? "")
@@ -23,10 +93,12 @@ export function parseGptAddressJson(text: string): GptIdAddress {
     zip?: string;
     formatted?: string;
     document_type?: string;
+    issued_state?: string;
+    id_state?: string;
   };
   const street = String(parsed.street ?? "").trim();
   const city = String(parsed.city ?? "").trim();
-  const state = String(parsed.state ?? "").trim().toUpperCase();
+  const state = normalizeUsState(String(parsed.state ?? ""));
   const zip = String(parsed.zip ?? "").trim();
   const formatted =
     String(parsed.formatted ?? "").trim() ||
@@ -40,6 +112,7 @@ export function parseGptAddressJson(text: string): GptIdAddress {
     zip,
     formatted,
     documentType: String(parsed.document_type ?? "").trim(),
+    issuedState: normalizeUsState(String(parsed.issued_state ?? parsed.id_state ?? "")),
   };
 }
 
@@ -67,8 +140,9 @@ export async function extractAddressFromIdImage(
               type: "text",
               text:
                 "This is a US driver's license, state ID, or passport. " +
-                "Extract ONLY the mailing address if visible. " +
-                "Return JSON: document_type, street, city, state, zip, formatted, readable. " +
+                "Extract the mailing address if visible, and the US state that issued the DL/ID. " +
+                "Return JSON: document_type, issued_state, street, city, state, zip, formatted, readable. " +
+                "issued_state must be a 2-letter code. For a passport, leave issued_state empty. " +
                 "If there is no street address or it is unreadable, set readable=false and empty address fields. " +
                 "Do not return DL number, DOB, or other PII.",
             },

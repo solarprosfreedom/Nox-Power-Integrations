@@ -1,7 +1,7 @@
 import { env } from "@/lib/env";
 import { formatEiecResultEmail } from "@/lib/eiec/email";
 import { lookupEiecEligibility } from "@/lib/eiec/feature-server";
-import { extractAddressFromIdImage } from "@/lib/eiec/gpt-address";
+import { addressMatchesId, extractAddressFromIdImage } from "@/lib/eiec/gpt-address";
 import { isIllinoisSellingMarket } from "@/lib/eiec/illinois-market";
 import { screenshotEiecInstantApp } from "@/lib/eiec/instant-app-screenshot";
 import {
@@ -27,6 +27,7 @@ export type EiecRunResult = {
   skipped: boolean;
   reason?: string;
   address?: string;
+  addressMatchesId?: boolean | null;
   folderCreated?: boolean;
   emailed?: boolean;
 };
@@ -123,6 +124,7 @@ async function processUser(
     eligible: lookup.eligible,
     skipped: false,
     address: address.formatted,
+    addressMatchesId: addressMatchesId(address.issuedState, address.state),
     folderCreated,
   });
 }
@@ -144,7 +146,11 @@ async function finish(
     await sendMailAsUser({
       to,
       subject: `Illinois EIEC: ${result.name} — ${result.eligible ? "yes" : "no"}`,
-      body: formatEiecResultEmail({ name: result.name, eligible: result.eligible }),
+      body: formatEiecResultEmail({
+        name: result.name,
+        eligible: result.eligible,
+        addressMatchesId: result.addressMatchesId,
+      }),
     });
     emailed = true;
   }
