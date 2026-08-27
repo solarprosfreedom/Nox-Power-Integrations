@@ -127,16 +127,42 @@ describe("sequifiAddressMatchesId", () => {
     home_address_zip: "62049",
   });
 
-  test("matches when Sequifi and ID are both Illinois, even if the street differs", () => {
+  test("matches when both are Illinois and ZIP matches, even if the street differs", () => {
+    assert.equal(
+      sequifiAddressMatchesId(kyle, {
+        readable: true,
+        street: "1100 Jefferson Ave",
+        city: "Hillsboro",
+        state: "Illinois",
+        zip: "62049",
+      }),
+      true,
+    );
+  });
+
+  test("matches when both are Illinois and a ZIP is missing", () => {
+    assert.equal(
+      sequifiAddressMatchesId(kyle, {
+        readable: true,
+        street: "1100 Jefferson Ave",
+        city: "Hillsboro",
+        state: "IL",
+        zip: "",
+      }),
+      true,
+    );
+  });
+
+  test("does not match when both are Illinois but ZIPs differ", () => {
     assert.equal(
       sequifiAddressMatchesId(kyle, {
         readable: true,
         street: "812 E Converse Ave",
         city: "Springfield",
-        state: "Illinois",
+        state: "IL",
         zip: "62702",
       }),
-      true,
+      false,
     );
   });
 

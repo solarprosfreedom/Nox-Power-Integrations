@@ -63,7 +63,14 @@ export function hasIllinoisHomeAddress(user: HomeAddressFields): boolean {
   return isIllinoisHomeAddress(parseSequifiHomeAddress(user));
 }
 
-/** Yes when Sequifi home and the ID address are both Illinois. Street does not need to match. */
+function zip5(value: string | null | undefined): string {
+  return String(value ?? "").replace(/\D/g, "").slice(0, 5);
+}
+
+/**
+ * Yes when Sequifi home and the ID are both Illinois.
+ * If ZIP is on both sides, those 5 digits must match. Street does not need to match.
+ */
 export function sequifiAddressMatchesId(
   home: SequifiHomeAddress | null | undefined,
   id: {
@@ -77,5 +84,9 @@ export function sequifiAddressMatchesId(
   if (!home || !id || id.readable === false) return null;
   const idState = normalizeUsState(id.state ?? "");
   if (!home.state || !idState) return null;
-  return home.state === "IL" && idState === "IL";
+  if (home.state !== "IL" || idState !== "IL") return false;
+  const homeZip = zip5(home.zip);
+  const idZip = zip5(id.zip);
+  if (homeZip && idZip && homeZip !== idZip) return false;
+  return true;
 }
