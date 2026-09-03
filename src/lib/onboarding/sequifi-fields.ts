@@ -7,11 +7,17 @@ export interface SequifiCustomField {
   value?: string | null;
 }
 
+export interface SequifiHisLicenses {
+  ca: string;
+  tx: string;
+}
+
 export interface ParsedSequifiFields {
   onboardAxia: boolean;
   installerTabs: string[];
   markets: string;
   caHis: string;
+  txHis: string;
   hisIssueDate: string;
   hisExpDate: string;
 }
@@ -37,6 +43,94 @@ export function getSequifiFieldValue(
 
 export function isSequifiYes(value: string | null | undefined): boolean {
   return String(value ?? "").trim().toLowerCase() === "yes";
+}
+
+const HIS_LICENSE_EXACT_NAMES = [
+  "HIS License Number",
+  "CA HIS License Number",
+  "CA HIS Number",
+];
+
+const CA_TX_MARKET_ALIASES: Record<string, "CA" | "TX"> = {
+  ca: "CA",
+  california: "CA",
+  tx: "TX",
+  texas: "TX",
+};
+
+/** Parse Sequifi markets text for CA / TX (codes or full names). */
+export function parseSequifiCaTxMarkets(markets: string): Set<"CA" | "TX"> {
+  const out = new Set<"CA" | "TX">();
+  const parts = markets.split(/[,/;]+/).flatMap(part => {
+    const trimmed = part.trim();
+    return /^(?:[A-Za-z]{2}\s+)+[A-Za-z]{2}$/.test(trimmed) ? trimmed.split(/\s+/) : [trimmed];
+  });
+  for (const part of parts) {
+    const code = CA_TX_MARKET_ALIASES[part.trim().toLowerCase()];
+    if (code) out.add(code);
+  }
+  return out;
+}
+
+type HisLicenseState = "ca" | "tx" | "both";
+
+function classifyHisLicenseField(fieldName: string): HisLicenseState | null {
+  const name = fieldName.trim().toLowerCase();
+  if (!name) return null;
+  const mentionsHis =
+    name.includes("his license") ||
+    name.includes("his number") ||
+    name === "ca his number" ||
+    name === "ca his license number";
+  if (!mentionsHis) return null;
+
+  const hasCa = /\bca\b|california/.test(name);
+  const hasTx = /\btx\b|texas/.test(name);
+  if (hasCa && hasTx) return "both";
+  if (hasTx) return "tx";
+  if (hasCa) return "ca";
+  return "both";
+}
+
+/**
+ * Live Sequifi labels are long closer questions ("If you are a Closer and
+ * selling in CA… provide your HIS license"), not the short "HIS License Number"
+ * name. State-specific fields win; combined CA/TX and generic names fill both.
+ */
+export function getSequifiHisLicensesByState(raw: Record<string, unknown>): SequifiHisLicenses {
+  let ca = "";
+  let tx = "";
+  let both = "";
+
+  for (const name of HIS_LICENSE_EXACT_NAMES) {
+    const value = getSequifiFieldValue(raw, name);
+    if (!value) continue;
+    const kind = classifyHisLicenseField(name) ?? "both";
+    if (kind === "ca") ca ||= value;
+    else if (kind === "tx") tx ||= value;
+    else both ||= value;
+  }
+
+  const fields = [
+    ...readFieldArray(raw, "employee_admin_only_fields"),
+    ...readFieldArray(raw, "employee_personal_detail"),
+  ];
+  for (const field of fields) {
+    const kind = classifyHisLicenseField(String(field.field_name ?? ""));
+    const value = String(field.value ?? "").trim();
+    if (!kind || !value) continue;
+    if (kind === "ca") ca ||= value;
+    else if (kind === "tx") tx ||= value;
+    else both ||= value;
+  }
+
+  return { ca: ca || both, tx: tx || both };
+}
+
+/** CA HIS first, then TX — used by partner forms that only have a single HIS slot. */
+export function getSequifiHisLicenseNumber(raw: Record<string, unknown>): string {
+  const { ca, tx } = getSequifiHisLicensesByState(raw);
+  return ca || tx;
 }
 
 /**
@@ -155,16 +249,14 @@ export function parseSequifiFields(raw: Record<string, unknown>): ParsedSequifiF
     getSequifiFieldValue(raw, "Please provide the state(s) you will be working in") ||
     String(raw.state_code ?? "").trim();
 
-  const caHis =
-    getSequifiFieldValue(raw, "HIS License Number") ||
-    getSequifiFieldValue(raw, "CA HIS License Number") ||
-    getSequifiFieldValue(raw, "CA HIS Number");
+  const hisLicenses = getSequifiHisLicensesByState(raw);
 
   return {
     onboardAxia: isSequifiYes(getSequifiInstallerFieldValue(raw, "Axia")),
     installerTabs: [...new Set(installerTabs)],
     markets,
-    caHis,
+    caHis: hisLicenses.ca,
+    txHis: hisLicenses.tx,
     hisIssueDate: getSequifiFieldValue(raw, "HIS Issue Date") || getSequifiFieldValue(raw, "Issue Date"),
     hisExpDate: getSequifiFieldValue(raw, "HIS Exp Date") || getSequifiFieldValue(raw, "Exp Date"),
   };

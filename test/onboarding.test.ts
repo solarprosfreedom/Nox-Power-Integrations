@@ -21,8 +21,10 @@ import {
   sequifiPositionContextFromJob,
   sequifiPositionContextFromUser,
 } from "../src/lib/onboarding/role-map";
+import { renderAxiaOnboardingNotification } from "../src/lib/onboarding/axia-notify-templates";
 import {
   getSequifiFieldValue,
+  getSequifiHisLicenseNumber,
   isSequifiYes,
   parseSequifiFields,
 } from "../src/lib/onboarding/sequifi-fields";
@@ -238,6 +240,50 @@ describe("Sequifi normalization and custom field parsing", () => {
     assert.deepEqual(parsed.installerTabs, []);
   });
 
+  test("reads HIS license from live Sequifi closer-question labels", () => {
+    const parsed = parseSequifiFields({
+      employee_admin_only_fields: [
+        {
+          field_name:
+            "If you are a Closer and selling in CA or TX, please provide your HIS license.",
+          value: "167615",
+        },
+      ],
+    });
+    assert.equal(parsed.caHis, "167615");
+    assert.equal(parsed.txHis, "167615");
+    assert.equal(
+      getSequifiHisLicenseNumber({
+        employee_admin_only_fields: [
+          {
+            field_name: "If you are a Closer and selling in CA, please provide your HIS license.",
+            value: " 144749 ",
+          },
+          {
+            field_name: "If you are a Closer and selling in TX, please provide your HIS license.",
+            value: "TX-99",
+          },
+        ],
+      }),
+      "144749",
+    );
+    const split = parseSequifiFields({
+      employee_admin_only_fields: [
+        {
+          field_name: "If you are a Closer and selling in CA, please provide your HIS license.",
+          value: "144749",
+        },
+        {
+          field_name: "If you are a Closer and selling in TX, please provide your HIS license.",
+          value: "TX-99",
+        },
+      ],
+    });
+    assert.equal(split.caHis, "144749");
+    assert.equal(split.txHis, "TX-99");
+    assert.equal(getSequifiHisLicenseNumber({ employee_admin_only_fields: [] }), "");
+  });
+
   test("reads markets from Sequifi state(s) question when market(s) label is absent", () => {
     const parsed = parseSequifiFields({
       state_code: "CA",
@@ -249,6 +295,117 @@ describe("Sequifi normalization and custom field parsing", () => {
       ],
     });
     assert.equal(parsed.markets, "AZ");
+  });
+});
+
+describe("Axia onboarding notification", () => {
+  test("includes CA HIS for a sales rep in a CA market when Sequifi has a number", () => {
+    const { body } = renderAxiaOnboardingNotification(onboardingJob());
+    assert.match(body, /CA HIS License Number:  HIS-123/);
+    assert.doesNotMatch(body, /TX HIS License Number/);
+    assert.doesNotMatch(body, /N\/A/);
+  });
+
+  test("includes TX HIS when the market is Texas and a TX license is on file", () => {
+    const { body } = renderAxiaOnboardingNotification(
+      onboardingJob({
+        role_label: "Closer",
+        raw_sequifi_payload: {
+          position_name: "Closer",
+          employee_admin_only_fields: [
+            { field_name: "Onboard to Axia?", value: "Yes" },
+            {
+              field_name: "If you are a Closer and selling in TX, please provide your HIS license.",
+              value: "TX-555",
+            },
+            {
+              field_name: "Please provide the market(s) you will be working in?",
+              value: "TX",
+            },
+          ],
+        },
+      }),
+    );
+    assert.match(body, /TX HIS License Number:  TX-555/);
+    assert.doesNotMatch(body, /CA HIS License Number/);
+  });
+
+  test("includes both CA and TX lines when both markets and a combined HIS number are present", () => {
+    const { body } = renderAxiaOnboardingNotification(
+      onboardingJob({
+        role_label: "Manager",
+        raw_sequifi_payload: {
+          sub_position_name: "Manager",
+          employee_admin_only_fields: [
+            {
+              field_name:
+                "If you are a Closer and selling in CA or TX, please provide your HIS license.",
+              value: "167615",
+            },
+            {
+              field_name: "Please provide the market(s) you will be working in?",
+              value: "CA, TX",
+            },
+          ],
+        },
+      }),
+    );
+    assert.match(body, /CA HIS License Number:  167615/);
+    assert.match(body, /TX HIS License Number:  167615/);
+  });
+
+  test("omits HIS when the market is not CA or TX, even if a number exists", () => {
+    const { body } = renderAxiaOnboardingNotification(
+      onboardingJob({
+        raw_sequifi_payload: {
+          employee_admin_only_fields: [
+            { field_name: "HIS License Number", value: "HIS-123" },
+            {
+              field_name: "Please provide the market(s) you will be working in?",
+              value: "AZ, UT",
+            },
+          ],
+        },
+      }),
+    );
+    assert.doesNotMatch(body, /HIS License Number/);
+  });
+
+  test("omits HIS when CA/TX is marked but they did not provide a license", () => {
+    const { body } = renderAxiaOnboardingNotification(
+      onboardingJob({
+        raw_sequifi_payload: {
+          employee_admin_only_fields: [
+            { field_name: "Onboard to Axia?", value: "Yes" },
+            {
+              field_name: "Please provide the market(s) you will be working in?",
+              value: "CA",
+            },
+          ],
+        },
+      }),
+    );
+    assert.doesNotMatch(body, /HIS License Number/);
+    assert.doesNotMatch(body, /N\/A/);
+  });
+
+  test("omits HIS for setters even when CA market and license are present", () => {
+    const { body } = renderAxiaOnboardingNotification(
+      onboardingJob({
+        role_label: "Appt Setter",
+        raw_sequifi_payload: {
+          sub_position_name: "Appt Setter",
+          employee_admin_only_fields: [
+            { field_name: "HIS License Number", value: "HIS-123" },
+            {
+              field_name: "Please provide the market(s) you will be working in?",
+              value: "CA",
+            },
+          ],
+        },
+      }),
+    );
+    assert.doesNotMatch(body, /HIS License Number/);
   });
 });
 
