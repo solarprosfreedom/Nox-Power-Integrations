@@ -328,7 +328,7 @@ export default function Dashboard() {
             <>
               <span className="text-violet-400">⇄</span>
               <h1 className="text-base font-semibold text-violet-300">Bulk Sync</h1>
-              <span className="text-xs text-gray-600">Backfill historical data between Enerflo and Terros</span>
+              <span className="text-xs text-gray-600">Import Coperniq projects into Enerflo</span>
             </>
           ) : section === "users" ? (
             <>

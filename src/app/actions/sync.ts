@@ -1,40 +1,24 @@
 "use server";
 
 import {
-  buildInstallsPreview,
-  buildInstallsPreviewWithFields,
-  buildE2TPreview,
   buildUsersPreview,
 } from "@/lib/sync/preview";
 import { buildCoperniqToEnerfloPreview, executeCoperniqToEnerflo } from "@/lib/sync/coperniq-enerflo";
-import { executeE2T, executeInstallsResync } from "@/lib/sync/execute";
 import type { E2TRow, InstallsRow, UsersPreviewResult } from "@/lib/sync/preview";
 import type { CoperniqToEnerfloRow } from "@/lib/sync/coperniq-enerflo";
 import type { ExecuteResult } from "@/lib/sync/execute";
 
 type PreviewResult<T> = { rows: T[]; errors: string[]; fetchError?: string };
+const CROSS_SYSTEM_SYNC_DISABLED = "Enerflo ↔ Terros synchronization is disabled";
 
 export async function previewSyncInstalls(): Promise<PreviewResult<InstallsRow>> {
-  try {
-    return await buildInstallsPreview();
-  } catch (e) {
-    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
-  }
+  return { rows: [], errors: [CROSS_SYSTEM_SYNC_DISABLED] };
 }
 
 export async function previewSyncInstallsWithFields(): Promise<
   PreviewResult<InstallsRow> & { unconfiguredFields?: string[] }
 > {
-  try {
-    const result = await buildInstallsPreviewWithFields();
-    return {
-      rows: result.rows,
-      errors: result.errors,
-      unconfiguredFields: result.unconfiguredFields,
-    };
-  } catch (e) {
-    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
-  }
+  return { rows: [], errors: [CROSS_SYSTEM_SYNC_DISABLED], unconfiguredFields: [] };
 }
 
 export async function previewSyncCoperniqToEnerflo(): Promise<
@@ -73,37 +57,31 @@ export async function executeSyncCoperniqToEnerflo(
 }
 
 export async function previewSyncE2T(): Promise<PreviewResult<E2TRow>> {
-  try {
-    return await buildE2TPreview();
-  } catch (e) {
-    return { rows: [], errors: [], fetchError: e instanceof Error ? e.message : String(e) };
-  }
+  return { rows: [], errors: [CROSS_SYSTEM_SYNC_DISABLED] };
 }
 
 export async function executeSyncE2T(rows: E2TRow[]): Promise<ExecuteResult & { fetchError?: string }> {
-  try {
-    const results = await executeE2T(rows);
-    return {
-      created: results.filter(r => r.status === "created").length,
-      errors:  results.filter(r => r.status === "error").length,
-      results,
-    };
-  } catch (e) {
-    return { created: 0, errors: 1, results: [], fetchError: e instanceof Error ? e.message : String(e) };
-  }
+  return {
+    created: 0,
+    errors: rows.length,
+    results: rows.map(row => ({
+      id: row.enerfloId,
+      status: "error",
+      error: CROSS_SYSTEM_SYNC_DISABLED,
+    })),
+  };
 }
 
 export async function executeSyncInstalls(rows: InstallsRow[]): Promise<ExecuteResult & { fetchError?: string }> {
-  try {
-    const results = await executeInstallsResync(rows);
-    return {
-      created: results.filter(r => r.status === "created").length,
-      errors:  results.filter(r => r.status === "error").length,
-      results,
-    };
-  } catch (e) {
-    return { created: 0, errors: 1, results: [], fetchError: e instanceof Error ? e.message : String(e) };
-  }
+  return {
+    created: 0,
+    errors: rows.length,
+    results: rows.map(row => ({
+      id: row.enerfloId,
+      status: "error",
+      error: CROSS_SYSTEM_SYNC_DISABLED,
+    })),
+  };
 }
 
 export async function previewUsers(): Promise<UsersPreviewResult & { fetchError?: string }> {

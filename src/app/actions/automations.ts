@@ -45,7 +45,7 @@ export async function addAutomation(formData: FormData): Promise<Automation> {
   const triggerSystem = get("trigger_system") as AutomationSystem;
   const actionSystem  = get("action_system")  as AutomationSystem;
   if (!isIntegrationDirectionAllowed(triggerSystem, actionSystem)) {
-    throw new Error("Terros → Enerflo automations are disabled");
+    throw new Error("Enerflo ↔ Terros automations are disabled");
   }
 
   // Parse field mapping lines: "source.field -> target_field"
@@ -94,7 +94,7 @@ export async function runAutomation(id: string): Promise<{
       automation,
       httpStatus: null,
       ok: false,
-      response: "Terros → Enerflo automations are disabled",
+      response: "Enerflo ↔ Terros automations are disabled",
       hadApiKey: false,
     };
   }

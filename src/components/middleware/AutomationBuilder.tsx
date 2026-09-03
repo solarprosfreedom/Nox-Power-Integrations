@@ -109,12 +109,15 @@ export default function AutomationBuilder({ onCreated, onCancel }: Props) {
                 const next = e.target.value as AutomationSystem;
                 setTriggerSystem(next);
                 if (!isIntegrationDirectionAllowed(next, actionSystem)) {
-                  setActionSystem("terros");
+                  const fallback = SYSTEMS.find(system =>
+                    isIntegrationDirectionAllowed(next, system),
+                  );
+                  if (fallback) setActionSystem(fallback);
                 }
               }}
               className={`${selectCls} mb-3`}
             >
-              {availableActionSystems.map((s) => (
+              {SYSTEMS.map((s) => (
                 <option key={s} value={s}>{SYSTEM_META[s].label}</option>
               ))}
             </select>
@@ -145,7 +148,7 @@ export default function AutomationBuilder({ onCreated, onCancel }: Props) {
               onChange={(e) => setActionSystem(e.target.value as AutomationSystem)}
               className={`${selectCls} mb-3`}
             >
-              {SYSTEMS.map((s) => (
+              {availableActionSystems.map((s) => (
                 <option key={s} value={s}>{SYSTEM_META[s].label}</option>
               ))}
             </select>

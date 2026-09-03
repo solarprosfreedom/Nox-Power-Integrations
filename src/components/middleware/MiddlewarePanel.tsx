@@ -20,23 +20,6 @@ interface WebhookUrlDef {
 
 const WEBHOOK_URLS: WebhookUrlDef[] = [
   {
-    label: "Enerflo v2 (real webhooks)",
-    path: "/api/webhooks/enerflo-v2",
-    badge: "Set in Enerflo → Settings → Webhooks",
-    badgeColor: "text-orange-400",
-    description: "Handles deal.projectSubmitted → multi-step Terros account creation.",
-    defaultEnabled: true,
-  },
-  {
-    label: "Enerflo v1 (e.g. update_customer)",
-    path: "/api/webhooks/enerflo-v1",
-    badge: "Company Settings → Webhooks (v1 list)",
-    badgeColor: "text-amber-400",
-    description:
-      "Separate URL for Enerflo 1.0 hooks (update_customer, new_customer). Logs payload — use Activity Logs / Supabase to inspect.",
-    defaultEnabled: true,
-  },
-  {
     label: "Generic event bus",
     path: "/api/webhooks/enerflo",
     badge: "Internal / testing",
@@ -49,9 +32,7 @@ const WEBHOOK_URLS: WebhookUrlDef[] = [
 function WebhookUrlCard({ def }: { def: WebhookUrlDef }) {
   const [enabled, setEnabled] = useState(def.defaultEnabled);
   const [copied,  setCopied]  = useState(false);
-  const [origin,  setOrigin]  = useState("");
-
-  useEffect(() => { setOrigin(window.location.origin); }, []);
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
 
   const full = origin ? `${origin}${def.path}` : def.path;
 
@@ -127,7 +108,6 @@ function FlowDiagram() {
   const steps: { system: AutomationSystem; label: string; sublabel: string }[] = [
     { system: "sequifi", label: "Sequifi", sublabel: "Onboarding Complete" },
     { system: "enerflo", label: "Enerflo", sublabel: "Create Rep in CRM" },
-    { system: "terros",  label: "Terros",  sublabel: "Stats / Leaderboard" },
   ];
 
   return (
@@ -155,7 +135,7 @@ function FlowDiagram() {
         })}
       </div>
       <p className="mt-3 text-[11px] text-gray-600">
-        Sequifi handles rep onboarding &amp; commissions → Enerflo is the CRM where reps manage leads → Terros receives stats &amp; competition data for leaderboards.
+        Sequifi handles rep onboarding and commissions; Enerflo receives independently provisioned CRM users.
         Automations are triggered manually or by webhook events once API keys are configured.
       </p>
     </div>
@@ -271,7 +251,7 @@ export default function MiddlewarePanel({ logs }: { logs: ApiLog[] }) {
         <div>
           <h2 className="text-xl font-semibold text-white">Automations</h2>
           <p className="mt-0.5 text-sm text-gray-500">
-            Connect Enerflo, Sequifi, and Terros with automated data flows.
+            Manage allowed automation flows between connected systems.
           </p>
         </div>
         <button

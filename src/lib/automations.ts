@@ -1,11 +1,12 @@
 import fs from "fs";
 import path from "path";
 import type { Automation, AutomationRunStatus } from "@/lib/automations-types";
+import { isIntegrationDirectionAllowed } from "@/lib/integration-direction";
+
 export type { Automation } from "@/lib/automations-types";
 
 const FILE = path.join(process.cwd(), "data", "automations.json");
 
-// ── Seed templates (written once if file is missing / empty) ──────────────
 const SEED: Automation[] = [
   {
     id: "tpl-sequifi-enerflo-onboarding",
@@ -46,227 +47,22 @@ const SEED: Automation[] = [
     runCount: 0,
     createdAt: new Date().toISOString(),
   },
-  {
-    id: "tpl-enerflo-terros-deal-stats",
-    name: "Deal Signed → Push Rep Stats to Terros",
-    description:
-      "When a deal is signed in Enerflo (pipeline reaches 'deal_signed'), push the rep's updated stats to Terros so the leaderboard and reporting stay current.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "enerflo",
-      event: "pipeline.deal_signed",
-      eventLabel: "Deal Signed",
-    },
-    action: {
-      system: "terros",
-      operation: "push_stats",
-      operationLabel: "Push Rep Stats",
-      endpoint: "/api/v1/stats",
-      method: "POST",
-      fieldMapping: {
-        "lead.assign_to_email": "rep_email",
-        "lead.id": "deal_id",
-        "lead.city": "territory",
-      },
-      samplePayload: {
-        rep_email: "rep@company.com",
-        deal_id: "enerflo-lead-123",
-        territory: "Phoenix",
-        metric: "deals_closed",
-        value: 1,
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "tpl-enerflo-terros-leaderboard",
-    name: "Deal Signed → Update Terros Leaderboard",
-    description:
-      "When a deal is signed in Enerflo, push the team competition data to Terros so the knocking leaderboard reflects the latest closed deals.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "enerflo",
-      event: "pipeline.deal_signed",
-      eventLabel: "Deal Signed",
-    },
-    action: {
-      system: "terros",
-      operation: "push_competition",
-      operationLabel: "Update Leaderboard",
-      endpoint: "/api/v1/competition",
-      method: "POST",
-      fieldMapping: {
-        "lead.assign_to_email": "rep_email",
-        "lead.office_name": "office",
-      },
-      samplePayload: {
-        rep_email: "rep@company.com",
-        office: "Phoenix North",
-        event_type: "deal_closed",
-        points: 10,
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "tpl-enerflo-terros-install-completed",
-    name: "Install Completed → Push to Terros Leaderboard",
-    description:
-      "When an installation is fully completed in Enerflo, push the rep's install completion stat to Terros so the leaderboard and reporting dashboard reflect the finished project immediately.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "enerflo",
-      event: "pipeline.completed",
-      eventLabel: "Installation Completed",
-    },
-    action: {
-      system: "terros",
-      operation: "push_install",
-      operationLabel: "Push Install Completion",
-      endpoint: "/evaluation/update",
-      method: "POST",
-      fieldMapping: {
-        "install.rep_email":        "rep_email",
-        "install.completion_date":  "date",
-        "install.office_id":        "office",
-        "install.customer_city":    "territory",
-        "install.id":               "install_id",
-      },
-      samplePayload: {
-        rep_email:   "rep@company.com",
-        date:        new Date().toISOString().split("T")[0],
-        office:      "Phoenix North",
-        territory:   "Phoenix",
-        install_id:  "enerflo-install-001",
-        metric:      "install_completed",
-        value:       1,
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "tpl-enerflo-terros-milestone",
-    name: "Install Milestone Reached → Push Progress to Terros",
-    description:
-      "When a key installation milestone is reached in Enerflo (e.g. Permit Submitted, Panel Delivery, PTO), push the milestone event to Terros so stage-by-stage rep progress is tracked on the dashboard.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "enerflo",
-      event: "pipeline.milestone_reached",
-      eventLabel: "Install Milestone Reached",
-    },
-    action: {
-      system: "terros",
-      operation: "push_milestone",
-      operationLabel: "Push Milestone Progress",
-      endpoint: "/evaluation/update",
-      method: "POST",
-      fieldMapping: {
-        "install.rep_email":      "rep_email",
-        "milestone.name":         "milestone",
-        "milestone.completed_at": "date",
-        "install.id":             "install_id",
-      },
-      samplePayload: {
-        rep_email:  "rep@company.com",
-        milestone:  "Permit Submitted",
-        date:       new Date().toISOString().split("T")[0],
-        install_id: "enerflo-install-001",
-        metric:     "milestone_reached",
-        value:      1,
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "tpl-enerflo-terros-kw-sold",
-    name: "Deal Signed → Push kW Sold to Terros",
-    description:
-      "When a deal is signed in Enerflo, push the system size (kW) from the survey to Terros. This powers kW-based leaderboard rankings where bigger systems earn more points.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "enerflo",
-      event: "pipeline.deal_signed",
-      eventLabel: "Deal Signed",
-    },
-    action: {
-      system: "terros",
-      operation: "push_kw_sold",
-      operationLabel: "Push kW Sold Metric",
-      endpoint: "/api/v1/stats",
-      method: "POST",
-      fieldMapping: {
-        "survey.rep_email":      "rep_email",
-        "survey.system_size_kw": "value",
-        "survey.office_name":    "office",
-        "survey.id":             "survey_id",
-      },
-      samplePayload: {
-        rep_email: "rep@company.com",
-        value:     10.5,
-        office:    "Phoenix North",
-        survey_id: "enerflo-survey-001",
-        metric:    "kw_sold",
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "tpl-enerflo-terros-project-submitted",
-    name: "Project Submitted → Create Terros Account",
-    description:
-      "When a deal is submitted as an installation project in Enerflo (deal.projectSubmitted), " +
-      "the middleware resolves the rep's email from Enerflo, looks up their Terros user ID, " +
-      "then creates a Terros account linked to that rep — so the project is automatically " +
-      "counted in Terros competitions and leaderboards.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "enerflo",
-      event: "deal.projectSubmitted",
-      eventLabel: "Project Submitted (Install)",
-    },
-    action: {
-      system: "terros",
-      operation: "create_account",
-      operationLabel: "Create Terros Account",
-      endpoint: "/account/add",
-      method: "POST",
-      fieldMapping: {
-        "customer.firstName": "name",
-        "deal.id":            "externalId",
-      },
-      samplePayload: {
-        name:           "John Doe (10.875 kW)",
-        assignedUserId: "<resolved-from-enerflo>",
-        externalId:     "<enerflo-deal-id>",
-        sourceStatus:   "Project Submitted",
-        sourceId:       "<shortCode>",
-        // Real webhook fills customFields from TERROS_CF_* env + Enerflo payload (see enerflo-v2/route.ts)
-        customFields:   {},
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
 ];
 
-// ── Storage helpers ───────────────────────────────────────────────────────
+function allowedAutomations(automations: Automation[]): Automation[] {
+  return automations.filter(automation =>
+    isIntegrationDirectionAllowed(
+      automation.trigger.system,
+      automation.action.system,
+    ),
+  );
+}
+
 function read(): Automation[] {
   try {
     const raw = fs.readFileSync(FILE, "utf-8").trim();
     if (!raw || raw === "[]") return [...SEED];
-    return JSON.parse(raw) as Automation[];
+    return allowedAutomations(JSON.parse(raw) as Automation[]);
   } catch {
     return [...SEED];
   }
@@ -274,28 +70,36 @@ function read(): Automation[] {
 
 function write(automations: Automation[]): void {
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(automations, null, 2), "utf-8");
+  fs.writeFileSync(
+    FILE,
+    JSON.stringify(allowedAutomations(automations), null, 2),
+    "utf-8",
+  );
 }
 
 function ensureSeeded(): Automation[] {
   const data = read();
-  // If file was just initialised (empty), persist the seed
-  const raw = (() => { try { return fs.readFileSync(FILE, "utf-8").trim(); } catch { return ""; } })();
+  const raw = (() => {
+    try {
+      return fs.readFileSync(FILE, "utf-8").trim();
+    } catch {
+      return "";
+    }
+  })();
   if (!raw || raw === "[]") write(SEED);
   return data;
 }
 
-// ── CRUD ──────────────────────────────────────────────────────────────────
 export function getAllAutomations(): Automation[] {
   return ensureSeeded();
 }
 
 export function getAutomationById(id: string): Automation | null {
-  return getAllAutomations().find((a) => a.id === id) ?? null;
+  return getAllAutomations().find(automation => automation.id === id) ?? null;
 }
 
 export function createAutomation(
-  data: Omit<Automation, "id" | "createdAt" | "runCount" | "isTemplate">
+  data: Omit<Automation, "id" | "createdAt" | "runCount" | "isTemplate">,
 ): Automation {
   const automation: Automation = {
     ...data,
@@ -304,44 +108,46 @@ export function createAutomation(
     runCount: 0,
     createdAt: new Date().toISOString(),
   };
-  const all = getAllAutomations();
-  write([...all, automation]);
+  write([...getAllAutomations(), automation]);
   return automation;
 }
 
-export function toggleAutomation(id: string, enabled: boolean): Automation | null {
+export function toggleAutomation(
+  id: string,
+  enabled: boolean,
+): Automation | null {
   const all = getAllAutomations();
-  const idx = all.findIndex((a) => a.id === id);
-  if (idx === -1) return null;
-  all[idx] = { ...all[idx], enabled };
+  const index = all.findIndex(automation => automation.id === id);
+  if (index === -1) return null;
+  all[index] = { ...all[index], enabled };
   write(all);
-  return all[idx];
+  return all[index];
 }
 
 export function recordRun(
   id: string,
   status: AutomationRunStatus,
   httpStatus: number | null,
-  response: string
+  response: string,
 ): Automation | null {
   const all = getAllAutomations();
-  const idx = all.findIndex((a) => a.id === id);
-  if (idx === -1) return null;
-  all[idx] = {
-    ...all[idx],
+  const index = all.findIndex(automation => automation.id === id);
+  if (index === -1) return null;
+  all[index] = {
+    ...all[index],
     lastRunAt: new Date().toISOString(),
     lastRunStatus: status,
     lastRunHttpStatus: httpStatus,
     lastRunResponse: response.slice(0, 1000),
-    runCount: all[idx].runCount + 1,
+    runCount: all[index].runCount + 1,
   };
   write(all);
-  return all[idx];
+  return all[index];
 }
 
 export function deleteAutomation(id: string): boolean {
   const all = getAllAutomations();
-  const filtered = all.filter((a) => a.id !== id);
+  const filtered = all.filter(automation => automation.id !== id);
   if (filtered.length === all.length) return false;
   write(filtered);
   return true;
