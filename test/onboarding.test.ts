@@ -420,6 +420,11 @@ describe("installer registry and role mapping", () => {
     assert.equal(destinations[0]?.tabName, "Axia");
     assert.equal(destinations[0]?.layout.kind, "axia");
     assert.equal(destinations[1]?.layout.kind, "standard");
+
+    const ilumDestinations = destinationsForInstallerTabs(["Ilum", "ILUM", "Illum"]);
+    assert.equal(ilumDestinations.length, 1);
+    assert.equal(ilumDestinations[0]?.tabName, "ILUM");
+    assert.equal(ilumDestinations[0]?.layout.kind, "standard");
   });
 
   test("resolves role mappings from Sequifi context and env overrides", () => {

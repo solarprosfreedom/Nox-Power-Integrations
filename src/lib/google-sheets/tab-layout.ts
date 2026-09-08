@@ -173,6 +173,7 @@ export function rosterLayoutFromTabName(tabName: string): RosterTabLayout | null
     name === "empower" ||
     name === "goodpwr" ||
     name === "ilum" ||
+    name === "illum" ||
     name === "tron" ||
     name === "solq"
   ) {

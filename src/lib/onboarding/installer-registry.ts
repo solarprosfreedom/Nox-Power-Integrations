@@ -7,6 +7,11 @@ export interface InstallerDestination {
   layout: RosterTabLayout;
 }
 
+const ROSTER_TAB_ALIASES: Record<string, string> = {
+  ilum: "ILUM",
+  illum: "ILUM",
+};
+
 /** Known Sequifi installer tab → Enerflo email suffix (+suffix@noxpwr.com). */
 const INSTALLER_SUFFIX_BY_TAB: Record<string, string> = {
   axia: "axia",
@@ -53,8 +58,9 @@ export function enerfloEmailForInstaller(
 /** Resolve Google Sheets tab + layout for a Sequifi installer name. */
 export function destinationForInstallerTab(tabName: string): InstallerDestination {
   const trimmed = tabName.trim();
-  const layout = rosterLayoutFromTabName(trimmed) ?? STANDARD_LAYOUT;
-  return { tabName: trimmed, layout };
+  const canonical = ROSTER_TAB_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+  const layout = rosterLayoutFromTabName(canonical) ?? STANDARD_LAYOUT;
+  return { tabName: canonical, layout };
 }
 
 export function destinationsForInstallerTabs(tabNames: string[]): InstallerDestination[] {
