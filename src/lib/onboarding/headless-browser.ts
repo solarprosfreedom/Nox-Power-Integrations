@@ -70,7 +70,10 @@ export async function launchHeadlessBrowser(): Promise<HeadlessBrowser> {
   }
 
   const puppeteer = await import("puppeteer");
-  return (await puppeteer.launch({ headless: true })) as unknown as HeadlessBrowser;
+  return (await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-gpu"],
+  })) as unknown as HeadlessBrowser;
 }
 
 /**
