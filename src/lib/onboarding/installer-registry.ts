@@ -11,6 +11,11 @@ const ROSTER_TAB_ALIASES: Record<string, string> = {
   illum: "ILUM",
 };
 
+const SHAREPOINT_ROSTER_TAB_ALIASES: Record<string, string> = {
+  "quality solar": "Quality",
+  "our world energy": "OWE",
+};
+
 export type InstallerTabName = string;
 
 /** Resolve Google Sheets tab + layout for a Sequifi installer name. */
@@ -19,6 +24,12 @@ export function destinationForInstallerTab(tabName: string): InstallerDestinatio
   const canonical = ROSTER_TAB_ALIASES[trimmed.toLowerCase()] ?? trimmed;
   const layout = rosterLayoutFromTabName(canonical) ?? STANDARD_LAYOUT;
   return { tabName: canonical, layout };
+}
+
+/** Resolve installer names to the existing SharePoint workbook worksheet. */
+export function sharePointWorksheetNameForInstallerTab(tabName: string): string {
+  const canonical = destinationForInstallerTab(tabName).tabName;
+  return SHAREPOINT_ROSTER_TAB_ALIASES[canonical.toLowerCase()] ?? canonical;
 }
 
 export function destinationsForInstallerTabs(tabNames: string[]): InstallerDestination[] {

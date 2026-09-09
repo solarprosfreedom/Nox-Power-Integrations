@@ -4,6 +4,7 @@ import { describe, test } from "node:test";
 import { env } from "../src/lib/env";
 import {
   destinationsForInstallerTabs,
+  sharePointWorksheetNameForInstallerTab,
 } from "../src/lib/onboarding/installer-registry";
 import {
   buildWorkUpn,
@@ -418,6 +419,10 @@ describe("installer registry and role mapping", () => {
     assert.equal(ilumDestinations.length, 1);
     assert.equal(ilumDestinations[0]?.tabName, "ILUM");
     assert.equal(ilumDestinations[0]?.layout.kind, "standard");
+
+    assert.equal(sharePointWorksheetNameForInstallerTab("Quality Solar"), "Quality");
+    assert.equal(sharePointWorksheetNameForInstallerTab("OUR WORLD ENERGY"), "OWE");
+    assert.equal(sharePointWorksheetNameForInstallerTab("Illum"), "ILUM");
   });
 
   test("resolves role mappings from Sequifi context and env overrides", () => {

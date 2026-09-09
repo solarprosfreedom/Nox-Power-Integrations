@@ -15,7 +15,7 @@ import {
   manualRosterRowToSharePointRow,
   sequifiUserToSharePointRow,
 } from "@/lib/sharepoint/roster-map";
-import { destinationsForInstallerTabs } from "@/lib/onboarding/installer-registry";
+import { sharePointWorksheetNameForInstallerTab } from "@/lib/onboarding/installer-registry";
 import type { RosterTabLayout } from "@/lib/google-sheets/tab-layout";
 
 export type { ManualRosterRow, RosterBuildContext };
@@ -172,13 +172,19 @@ export async function appendSequifiUserToInstallerSharePointRosters(options: {
   user: SequifiUserRecord;
   ctx?: RosterBuildContext;
 }): Promise<SharePointSingleAppendResult[]> {
-  const destinations = destinationsForInstallerTabs(options.tabNames);
+  const worksheetNames = [
+    ...new Set(
+      options.tabNames
+        .map(sharePointWorksheetNameForInstallerTab)
+        .filter(Boolean),
+    ),
+  ];
   const results: SharePointSingleAppendResult[] = [];
 
-  for (const dest of destinations) {
+  for (const worksheetName of worksheetNames) {
     results.push(
       await appendSequifiUserToSharePointRoster({
-        worksheetName: dest.tabName,
+        worksheetName,
         user: options.user,
         ctx: options.ctx,
       }),
