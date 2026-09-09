@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS onboarding_jobs (
 
   microsoft_status        text NOT NULL DEFAULT 'pending'
                         CHECK (microsoft_status IN ('pending','success','failed','skipped')),
-  enerflo_status          text NOT NULL DEFAULT 'pending'
+  enerflo_status          text NOT NULL DEFAULT 'skipped'
                         CHECK (enerflo_status IN ('pending','success','failed','skipped')),
   terros_status           text NOT NULL DEFAULT 'pending'
                         CHECK (terros_status IN ('pending','success','failed','skipped')),

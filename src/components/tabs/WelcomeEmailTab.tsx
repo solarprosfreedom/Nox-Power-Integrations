@@ -34,17 +34,12 @@ export default function WelcomeEmailTab() {
         .split(/[,;\n]+/)
         .map(s => s.trim())
         .filter(Boolean);
-      const includeEnerflo = !(
-        parsedInstallers.length > 0 &&
-        parsedInstallers.every(tab => tab.toLowerCase().includes("quality solar"))
-      );
       const { subject: sub, body: b } = renderWelcomeTemplate(id, {
         username,
         password,
         firstName,
         installerTabs: parsedInstallers,
         onboardAxia,
-        includeEnerflo,
       });
       setSubject(sub);
       setBody(b);

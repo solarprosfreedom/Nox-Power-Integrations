@@ -9,11 +9,6 @@ export interface WelcomeTemplateParams {
   installerTabs?: string[];
   /** When true, use Axia-specific subject, planner tips, and Aurora/EnFin/Recheck support. */
   onboardAxia?: boolean;
-  /**
-   * When false, omit Enerflo from the "use it for …" systems list (e.g. Quality Solar
-   * does not use Enerflo). Defaults to true.
-   */
-  includeEnerflo?: boolean;
 }
 
 const AXIA_SUBJECT = "Welcome to Axia — your Nox Power email";
@@ -49,16 +44,12 @@ Thanks,
 
 Admin Team`;
 
-function systemsLine(includeEnerflo: boolean): string {
-  const systems = includeEnerflo
-    ? "Outlook, Enerflo, and Terros"
-    : "Outlook and Terros";
-  return `Your company email is ready. Use it for ${systems}. You may also receive messages from financiers on this address.`;
+function systemsLine(): string {
+  return "Your company email is ready. Use it for Outlook and Terros. You may also receive messages from financiers on this address.";
 }
 
 function buildIntro(params: WelcomeTemplateParams): string {
-  const includeEnerflo = params.includeEnerflo !== false;
-  const systems = systemsLine(includeEnerflo);
+  const systems = systemsLine();
   if (params.installerTabs?.length) {
     return `You have been onboarded to the following installer(s): {{installerList}}.
 

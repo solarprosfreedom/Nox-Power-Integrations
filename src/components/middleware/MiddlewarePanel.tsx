@@ -21,7 +21,7 @@ interface WebhookUrlDef {
 const WEBHOOK_URLS: WebhookUrlDef[] = [
   {
     label: "Generic event bus",
-    path: "/api/webhooks/enerflo",
+    path: "/api/webhooks/sequifi",
     badge: "Internal / testing",
     badgeColor: "text-gray-500",
     description: "POST { event, data } to trigger any matching automation.",
@@ -107,7 +107,7 @@ function WebhookUrlsBox() {
 function FlowDiagram() {
   const steps: { system: AutomationSystem; label: string; sublabel: string }[] = [
     { system: "sequifi", label: "Sequifi", sublabel: "Onboarding Complete" },
-    { system: "enerflo", label: "Enerflo", sublabel: "Create Rep in CRM" },
+    { system: "terros", label: "Terros", sublabel: "Create Rep for Knocking" },
   ];
 
   return (
@@ -135,7 +135,7 @@ function FlowDiagram() {
         })}
       </div>
       <p className="mt-3 text-[11px] text-gray-600">
-        Sequifi handles rep onboarding and commissions; Enerflo receives independently provisioned CRM users.
+        Sequifi handles rep onboarding and commissions; Terros receives independently provisioned users.
         Automations are triggered manually or by webhook events once API keys are configured.
       </p>
     </div>

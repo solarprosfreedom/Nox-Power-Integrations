@@ -320,7 +320,7 @@ export default function SequifiOnboardingTab() {
       } else if (result.error) {
         resultMessage = `User ${sequifiUserId} failed: ${result.error}`;
       } else if (result.job) {
-        resultMessage = `User ${sequifiUserId}: job ${result.job.status} (MS ${result.job.microsoft_status}, EN ${result.job.enerflo_status})`;
+        resultMessage = `User ${sequifiUserId}: job ${result.job.status} (MS ${result.job.microsoft_status}, TR ${result.job.terros_status})`;
       } else {
         resultMessage = `User ${sequifiUserId}: done`;
       }
@@ -620,7 +620,6 @@ export default function SequifiOnboardingTab() {
               { label: "Sequifi", ok: config.sequifiConfigured },
               { label: "Supabase", ok: config.supabaseConfigured },
               { label: "Graph", ok: config.graphConfigured },
-              { label: "Enerflo", ok: config.enerfloConfigured },
               { label: "Terros", ok: config.terrosConfigured },
               { label: "EMPWR HubSpot", ok: config.empwrHubSpotConfigured },
               { label: "Empower Typeform", ok: config.empowerTypeformConfigured },
@@ -823,8 +822,8 @@ export default function SequifiOnboardingTab() {
       <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 space-y-3">
         <h3 className="text-sm font-semibold text-white">Check if user exists</h3>
         <p className="text-xs text-gray-500">
-          Looks up the exact email on each platform. Enerflo/Terros also check noxpwr.com ↔
-          solarpros.io aliases (same person, different domain).
+          Looks up the exact email in Microsoft and Terros. Terros also checks
+          noxpwr.com ↔ solarpros.io aliases (same person, different domain).
         </p>
         <div className="flex gap-2">
           <input
@@ -860,7 +859,7 @@ export default function SequifiOnboardingTab() {
             <div>
               <p className="font-medium">Checking platforms…</p>
               <p className="text-xs text-cyan-300/80 mt-0.5">
-                Microsoft, Enerflo, and Terros — Enerflo can take a few seconds (loads user list).
+                Microsoft and Terros.
               </p>
             </div>
           </div>
@@ -883,24 +882,6 @@ export default function SequifiOnboardingTab() {
                     )}
                     {existsResult.microsoftStatus === "unknown" && (
                       <span className="text-amber-300">? cannot verify</span>
-                    )}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="py-1 text-gray-500">Enerflo</td>
-                  <td>
-                    {existsResult.enerfloStatus === "exists" && (
-                      <span className="text-emerald-300">
-                        ✓ exists{existsResult.enerfloMatchedEmail ? ` (${existsResult.enerfloMatchedEmail})` : ""}
-                      </span>
-                    )}
-                    {existsResult.enerfloStatus === "alias" && (
-                      <span className="text-amber-300">
-                        ~ alias match ({existsResult.enerfloMatchedEmail}) — work email not on Enerflo
-                      </span>
-                    )}
-                    {existsResult.enerfloStatus === "missing" && (
-                      <span className="text-red-300">✗ missing</span>
                     )}
                   </td>
                 </tr>
@@ -958,7 +939,6 @@ export default function SequifiOnboardingTab() {
                   <th className="px-4 py-2">Name</th>
                   <th className="px-4 py-2">Email</th>
                   <th className="px-4 py-2">MS</th>
-                  <th className="px-4 py-2">En</th>
                   <th className="px-4 py-2">Tr</th>
                   <th className="px-4 py-2">Mail</th>
                   <th className="px-4 py-2">Status</th>
@@ -977,9 +957,6 @@ export default function SequifiOnboardingTab() {
                       </td>
                       <td className="px-4 py-2">
                         <StatusPill status={job.microsoft_status} />
-                      </td>
-                      <td className="px-4 py-2">
-                        <StatusPill status={job.enerflo_status} />
                       </td>
                       <td className="px-4 py-2">
                         <StatusPill status={job.terros_status} />
@@ -1007,7 +984,7 @@ export default function SequifiOnboardingTab() {
                     </tr>
                     {job.status === "completed" && (
                       <tr className="border-b border-gray-800/60">
-                        <td colSpan={8} className="px-4 pb-3 pt-0">
+                        <td colSpan={7} className="px-4 pb-3 pt-0">
                           <PartnerStepsPanel
                             job={job}
                             actions={

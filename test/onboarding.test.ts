@@ -3,9 +3,6 @@ import { describe, test } from "node:test";
 
 import { env } from "../src/lib/env";
 import {
-  enerfloEmailForInstaller,
-  installerEmailSuffix,
-  slugifyInstallerSuffix,
   destinationsForInstallerTabs,
 } from "../src/lib/onboarding/installer-registry";
 import {
@@ -410,11 +407,7 @@ describe("Axia onboarding notification", () => {
 });
 
 describe("installer registry and role mapping", () => {
-  test("builds installer email suffixes and destinations", () => {
-    assert.equal(slugifyInstallerSuffix("Some Co, LLC"), "somecollc");
-    assert.equal(installerEmailSuffix("Good Pwr"), "goodpwr");
-    assert.equal(enerfloEmailForInstaller("Jane", "Doe", "Axia", "noxpwr.com"), "janedoe+axia@noxpwr.com");
-
+  test("builds installer roster destinations", () => {
     const destinations = destinationsForInstallerTabs([" Axia ", "axia", "Custom Co"]);
     assert.equal(destinations.length, 2);
     assert.equal(destinations[0]?.tabName, "Axia");
@@ -486,6 +479,7 @@ describe("welcome and EMPWR HubSpot payloads", () => {
     assert.match(axia.body, /Planner tips:/);
     assert.match(axia.body, /Aurora: support@aurorasolar.com/);
     assert.match(axia.body, /Email admin@noxpwr.com for questions/);
+    assert.doesNotMatch(axia.body, /Enerflo/i);
     assert.doesNotMatch(axia.body, /Reply to this email/);
 
     // Non-Axia installers get a generic email — no Aurora / EnFin / Recheck / planner tips.
@@ -497,29 +491,19 @@ describe("welcome and EMPWR HubSpot payloads", () => {
       onboardAxia: false,
     });
     assert.equal(generic.subject, "Welcome — your Nox Power email");
-    assert.match(generic.body, /Outlook, Enerflo, and Terros/);
+    assert.match(generic.body, /Outlook and Terros/);
+    assert.doesNotMatch(generic.body, /Enerflo/i);
     assert.match(generic.body, /Email admin@noxpwr.com for questions/);
     assert.doesNotMatch(generic.body, /Planner tips:/);
     assert.doesNotMatch(generic.body, /Aurora/);
     assert.doesNotMatch(generic.body, /Reply to this email/);
-
-    // Quality Solar does not use Enerflo — systems list omits it.
-    const qualitySolar = renderWelcomeTemplate("sales_rep", {
-      firstName: "Drew",
-      username: "drewcollum@noxpwr.com",
-      password: "Secret123",
-      installerTabs: ["Quality Solar"],
-      onboardAxia: false,
-      includeEnerflo: false,
-    });
-    assert.match(qualitySolar.body, /Outlook and Terros/);
-    assert.doesNotMatch(qualitySolar.body, /Enerflo/);
 
     const setter = renderWelcomeTemplate("appt_setter", {
       username: "setter@noxpwr.com",
       password: "Secret123",
     });
     assert.equal(setter.subject, "Welcome — your Nox Power email");
+    assert.doesNotMatch(setter.body, /Enerflo/i);
     assert.doesNotMatch(setter.body, /Planner tips:/);
     assert.doesNotMatch(setter.body, /Aurora/);
     assert.match(setter.body, /Email admin@noxpwr.com for questions/);

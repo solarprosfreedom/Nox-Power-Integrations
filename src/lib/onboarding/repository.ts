@@ -144,6 +144,7 @@ export async function insertJobFromSequifiUser(user: SequifiUserRecord): Promise
     welcome_email_to: welcomeTo,
     raw_sequifi_payload: user.raw,
     status: "pending" as const,
+    enerflo_status: "skipped" as const,
   };
 
   // Legacy DBs may still have a unique index on email_normalized (Gmail +tag aliases

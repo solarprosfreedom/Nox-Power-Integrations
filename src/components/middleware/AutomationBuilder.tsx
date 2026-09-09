@@ -11,7 +11,7 @@ import {
 } from "@/lib/automations-types";
 import { isIntegrationDirectionAllowed } from "@/lib/integration-direction";
 
-const SYSTEMS: AutomationSystem[] = ["enerflo", "sequifi", "terros"];
+const SYSTEMS: AutomationSystem[] = ["sequifi", "terros"];
 
 interface Props {
   onCreated: (automation: Automation) => void;
@@ -20,7 +20,7 @@ interface Props {
 
 export default function AutomationBuilder({ onCreated, onCancel }: Props) {
   const [triggerSystem, setTriggerSystem] = useState<AutomationSystem>("sequifi");
-  const [actionSystem,  setActionSystem]  = useState<AutomationSystem>("enerflo");
+  const [actionSystem,  setActionSystem]  = useState<AutomationSystem>("terros");
   const [isPending, startTransition] = useTransition();
 
   const triggerEvents    = TRIGGER_EVENTS[triggerSystem];

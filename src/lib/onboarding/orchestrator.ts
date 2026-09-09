@@ -1,16 +1,6 @@
 import { env } from "@/lib/env";
 import { normalizeEmail } from "@/lib/onboarding/normalize";
 import {
-  enerfloAccountsToStepErrors,
-  primaryEnerfloUserId,
-  type EnerfloInstallerAccount,
-} from "@/lib/onboarding/enerflo-accounts";
-import {
-  createEnerfloUserForOnboarding,
-  findEnerfloUserByEmail,
-  findEnerfloUserByExactEmail,
-} from "@/lib/onboarding/enerflo-user";
-import {
   loadJobById,
   markJobProcessing,
   updateJobStep,
@@ -87,12 +77,8 @@ function backoffMs(attempt: number): number {
 }
 
 function allStepsSuccess(job: OnboardingJob): boolean {
-  // Every rep gets an Enerflo account regardless of installer tab selection
-  // (same as Terros/Microsoft) — installer tabs (Axia/Tron/EMPWR/GoodPWR/
-  // Better Earth) are recorded for bookkeeping, not a prerequisite.
   return (
     job.microsoft_status === "success" &&
-    job.enerflo_status === "success" &&
     job.terros_status === "success" &&
     job.welcome_email_status === "success"
   );
@@ -108,7 +94,6 @@ function finalizeStatus(job: OnboardingJob): {
   }
   const anyFailed =
     job.microsoft_status === "failed" ||
-    job.enerflo_status === "failed" ||
     job.terros_status === "failed" ||
     job.welcome_email_status === "failed";
   if (anyFailed && job.attempt_count >= job.max_attempts) {
@@ -355,12 +340,25 @@ export async function runOnboardingJob(
   job = (await loadJobById(jobId)) ?? job;
 
   const stepErrors = { ...job.step_errors };
+  if (job.enerflo_status !== "skipped") {
+    const legacyEnerfloError = stepErrors.enerflo;
+    delete stepErrors.enerflo;
+    delete stepErrors.enerflo_welcome;
+    await updateJobStep(job.id, {
+      enerflo_status: "skipped",
+      step_errors: stepErrors,
+      ...(legacyEnerfloError && job.last_error === legacyEnerfloError
+        ? { last_error: null }
+        : {}),
+    });
+    job = (await loadJobById(jobId)) ?? job;
+  }
   const positionCtx = freshUser
     ? sequifiPositionContextFromUser(freshUser)
     : sequifiPositionContextFromJob(job);
   const role = resolveRoleMappingFromSequifi(positionCtx, env.onboardingRoleMapJson);
   const upn = job.microsoft_upn ?? resolveUpnForUser(job.email, job.first_name ?? "", job.last_name ?? "");
-  let tempPassword =
+  const tempPassword =
     job.temp_password ?? (env.onboardingDefaultPassword?.trim() || "Solar123");
 
   async function applyMicrosoftLicense(userId: string): Promise<void> {
@@ -443,11 +441,10 @@ export async function runOnboardingJob(
   const sequifiFields = parseSequifiFields(job.raw_sequifi_payload ?? {});
   const installerTabs = sequifiFields.installerTabs;
   const firstName = job.first_name ?? "";
-  const lastName = job.last_name ?? "";
 
   // Mailbox readiness gate — Exchange Online provisions the mailbox in the
-  // background after license assignment (typically 2–10 min).  If we create
-  // Terros/Enerflo accounts before the mailbox exists, their invite emails
+  // background after license assignment (typically 2–10 min). If we create
+  // the Terros account before the mailbox exists, its invite email can
   // bounce and the address lands on a suppression list.  We check
   // /mailboxSettings (only returns 200 once Exchange is ready) and reschedule
   // the job for 5 minutes later if it isn't ready yet.
@@ -455,7 +452,7 @@ export async function runOnboardingJob(
     !dryRun &&
     job.microsoft_status === "success" &&
     job.microsoft_user_id &&
-    (job.enerflo_status !== "success" || job.terros_status !== "success")
+    job.terros_status !== "success"
   ) {
     const mailboxReady = await isMailboxReady(job.microsoft_user_id);
     if (!mailboxReady) {
@@ -468,88 +465,6 @@ export async function runOnboardingJob(
       return job;
     }
   }
-
-  // Enerflo — one account using company work email (same as Microsoft /
-  // Terros). Created for EVERY rep regardless of installer tab selection;
-  // installerTabs (if any) just get recorded as per-tab bookkeeping below.
-  if (job.enerflo_status !== "success" && job.enerflo_status !== "skipped") {
-    try {
-      if (dryRun) {
-        await updateJobStep(job.id, { enerflo_status: "skipped" });
-      } else {
-        const email = workEmail.trim();
-        if (!email) {
-          throw new Error("Microsoft work email is required before creating Enerflo account");
-        }
-
-        let enerfloUserId: string | undefined;
-        let anyCreated = false;
-
-        const found = await findEnerfloUserByExactEmail(email, job.sequifi_employee_id);
-        if (found) {
-          enerfloUserId = found.id;
-        } else {
-          const result = await createEnerfloUserForOnboarding({
-            email,
-            first_name: firstName,
-            last_name: lastName,
-            phone: job.phone ?? undefined,
-            roles: role.enerfloRoles,
-            external_user_id: job.sequifi_employee_id,
-            password: tempPassword,
-          });
-
-          if (!result.ok) {
-            throw new Error(result.error ?? `Enerflo create failed for ${email}`);
-          }
-
-          enerfloUserId =
-            result.id ??
-            (await findEnerfloUserByExactEmail(email, job.sequifi_employee_id))?.id ??
-            (await findEnerfloUserByEmail(email, [], job.sequifi_employee_id))?.id;
-
-          if (!enerfloUserId) {
-            throw new Error(`Enerflo account was not created for ${email}`);
-          }
-
-          if (result.created) anyCreated = true;
-        }
-
-        const accounts: EnerfloInstallerAccount[] = installerTabs.map(tabName => ({
-          tabName,
-          email,
-          userId: enerfloUserId!,
-        }));
-
-        Object.assign(stepErrors, enerfloAccountsToStepErrors(accounts));
-
-        if (anyCreated) {
-          stepErrors.enerflo_welcome = "sent";
-        } else {
-          stepErrors.enerflo_welcome = stepErrors.enerflo_welcome ?? "skipped_existing";
-        }
-
-        await updateJobStep(job.id, {
-          enerflo_status: "success",
-          // primaryEnerfloUserId(accounts) is only populated per-installer-tab;
-          // fall back to enerfloUserId directly for reps with no tabs selected.
-          enerflo_user_id: primaryEnerfloUserId(accounts) ?? enerfloUserId,
-          step_errors: stepErrors,
-        });
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      stepErrors.enerflo = msg;
-      await updateJobStep(job.id, {
-        enerflo_status: "failed",
-        step_errors: stepErrors,
-        last_error: msg,
-        attempt_count: job.attempt_count + 1,
-      });
-    }
-  }
-
-  job = (await loadJobById(jobId)) ?? job;
 
   // Terros — single base work email (no +alias).
   if (job.terros_status === "success" && job.step_errors.terros_welcome !== "sent") {
@@ -640,19 +555,12 @@ export async function runOnboardingJob(
       } else {
         const to = (job.welcome_email_to ?? job.email).trim();
         const password = job.temp_password ?? tempPassword;
-        // Quality Solar does not use Enerflo — omit it from the systems list when
-        // every selected installer tab is Quality Solar (Other Installers free-text).
-        const includeEnerflo = !(
-          installerTabs.length > 0 &&
-          installerTabs.every(tab => tab.trim().toLowerCase().includes("quality solar"))
-        );
         const { subject, body } = renderWelcomeTemplate(role.welcomeTemplate, {
           username: workEmail,
           password,
           firstName,
           installerTabs,
           onboardAxia: sequifiFields.onboardAxia,
-          includeEnerflo,
         });
         await sendMailAsUser({ to, subject, body, contentType: "text" });
         await updateJobStep(job.id, { welcome_email_status: "success" });
@@ -702,7 +610,7 @@ const PARTNER_STEP_ERROR_KEYS = [
 ] as const;
 
 async function syncRosterSheetsForJob(jobId: string): Promise<OnboardingJob | null> {
-  let job = await loadJobById(jobId);
+  const job = await loadJobById(jobId);
   if (!job || env.onboardingDryRun || job.microsoft_status !== "success") return job;
 
   const sheet = await appendJobToOnboardingRosterSheet(job);
@@ -1013,14 +921,10 @@ export async function checkUserExistence(email: string): Promise<{
   normalized: string;
   microsoft: boolean;
   microsoftStatus: "exists" | "missing" | "unknown";
-  enerflo: boolean;
-  enerfloStatus: "exists" | "alias" | "missing";
-  enerfloMatchedEmail?: string;
   terros: boolean;
   terrosStatus: "exists" | "alias" | "missing";
   terrosMatchedEmail?: string;
   microsoftUpn?: string;
-  enerfloId?: string;
   terrosId?: string;
   errors: string[];
 }> {
@@ -1028,14 +932,10 @@ export async function checkUserExistence(email: string): Promise<{
   const errors: string[] = [];
   let microsoft = false;
   let microsoftStatus: "exists" | "missing" | "unknown" = "unknown";
-  let enerflo = false;
-  let enerfloStatus: "exists" | "alias" | "missing" = "missing";
-  let enerfloMatchedEmail: string | undefined;
   let terros = false;
   let terrosStatus: "exists" | "alias" | "missing" = "missing";
   let terrosMatchedEmail: string | undefined;
   let microsoftUpn: string | undefined;
-  let enerfloId: string | undefined;
   let terrosId: string | undefined;
 
   try {
@@ -1058,18 +958,6 @@ export async function checkUserExistence(email: string): Promise<{
   }
 
   try {
-    const en = await findEnerfloUserByEmail(email);
-    if (en) {
-      enerflo = true;
-      enerfloId = en.id;
-      enerfloMatchedEmail = en.email;
-      enerfloStatus = en.exactMatch ? "exists" : "alias";
-    }
-  } catch (e) {
-    errors.push(`Enerflo: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  try {
     const tr = await findTerrosUserByEmail(email);
     if (tr) {
       terros = true;
@@ -1086,14 +974,10 @@ export async function checkUserExistence(email: string): Promise<{
     normalized,
     microsoft,
     microsoftStatus,
-    enerflo,
-    enerfloStatus,
-    enerfloMatchedEmail,
     terros,
     terrosStatus,
     terrosMatchedEmail,
     microsoftUpn,
-    enerfloId,
     terrosId,
     errors,
   };

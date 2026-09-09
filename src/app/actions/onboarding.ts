@@ -107,7 +107,6 @@ export async function getOnboardingConfig() {
     graphConfigured: Boolean(
       env.azureTenantId && env.azureClientId && env.azureClientSecret,
     ),
-    enerfloConfigured: Boolean(env.enerfloV1ApiKey?.trim()),
     terrosConfigured: Boolean(env.terrosApiKey?.trim()),
     empwrHubSpotConfigured: isEmpwrHubSpotConfigured(),
     empowerTypeformConfigured: isEmpowerTypeformConfigured(),

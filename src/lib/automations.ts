@@ -7,47 +7,7 @@ export type { Automation } from "@/lib/automations-types";
 
 const FILE = path.join(process.cwd(), "data", "automations.json");
 
-const SEED: Automation[] = [
-  {
-    id: "tpl-sequifi-enerflo-onboarding",
-    name: "Onboarding Complete → Create Enerflo Rep",
-    description:
-      "When a new hire finishes onboarding in Sequifi, automatically create their user account in Enerflo so they can start using the CRM immediately.",
-    enabled: false,
-    isTemplate: true,
-    trigger: {
-      system: "sequifi",
-      event: "onboarding.completed",
-      eventLabel: "Rep Onboarding Completed",
-    },
-    action: {
-      system: "enerflo",
-      operation: "create_user",
-      operationLabel: "Create Rep / User",
-      endpoint: "/api/v1/users",
-      method: "POST",
-      fieldMapping: {
-        "employee.first_name": "first_name",
-        "employee.last_name": "last_name",
-        "employee.email": "email",
-        "employee.phone": "phone",
-        "employee.role": "roles[0]",
-      },
-      samplePayload: {
-        email: "newrep@company.com",
-        roles: ["Sales Rep"],
-        first_name: "Jane",
-        last_name: "Smith",
-        notify_email: true,
-        can_create_customers: true,
-        allow_optimus: false,
-        can_reassign_leads: true,
-      },
-    },
-    runCount: 0,
-    createdAt: new Date().toISOString(),
-  },
-];
+const SEED: Automation[] = [];
 
 function allowedAutomations(automations: Automation[]): Automation[] {
   return automations.filter(automation =>

@@ -114,7 +114,7 @@ export const ENERFLO_RESOURCES: ResourceDef[] = [
         label: "Create User",
         method: "POST",
         path: "/api/v1/users",
-        description: "Create a new Enerflo user (rep, manager, etc.). Used when a new hire completes Sequifi onboarding.",
+        description: "Create a new Enerflo user manually (rep, manager, etc.).",
         verified: true,
         params: [
           { name: "first_name",       label: "First Name",   type: "string",  location: "body", required: true,  placeholder: "Jane" },
@@ -1003,7 +1003,7 @@ export const ENERFLO_RESOURCES: ResourceDef[] = [
         label: "Lookup User by External ID",
         method: "GET",
         path: "/api/v1/lookups/user",
-        description: "Find an Enerflo user using an external HR/onboarding ID (e.g. Sequifi employee ID).",
+        description: "Find an Enerflo user using an external ID.",
         verified: true,
         params: [
           { name: "external_id", label: "External ID", type: "string", location: "query", required: true, placeholder: "sequifi-emp-001" },

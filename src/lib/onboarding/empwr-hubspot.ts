@@ -57,7 +57,7 @@ export function empwrHubSpotAlreadySent(job: OnboardingJob): boolean {
   return job.step_errors.empwr_hubspot === SENT_FLAG;
 }
 
-/** Map Sequifi / Enerflo role context to the EMPWR HubSpot Job Title dropdown. */
+/** Map Sequifi role context to the EMPWR HubSpot Job Title dropdown. */
 export function mapEmpwrHubSpotRole(job: OnboardingJob): EmpwrHubSpotRole {
   const ctx = sequifiPositionContextFromJob(job);
   const { enerfloRoles } = resolveRoleMappingFromSequifi(ctx);
